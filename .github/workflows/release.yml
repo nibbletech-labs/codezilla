@@ -33,16 +33,54 @@ jobs:
         run: npm ci
 
       - name: Build Tauri app
-        run: npx tauri build --target aarch64-apple-darwin --bundles app,dmg
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: npx tauri build --target aarch64-apple-darwin --bundles app,dmg,updater
 
-      - name: Create GitHub release
+      - name: Read release notes
+        id: notes
+        run: |
+          body=$(cat RELEASE_NOTES.md)
+          echo "body<<EOF" >> "$GITHUB_OUTPUT"
+          echo "$body" >> "$GITHUB_OUTPUT"
+          echo "EOF" >> "$GITHUB_OUTPUT"
+
+      - name: Get version
+        id: version
+        run: echo "version=$(jq -r .version src-tauri/tauri.conf.json)" >> "$GITHUB_OUTPUT"
+
+      - name: Generate latest.json
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          BUNDLE_DIR="src-tauri/target/aarch64-apple-darwin/release/bundle"
+          SIG=$(cat "$BUNDLE_DIR/macos/Codezilla.app.tar.gz.sig")
+          URL="https://github.com/nibbletech-labs/codezilla/releases/download/v${VERSION}/Codezilla.app.tar.gz"
+          DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          jq -n \
+            --arg v "$VERSION" \
+            --arg sig "$SIG" \
+            --arg url "$URL" \
+            --arg date "$DATE" \
+            '{"version":$v,"notes":"See release notes on GitHub","pub_date":$date,"platforms":{"darwin-aarch64":{"signature":$sig,"url":$url}}}' \
+            > latest.json
+
+      - name: Create release and upload assets
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          TAG="${{ github.ref_name }}"
+          VERSION="${{ steps.version.outputs.version }}"
           BUNDLE_DIR="src-tauri/target/aarch64-apple-darwin/release/bundle"
+          TAG="${{ github.ref_name }}"
 
+          # Delete existing release if re-running
+          gh release delete "$TAG" --yes 2>/dev/null || true
+
+          # Create release with notes
           gh release create "$TAG" \
             --title "Codezilla $TAG" \
-            --notes-file RELEASE_NOTES.md \
-            "$BUNDLE_DIR"/dmg/*.dmg
+            --notes "${{ steps.notes.outputs.body }}" \
+            "$BUNDLE_DIR/dmg/Codezilla_${VERSION}_aarch64.dmg" \
+            "$BUNDLE_DIR/macos/Codezilla.app.tar.gz" \
+            "$BUNDLE_DIR/macos/Codezilla.app.tar.gz.sig" \
+            "latest.json"
