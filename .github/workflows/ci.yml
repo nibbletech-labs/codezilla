@@ -1,15 +1,14 @@
-name: Release
+name: CI
 
 on:
   push:
-    tags:
-      - 'v*'
+    branches: [main]
+  pull_request:
+    branches: [main]
 
 jobs:
   build:
     runs-on: macos-latest
-    permissions:
-      contents: write
     steps:
       - uses: actions/checkout@v4
 
@@ -32,17 +31,8 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
+      - name: Build frontend
+        run: npm run build
+
       - name: Build Tauri app
-        run: npx tauri build --target aarch64-apple-darwin --bundles app,dmg
-
-      - name: Create GitHub release
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          TAG="${{ github.ref_name }}"
-          BUNDLE_DIR="src-tauri/target/aarch64-apple-darwin/release/bundle"
-
-          gh release create "$TAG" \
-            --title "Codezilla $TAG" \
-            --notes-file RELEASE_NOTES.md \
-            "$BUNDLE_DIR"/dmg/*.dmg
+        run: npx tauri build --target aarch64-apple-darwin --bundles app
