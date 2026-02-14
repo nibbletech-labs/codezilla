@@ -2,7 +2,7 @@
   "$schema": "https://raw.githubusercontent.com/nicedoc/schemas-tauri-v2/refs/heads/main/tauri.conf.json.schema.json",
   "productName": "Codezilla",
   "identifier": "com.nibbletech.codezilla",
-  "version": "0.1.0",
+  "version": "0.1.2",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1420",
@@ -33,7 +33,16 @@
       "csp": "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' asset: data:; font-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost; worker-src 'self' blob:; object-src 'none'"
     }
   },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEE5RDZGRTM5MkU4NDQ4MzMKUldRelNJUXVPZjdXcVZrd2s0MlJtVzBrUzBScjhuYXVmOVIwaW81QzhYa283Q3E1VmxsZk9XeVEK",
+      "endpoints": [
+        "https://github.com/nibbletech-labs/codezilla/releases/latest/download/latest.json"
+      ]
+    }
+  },
   "bundle": {
+    "createUpdaterArtifacts": true,
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
