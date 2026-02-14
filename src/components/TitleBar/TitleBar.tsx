@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useAppStore } from "../../store/appStore";
 import { useGitDiffStat } from "../../hooks/useGitDiffStat";
+import { useGitBranch } from "../../hooks/useGitBranch";
 import { getLeftPanelWidth } from "../../lib/constants";
 import TitleBarDropdown from "./TitleBarDropdown";
 
@@ -17,6 +18,7 @@ export default function TitleBar() {
   const baseFontSize = useAppStore((s) => s.baseFontSize);
   const projectPath = project?.path ?? null;
   const diffStat = useGitDiffStat(projectPath);
+  const branch = useGitBranch(projectPath);
   const leftPanelWidth = getLeftPanelWidth(baseFontSize);
 
   const [isFullscreen, setIsFullscreen] = useState(false);
@@ -120,6 +122,14 @@ export default function TitleBar() {
 
       {/* Right zone */}
       <div style={styles.rightZone}>
+        {branch && (
+          <span style={styles.branchName}>
+            <svg width="10" height="10" viewBox="0 0 16 16" fill="currentColor" style={{ opacity: 0.7 }}>
+              <path d="M9.5 3.25a2.25 2.25 0 1 1 3 2.122V6A2.5 2.5 0 0 1 10 8.5H6a1 1 0 0 0-1 1v1.128a2.251 2.251 0 1 1-1.5 0V5.372a2.25 2.25 0 1 1 1.5 0v1.836A2.493 2.493 0 0 1 6 7h4a1 1 0 0 0 1-1v-.628A2.25 2.25 0 0 1 9.5 3.25z" />
+            </svg>
+            {branch}
+          </span>
+        )}
         {diffStat !== null && (
           <span style={styles.diffStat}>
             {diffStat.added === 0 && diffStat.removed === 0 ? (
@@ -227,6 +237,15 @@ const styles: Record<string, React.CSSProperties> = {
     whiteSpace: "nowrap" as const,
     overflow: "hidden",
     textOverflow: "ellipsis",
+  },
+  branchName: {
+    display: "inline-flex",
+    alignItems: "center",
+    gap: "4px",
+    color: "var(--text-secondary)",
+    fontFamily: "monospace",
+    fontSize: "var(--font-size-sm)",
+    whiteSpace: "nowrap" as const,
   },
   diffStat: {
     fontFamily: "monospace",

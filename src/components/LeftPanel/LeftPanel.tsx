@@ -64,7 +64,7 @@ export default function LeftPanel() {
   }, [menuProjectId]);
 
   return (
-    <div style={styles.container}>
+    <div style={styles.container} onContextMenu={(e) => e.preventDefault()}>
       <div style={styles.header}>
         <span style={styles.headerText}>Projects</span>
         <button
@@ -212,7 +212,8 @@ const styles = {
     letterSpacing: "0.5px",
   },
   addProjectButton: {
-    color: "var(--text-secondary)",
+    color: "var(--accent)",
+    border: "1px solid var(--accent)",
     fontSize: "11px",
     borderRadius: "3px",
     padding: "2px 8px",
@@ -263,7 +264,7 @@ const styles = {
   newThreadBtn: {
     background: "none",
     border: "none",
-    color: "var(--text-secondary)",
+    color: "var(--accent)",
     fontSize: "16px",
     cursor: "pointer",
     padding: "0 4px",

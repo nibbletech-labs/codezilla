@@ -254,7 +254,7 @@ const styles = {
     flex: 1,
   } as React.CSSProperties,
   age: {
-    color: "var(--text-hint)",
+    color: "var(--text-primary)",
     fontSize: "var(--font-size-sm)",
     fontFamily: "var(--font-mono, monospace)",
     flexShrink: 0,

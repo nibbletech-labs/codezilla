@@ -11,7 +11,7 @@ import FilterInput from "./FilterInput";
 import FilePreview, { shouldUseNativePreview } from "../FilePreview/FilePreview";
 import CommitPreview from "../FilePreview/CommitPreview";
 import type { FileEntry } from "../../lib/tauri";
-import { previewFile as nativePreview, scanAllFiles } from "../../lib/tauri";
+import { previewFile as nativePreview, scanAllFiles, revealInFinder } from "../../lib/tauri";
 
 export default function RightPanel() {
   const activeProject = useAppStore((s) => s.getActiveProject());
@@ -34,6 +34,9 @@ export default function RightPanel() {
   const openPreviewAction = useAppStore((s) => s.openPreview);
   const closePreviewAction = useAppStore((s) => s.closePreview);
   const setFileIndex = useAppStore((s) => s.setFileIndex);
+
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; path: string } | null>(null);
+  const contextMenuRef = useRef<HTMLDivElement>(null);
 
   const treeRef = useRef<HTMLDivElement>(null);
 
@@ -119,6 +122,22 @@ export default function RightPanel() {
     };
     window.addEventListener("mousedown", handleGlobalClick);
     return () => window.removeEventListener("mousedown", handleGlobalClick);
+  }, []);
+
+  // Close context menu on outside click
+  useEffect(() => {
+    if (!contextMenu) return;
+    const handleClick = (e: MouseEvent) => {
+      if (contextMenuRef.current && !contextMenuRef.current.contains(e.target as Node)) {
+        setContextMenu(null);
+      }
+    };
+    document.addEventListener("mousedown", handleClick);
+    return () => document.removeEventListener("mousedown", handleClick);
+  }, [contextMenu]);
+
+  const handleFileContextMenu = useCallback((path: string, x: number, y: number) => {
+    setContextMenu({ x, y, path });
   }, []);
 
   // Keyboard handler: Space toggles preview, arrows navigate
@@ -270,7 +289,7 @@ export default function RightPanel() {
   }, [filteredEntries, filterSelectedIdx, setSelectedFile, openPreview, closePreviewAction]);
 
   return (
-    <div style={styles.container}>
+    <div style={styles.container} onContextMenu={(e) => e.preventDefault()}>
       {!activeProject ? (
         <div style={styles.empty}>No project selected</div>
       ) : (
@@ -318,6 +337,7 @@ export default function RightPanel() {
                   onFileSelect={setSelectedFile}
                   onFileDoubleClick={openPreview}
                   selectedPath={selectedFile}
+                  onContextMenu={handleFileContextMenu}
                 />
               ))
             )}
@@ -339,6 +359,49 @@ export default function RightPanel() {
               onClose={closePreviewAction}
             />
           ),
+          document.body,
+        )}
+
+      {contextMenu &&
+        createPortal(
+          <div
+            ref={contextMenuRef}
+            style={{
+              position: "fixed",
+              left: contextMenu.x,
+              top: contextMenu.y,
+              zIndex: 1000,
+              backgroundColor: "var(--bg-panel)",
+              border: "1px solid var(--border-default)",
+              borderRadius: "6px",
+              padding: "4px 0",
+              boxShadow: "0 4px 12px rgba(0,0,0,0.3)",
+              minWidth: "160px",
+            }}
+          >
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: "8px",
+                padding: "6px 12px",
+                fontSize: "var(--font-size)",
+                color: "var(--text-primary)",
+                cursor: "pointer",
+              }}
+              onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = "var(--bg-hover)")}
+              onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = "transparent")}
+              onClick={() => {
+                revealInFinder(contextMenu.path, projectPath ?? undefined);
+                setContextMenu(null);
+              }}
+            >
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+                <path d="M1.5 2A1.5 1.5 0 0 0 0 3.5v9A1.5 1.5 0 0 0 1.5 14h13a1.5 1.5 0 0 0 1.5-1.5V5.5A1.5 1.5 0 0 0 14.5 4H8.21l-1.6-1.6A1.5 1.5 0 0 0 5.55 2H1.5z" />
+              </svg>
+              Reveal in Finder
+            </div>
+          </div>,
           document.body,
         )}
     </div>

@@ -1,11 +1,6 @@
-## Initial Release
+## v0.1.1 — QoL Polish
 
-First public release of Codezilla.
-
-- Multi-project, multi-thread management for Claude Code, Codex, and shell sessions
-- Session resumption — conversations persist across restarts
-- Thread status at a glance across all projects
-- File preview with syntax highlighting and git diff view
-- Git-aware file tree with real-time status indicators
-- Intelligent detection of file paths and commit hashes in terminal output
-- macOS only
+- **Branch name in title bar** — see your current git branch at a glance next to the diff stats
+- **Reveal in Finder** — right-click any file in the tree or use the button in Quick Look
+- **Version display** — app version shown in status bar
+- **Various UI tweaks** — accent-coloured buttons, improved commit preview colours and font scaling, larger file tree arrows

@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback, useRef } from "react";
-import { readFile, readFileBase64, getFileDiffStat } from "../../lib/tauri";
+import { readFile, readFileBase64, getFileDiffStat, revealInFinder } from "../../lib/tauri";
 import { sanitizeHtml } from "../../lib/sanitize";
 import { useShiki } from "../../hooks/useShiki";
 import { useAppStore } from "../../store/appStore";
@@ -288,6 +288,15 @@ export default function FilePreview({ filePath, line, onClose }: FilePreviewProp
                 </>
               )}
             </span>
+            <button
+              style={styles.closeButton}
+              onClick={() => revealInFinder(filePath, projectPath ?? undefined)}
+              title="Reveal in Finder"
+            >
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+                <path d="M1.5 2A1.5 1.5 0 0 0 0 3.5v9A1.5 1.5 0 0 0 1.5 14h13a1.5 1.5 0 0 0 1.5-1.5V5.5A1.5 1.5 0 0 0 14.5 4H8.21l-1.6-1.6A1.5 1.5 0 0 0 5.55 2H1.5z" />
+              </svg>
+            </button>
             <button style={styles.closeButton} onClick={onClose}>
               &times;
             </button>

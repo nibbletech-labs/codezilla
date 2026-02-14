@@ -1,8 +1,6 @@
 import { useEffect, useState, useCallback, useRef } from "react";
-import { html as diff2htmlHtml } from "diff2html";
-import { getCommitInfo, getCommitDiff } from "../../lib/tauri";
+import { getCommitInfo } from "../../lib/tauri";
 import type { CommitInfo } from "../../lib/tauri";
-import { sanitizeHtml } from "../../lib/sanitize";
 import { useAppStore } from "../../store/appStore";
 import { timeAgo } from "../../lib/timeAgo";
 
@@ -11,15 +9,9 @@ interface CommitPreviewProps {
   onClose: () => void;
 }
 
-type ViewMode = "stat" | "diff";
-type DiffLayout = "unified" | "side-by-side";
-
 export default function CommitPreview({ commitHash, onClose }: CommitPreviewProps) {
   const [info, setInfo] = useState<CommitInfo | null>(null);
-  const [diffText, setDiffText] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [viewMode, setViewMode] = useState<ViewMode>("stat");
-  const [diffLayout, setDiffLayout] = useState<DiffLayout>("unified");
   const bodyRef = useRef<HTMLDivElement>(null);
 
   const activeProject = useAppStore((s) => s.getActiveProject());
@@ -27,7 +19,6 @@ export default function CommitPreview({ commitHash, onClose }: CommitPreviewProp
 
   useEffect(() => {
     setInfo(null);
-    setDiffText(null);
     setError(null);
 
     if (!projectPath) {
@@ -38,10 +29,6 @@ export default function CommitPreview({ commitHash, onClose }: CommitPreviewProp
     getCommitInfo(projectPath, commitHash)
       .then(setInfo)
       .catch((err) => setError(String(err)));
-
-    getCommitDiff(projectPath, commitHash)
-      .then(setDiffText)
-      .catch((err) => setError(String(err)));
   }, [commitHash, projectPath]);
 
   useEffect(() => {
@@ -51,22 +38,6 @@ export default function CommitPreview({ commitHash, onClose }: CommitPreviewProp
         e.stopPropagation();
         onClose();
         return;
-      }
-      const tag = (e.target as HTMLElement)?.tagName;
-      if (tag === "INPUT" || tag === "TEXTAREA") return;
-      if (e.key === "d" || e.key === "D") {
-        e.preventDefault();
-        setViewMode((v) => (v === "stat" ? "diff" : "stat"));
-        return;
-      }
-      if (e.key === "s" || e.key === "S") {
-        e.preventDefault();
-        setViewMode((current) => {
-          if (current === "diff") {
-            setDiffLayout((l) => (l === "unified" ? "side-by-side" : "unified"));
-          }
-          return current;
-        });
       }
     };
     window.addEventListener("keydown", handleKeyDown, true);
@@ -83,36 +54,10 @@ export default function CommitPreview({ commitHash, onClose }: CommitPreviewProp
   const shortHash = commitHash.slice(0, 7);
   const relDate = info?.date ? timeAgo(new Date(info.date).getTime()) : "";
 
-  // Render diff HTML on demand
-  const renderedDiffHtml = (() => {
-    if (!diffText || !diffText.trim()) return null;
-    try {
-      return diff2htmlHtml(diffText, {
-        drawFileList: false,
-        matching: "lines",
-        outputFormat: diffLayout === "side-by-side" ? "side-by-side" : "line-by-line",
-      });
-    } catch {
-      return null;
-    }
-  })();
-
   const renderBody = () => {
     if (error) return <div style={styles.message}>{error}</div>;
     if (!info) return <div style={styles.message}>Loading...</div>;
 
-    if (viewMode === "diff") {
-      if (diffText === null) return <div style={styles.message}>Loading diff...</div>;
-      if (!renderedDiffHtml) return <div style={styles.message}>No diff content</div>;
-      return (
-        <div style={styles.diffContainer}>
-          <style>{DIFF_CSS}</style>
-          <div dangerouslySetInnerHTML={{ __html: sanitizeHtml(renderedDiffHtml) }} />
-        </div>
-      );
-    }
-
-    // Stat view: per-file change summary
     if (info.file_stats.length === 0) {
       return <div style={styles.message}>No file changes</div>;
     }
@@ -197,17 +142,6 @@ export default function CommitPreview({ commitHash, onClose }: CommitPreviewProp
             )}
           </div>
           <div style={styles.headerRight}>
-            <span style={styles.hint}>
-              {viewMode === "diff" ? (
-                <>
-                  <kbd style={styles.kbd}>D</kbd> Summary
-                  {" "}
-                  <kbd style={styles.kbd}>S</kbd> {diffLayout === "unified" ? "Split" : "Unified"}
-                </>
-              ) : (
-                <><kbd style={styles.kbd}>D</kbd> Diff</>
-              )}
-            </span>
             <button style={styles.closeButton} onClick={onClose}>
               &times;
             </button>
@@ -290,30 +224,14 @@ const styles = {
   } as React.CSSProperties,
   hashLabel: {
     color: "var(--accent)",
-    fontSize: "13px",
+    fontSize: "var(--font-size)",
     fontWeight: 600,
     fontFamily: "'SF Mono', 'Menlo', 'Monaco', 'Courier New', monospace",
   } as React.CSSProperties,
   authorDate: {
     color: "var(--text-secondary)",
-    fontSize: "12px",
+    fontSize: "var(--font-size)",
     whiteSpace: "nowrap" as const,
-  } as React.CSSProperties,
-  hint: {
-    color: "var(--text-hint)",
-    fontSize: "11px",
-    whiteSpace: "nowrap" as const,
-  } as React.CSSProperties,
-  kbd: {
-    display: "inline-block",
-    background: "var(--kbd-bg)",
-    color: "var(--kbd-text)",
-    padding: "0 4px",
-    borderRadius: "3px",
-    fontSize: "10px",
-    lineHeight: "16px",
-    border: "1px solid var(--kbd-border)",
-    fontFamily: "inherit",
   } as React.CSSProperties,
   closeButton: {
     background: "none",
@@ -331,13 +249,13 @@ const styles = {
   } as React.CSSProperties,
   subject: {
     color: "var(--text-primary)",
-    fontSize: "13px",
+    fontSize: "var(--font-size)",
     fontWeight: 600,
     marginBottom: "2px",
   } as React.CSSProperties,
   bodyText: {
-    color: "var(--text-secondary)",
-    fontSize: "12px",
+    color: "var(--text-primary)",
+    fontSize: "var(--font-size)",
     whiteSpace: "pre-wrap" as const,
     marginBottom: "6px",
     borderLeft: "2px solid var(--border-default)",
@@ -346,7 +264,7 @@ const styles = {
   statsBar: {
     display: "flex",
     gap: "8px",
-    fontSize: "11px",
+    fontSize: "var(--font-size-sm)",
     color: "var(--text-secondary)",
   } as React.CSSProperties,
   bodyContainer: {
@@ -360,7 +278,7 @@ const styles = {
     padding: "24px",
     textAlign: "center" as const,
     color: "var(--text-secondary)",
-    fontSize: "13px",
+    fontSize: "var(--font-size)",
   } as React.CSSProperties,
   // Stat view styles
   statTable: {
@@ -371,7 +289,7 @@ const styles = {
     alignItems: "center",
     padding: "3px 16px",
     gap: "12px",
-    fontSize: "13px",
+    fontSize: "var(--font-size)",
     fontFamily: "'SF Mono', 'Menlo', 'Monaco', 'Courier New', monospace",
   } as React.CSSProperties,
   statFile: {
@@ -383,7 +301,7 @@ const styles = {
     minWidth: 0,
   } as React.CSSProperties,
   statNumbers: {
-    fontSize: "12px",
+    fontSize: "var(--font-size)",
     whiteSpace: "nowrap" as const,
     minWidth: "70px",
     textAlign: "right" as const,
@@ -394,104 +312,4 @@ const styles = {
     flexShrink: 0,
     width: "120px",
   } as React.CSSProperties,
-  // Diff view styles
-  diffContainer: {
-    fontSize: "13px",
-    lineHeight: "1.5",
-    fontFamily: "'SF Mono', 'Menlo', 'Monaco', 'Courier New', monospace",
-    padding: 0,
-    overflowX: "auto" as const,
-  } as React.CSSProperties,
 };
-
-const DIFF_CSS = `
-  .d2h-wrapper {
-    background: transparent !important;
-  }
-  .d2h-file-header {
-    background: var(--bg-panel) !important;
-    color: var(--text-primary) !important;
-    border-bottom: 1px solid var(--border-default) !important;
-    padding: 4px 8px !important;
-  }
-  .d2h-file-name-wrapper {
-    color: var(--text-primary) !important;
-  }
-  .d2h-file-name {
-    color: var(--text-primary) !important;
-  }
-  .d2h-file-wrapper {
-    border: none !important;
-    margin: 0 !important;
-    border-bottom: 1px solid var(--border-default) !important;
-  }
-  .d2h-code-wrapper {
-    background: transparent !important;
-  }
-  .d2h-code-line,
-  .d2h-code-side-line {
-    background: var(--bg-primary) !important;
-    color: var(--text-primary) !important;
-    padding-left: 8px !important;
-  }
-  .d2h-code-line-ctn {
-    color: var(--text-primary) !important;
-  }
-  .d2h-ins .d2h-code-line,
-  .d2h-ins .d2h-code-side-line,
-  .d2h-ins.d2h-code-side-line {
-    background: rgba(35, 134, 54, 0.2) !important;
-  }
-  .d2h-ins .d2h-code-line-ctn {
-    background: rgba(35, 134, 54, 0.2) !important;
-  }
-  .d2h-del .d2h-code-line,
-  .d2h-del .d2h-code-side-line,
-  .d2h-del.d2h-code-side-line {
-    background: rgba(248, 81, 73, 0.2) !important;
-  }
-  .d2h-del .d2h-code-line-ctn {
-    background: rgba(248, 81, 73, 0.2) !important;
-  }
-  .d2h-code-linenumber {
-    background: var(--bg-panel) !important;
-    color: var(--text-hint) !important;
-    border-right: 1px solid var(--border-default) !important;
-  }
-  .d2h-code-side-linenumber {
-    background: var(--bg-panel) !important;
-    color: var(--text-hint) !important;
-    border-right: 1px solid var(--border-default) !important;
-  }
-  .d2h-diff-table {
-    border-collapse: collapse;
-    width: 100%;
-  }
-  .d2h-diff-tbody > tr {
-    border: none !important;
-  }
-  .d2h-info {
-    background: var(--bg-panel) !important;
-    color: var(--diff-info-color) !important;
-    border: none !important;
-  }
-  .d2h-emptyplaceholder {
-    background: var(--bg-empty-placeholder) !important;
-    border: none !important;
-  }
-  .d2h-tag {
-    display: none !important;
-  }
-  .d2h-ins ins,
-  .d2h-ins .d2h-change {
-    background: rgba(35, 134, 54, 0.4) !important;
-    color: var(--text-primary) !important;
-    text-decoration: none !important;
-  }
-  .d2h-del del,
-  .d2h-del .d2h-change {
-    background: rgba(248, 81, 73, 0.4) !important;
-    color: var(--text-primary) !important;
-    text-decoration: none !important;
-  }
-`;

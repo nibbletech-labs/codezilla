@@ -32,6 +32,7 @@ interface FileTreeNodeProps {
   onFileSelect?: (path: string) => void;
   onFileDoubleClick?: (path: string) => void;
   selectedPath?: string | null;
+  onContextMenu?: (path: string, x: number, y: number) => void;
 }
 
 export default function FileTreeNode({
@@ -44,6 +45,7 @@ export default function FileTreeNode({
   onFileSelect,
   onFileDoubleClick,
   selectedPath,
+  onContextMenu,
 }: FileTreeNodeProps) {
   const [hovered, setHovered] = useState(false);
   const isExpanded = expandedPaths.has(entry.path);
@@ -70,6 +72,13 @@ export default function FileTreeNode({
           onFileSelect?.(entry.path);
           if (entry.is_dir) toggleExpand(entry.path);
           else onFileDoubleClick?.(entry.path);
+        }}
+        onContextMenu={(e) => {
+          if (onContextMenu) {
+            e.preventDefault();
+            e.stopPropagation();
+            onContextMenu(entry.path, e.clientX, e.clientY);
+          }
         }}
         onMouseEnter={() => setHovered(true)}
         onMouseLeave={() => setHovered(false)}
@@ -99,6 +108,7 @@ export default function FileTreeNode({
             onFileSelect={onFileSelect}
             onFileDoubleClick={onFileDoubleClick}
             selectedPath={selectedPath}
+            onContextMenu={onContextMenu}
           />
         ))}
     </>
@@ -117,11 +127,15 @@ const styles = {
   } as React.CSSProperties,
   chevron: {
     color: "var(--text-secondary)",
-    fontSize: "14px",
+    fontSize: "var(--font-size)",
     width: "16px",
     flexShrink: 0,
     textAlign: "center" as const,
     lineHeight: 1,
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
+    transform: "scale(2)",
   } as React.CSSProperties,
   chevronSpacer: {
     width: "16px",

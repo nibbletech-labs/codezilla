@@ -32,6 +32,27 @@ fn parse_status(xy: &str) -> Option<GitFileStatus> {
 }
 
 #[tauri::command]
+pub fn get_git_branch(path: String) -> Result<String, String> {
+    let canonical = crate::fs::canonicalize_path(&path)?;
+    let repo_path = canonical.as_path();
+    if !repo_path.is_dir() {
+        return Err(format!("Not a directory: {}", path));
+    }
+
+    let output = Command::new("git")
+        .args(["rev-parse", "--abbrev-ref", "HEAD"])
+        .current_dir(repo_path)
+        .output()
+        .map_err(|e| format!("Failed to run git: {}", e))?;
+
+    if !output.status.success() {
+        return Err("Not a git repository".to_string());
+    }
+
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+#[tauri::command]
 pub fn get_git_status(path: String) -> Result<Vec<GitStatusEntry>, String> {
     let canonical = crate::fs::canonicalize_path(&path)?;
     let repo_path = canonical.as_path();

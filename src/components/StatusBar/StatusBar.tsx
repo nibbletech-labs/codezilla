@@ -1,7 +1,11 @@
+import { useState, useEffect } from "react";
+import { getVersion } from "@tauri-apps/api/app";
 import { useAppStore } from "../../store/appStore";
 import { getThreadSubtitle } from "../../lib/threadRuntime";
 
 export default function StatusBar() {
+  const [version, setVersion] = useState<string | null>(null);
+  useEffect(() => { getVersion().then(setVersion).catch(() => {}); }, []);
   const activeThreadId = useAppStore((s) => s.activeThreadId);
   const activeThread = useAppStore((s) =>
     s.threads.find((t) => t.id === s.activeThreadId),
@@ -25,7 +29,7 @@ export default function StatusBar() {
         color: "var(--text-on-accent)",
       }}
     >
-      <span>Codezilla</span>
+      <span>Codezilla{version ? ` v${version}` : ""}</span>
       {activeThread && subtitle && (
         <span style={{ marginLeft: "16px", opacity: 0.85 }}>
           {activeThread.name}: {subtitle}

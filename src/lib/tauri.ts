@@ -98,6 +98,10 @@ export function pathExists(path: string): Promise<boolean> {
   return invoke("path_exists", { path });
 }
 
+export function revealInFinder(path: string, projectRoot?: string): Promise<void> {
+  return invoke("reveal_in_finder", { path, projectRoot });
+}
+
 export function startWatching(path: string): Promise<void> {
   return invoke("start_watching", { path });
 }
@@ -119,6 +123,10 @@ export type GitFileStatus =
 export interface GitStatusEntry {
   path: string;
   status: GitFileStatus;
+}
+
+export function getGitBranch(path: string): Promise<string> {
+  return invoke("get_git_branch", { path });
 }
 
 export function getGitStatus(path: string): Promise<GitStatusEntry[]> {
