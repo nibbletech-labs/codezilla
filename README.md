@@ -2,17 +2,16 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-A macOS desktop app for managing AI coding sessions alongside your project files. Terminals for Claude Code, Codex, and plain shell — all in one window with an integrated file browser and Quick Look preview.
+A macOS desktop app for multi-project management of AI-enabled development. Supports Claude Code and Codex with full session persistence.
 
 ## Features
 
-- **Multi-terminal workspace** — Run Claude Code, Codex, and shell sessions side by side
-- **Three-panel layout** — Projects & threads on the left, terminal in the centre, file tree on the right
-- **Session persistence** — Quit and reopen without losing context; Claude Code and Codex sessions resume automatically
-- **File tree with git status** — Real-time modified/added/deleted badges, folder rollups, and a diff summary in the header
-- **Quick Look preview** — Syntax-highlighted file preview with diff view, triggered by Space or Cmd+click on terminal paths
-- **Clickable file paths** — Cmd+click paths in terminal output to jump to the file in the tree and open Quick Look
-- **Keyboard-driven navigation** — Arrow keys, Space to preview, D for diff, S to toggle split view
+- **Multi-project, multi-thread** — Manage multiple projects, each with their own Claude Code, Codex, and shell sessions
+- **Session resumption** — Conversations persist across restarts; Claude Code and Codex sessions resume automatically
+- **Thread status at a glance** — See which threads are running, saved, or exited across all your projects
+- **File preview** — Browse project files with syntax highlighting, Quick Look preview, and git diff view
+- **Git-aware file tree** — Real-time modified/added/deleted indicators with diff summary
+- **Intelligent terminal detection** — File paths and commit hashes in terminal output become clickable links
 
 ## Prerequisites
 
@@ -34,35 +33,6 @@ npx tauri build --bundles app
 ```
 
 The built app is output to `src-tauri/target/release/bundle/macos/Codezilla.app`.
-
-## Usage
-
-### Layout
-
-```
-+----------+---------------------+----------+
-| Projects |      Terminal       |  Files   |
-| & Threads|                     |          |
-+----------+---------------------+----------+
-|              Status Bar                    |
-+--------------------------------------------+
-```
-
-- **Left panel** — Add projects, create threads (Claude Code / Codex / Terminal)
-- **Centre panel** — Active terminal session with full colour and 5,000-line scrollback
-- **Right panel** — File tree with git status indicators and filter search
-
-### Keyboard Shortcuts
-
-| Key | Action |
-|-----|--------|
-| **Up / Down** | Navigate file tree |
-| **Left / Right** | Collapse / expand folders |
-| **Space** | Toggle Quick Look preview |
-| **D** | Toggle diff view (in Quick Look) |
-| **S** | Toggle unified / side-by-side diff |
-| **Escape** | Close Quick Look |
-| **Cmd+click** | Open terminal file path in Quick Look |
 
 ## License
 
