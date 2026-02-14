@@ -1,0 +1,43 @@
+{
+  "name": "codezilla",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview",
+    "tauri": "tauri",
+    "test:thread-activity": "node --experimental-strip-types --test tests/thread-activity.test.ts",
+    "replay:transcript": "node --experimental-strip-types scripts/replay-transcript.ts",
+    "test:thread-activity:e2e": "node --experimental-strip-types scripts/e2e-thread-activity.ts"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2.0.0",
+    "@tauri-apps/plugin-dialog": "^2.0.0",
+    "@tauri-apps/plugin-shell": "^2.0.0",
+    "@tauri-apps/plugin-store": "^2.0.0",
+    "@tauri-apps/plugin-window-state": "^2.0.0",
+    "@xterm/addon-fit": "^0.10.0",
+    "@xterm/addon-webgl": "^0.18.0",
+    "@xterm/xterm": "^5.5.0",
+    "diff2html": "^3.4.56",
+    "dompurify": "^3.3.1",
+    "fuse.js": "^7.0.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "shiki": "^1.0.0",
+    "uuid": "^9.0.0",
+    "zustand": "^4.5.0"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.10.0",
+    "@types/dompurify": "^3.0.5",
+    "@types/react": "^18.3.0",
+    "@types/react-dom": "^18.3.0",
+    "@types/uuid": "^9.0.0",
+    "@vitejs/plugin-react": "^4.3.0",
+    "typescript": "^5.5.0",
+    "vite": "^5.4.0"
+  }
+}

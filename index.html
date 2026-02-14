@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Codezilla</title>
+    <style>
+      * { margin: 0; padding: 0; box-sizing: border-box; }
+      html, body, #root { width: 100%; height: 100%; overflow: hidden; }
+      body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: var(--bg-primary, #1e1e1e); color: var(--text-primary, #cccccc); -webkit-user-select: none; user-select: none; }
+      .shiki-wrap, pre, .selectable { -webkit-user-select: text; user-select: text; }
+      .icon-btn { background: transparent; border: none; cursor: pointer; appearance: none; -webkit-appearance: none; outline: none; }
+      .icon-btn:hover { background-color: var(--bg-input); color: var(--text-primary); }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
