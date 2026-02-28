@@ -1,6 +1,7 @@
 pub mod watcher;
 
 use ignore::WalkBuilder;
+use log::error;
 use serde::Serialize;
 
 pub fn canonicalize_path(raw: &str) -> Result<std::path::PathBuf, String> {
@@ -33,7 +34,8 @@ pub fn read_directory(path: String) -> Result<Vec<FileEntry>, String> {
 
     let mut entries: Vec<FileEntry> = WalkBuilder::new(root)
         .max_depth(Some(1))
-        .hidden(false) // let gitignore handle filtering, but show dotfiles
+        .hidden(false)
+        .git_ignore(false) // show all files; git status colours indicate ignored/untracked
         .filter_entry(|entry| {
             // Always hide .git directory
             if entry.file_name() == ".git" {
@@ -121,7 +123,10 @@ pub fn read_file(path: String, project_root: Option<String>) -> Result<String, S
         ));
     }
 
-    std::fs::read_to_string(&file_path).map_err(|e| format!("Failed to read file: {}", e))
+    std::fs::read_to_string(&file_path).map_err(|e| {
+        error!("Failed to read file {}: {}", file_path.display(), e);
+        format!("Failed to read file: {}", e)
+    })
 }
 
 const MAX_IMAGE_SIZE: u64 = 50 * 1024 * 1024; // 50 MB

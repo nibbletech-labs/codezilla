@@ -31,6 +31,10 @@ export interface PersistedThread {
   lastActivityAt: number;          // epoch ms, 0 = no activity recorded
 }
 
+export type ProjectIcon =
+  | { type: "lucide"; name: string; color: string }
+  | { type: "emoji"; value: string };
+
 export interface Project {
   id: string;
   name: string;
@@ -38,6 +42,7 @@ export interface Project {
   expanded: boolean;
   threadCounter: Record<ThreadType, number>;
   missing?: boolean;
+  icon?: ProjectIcon;
 }
 
 export const THREAD_LABELS: Record<ThreadType, string> = {

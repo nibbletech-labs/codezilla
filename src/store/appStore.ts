@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { Project, Thread, ThreadType, PersistedThread, PreviewTarget } from "./types";
+import type { Project, Thread, ThreadType, PersistedThread, PreviewTarget, ProjectIcon } from "./types";
 import { THREAD_LABELS } from "./types";
 import type { TranscriptInfo } from "./transcriptTypes";
 import type { AccentColorId, AppearanceMode } from "../lib/themes";
@@ -41,6 +41,7 @@ interface AppState {
   // Project actions
   addProject: (path: string, name: string) => void;
   removeProject: (projectId: string) => void;
+  reorderProjects: (fromIndex: number, toIndex: number) => void;
   setActiveProject: (projectId: string) => void;
   toggleProjectExpanded: (projectId: string) => void;
 
@@ -53,8 +54,10 @@ interface AppState {
   resumeThread: (threadId: string) => string;
   newSession: (threadId: string) => string;
   setCodexThreadId: (threadId: string, codexThreadId: string) => void;
+  clearResuming: (threadId: string) => void;
   touchThread: (threadId: string) => void;
 
+  setProjectIcon: (projectId: string, icon: ProjectIcon | undefined) => void;
   markProjectMissing: (projectId: string, missing: boolean) => void;
 
   // File tree actions
@@ -199,6 +202,15 @@ export const useAppStore = create<AppState>((set, get) => ({
     }));
   },
 
+  reorderProjects: (fromIndex, toIndex) => {
+    set((s) => {
+      const next = [...s.projects];
+      const [moved] = next.splice(fromIndex, 1);
+      next.splice(toIndex, 0, moved);
+      return { projects: next };
+    });
+  },
+
   removeProject: (projectId) => {
     set((s) => {
       const remainingProjects = s.projects.filter((p) => p.id !== projectId);
@@ -323,7 +335,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     const info = get().transcriptInfo[threadId];
     const transcriptUpdate: Record<string, TranscriptInfo> = {};
     if (info && info.badge != null) {
-      transcriptUpdate[threadId] = { ...info, badge: null, badgeSince: null };
+      transcriptUpdate[threadId] = { ...info, badge: null, badgeSince: null, badgeDismissedAt: Date.now() };
     }
     set({
       activeThreadId: threadId,
@@ -356,7 +368,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     set((s) => ({
       threads: s.threads.map((t) =>
         t.id === threadId
-          ? { ...t, sessionId: newSessionId, state: "running" as const, exitCode: null, resuming: true, lastActivityAt: Date.now() }
+          ? { ...t, sessionId: newSessionId, state: "running" as const, exitCode: null, resuming: true }
           : t,
       ),
     }));
@@ -391,10 +403,26 @@ export const useAppStore = create<AppState>((set, get) => ({
     }));
   },
 
+  clearResuming: (threadId) => {
+    set((s) => ({
+      threads: s.threads.map((t) =>
+        t.id === threadId && t.resuming ? { ...t, resuming: false } : t,
+      ),
+    }));
+  },
+
   touchThread: (threadId) => {
     set((s) => ({
       threads: s.threads.map((t) =>
         t.id === threadId ? { ...t, lastActivityAt: Date.now() } : t,
+      ),
+    }));
+  },
+
+  setProjectIcon: (projectId, icon) => {
+    set((s) => ({
+      projects: s.projects.map((p) =>
+        p.id === projectId ? { ...p, icon } : p,
       ),
     }));
   },

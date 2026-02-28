@@ -3,7 +3,7 @@ import { ask } from "@tauri-apps/plugin-dialog";
 import { useAppStore } from "../../store/appStore";
 import type { Thread } from "../../store/types";
 import type { ThreadBadge } from "../../store/transcriptTypes";
-import { getThreadSubtitle } from "../../lib/threadRuntime";
+import { getThreadSubtitle, isThreadLikelyWorking } from "../../lib/threadRuntime";
 import { timeAgo } from "../../lib/timeAgo";
 import ThreadIcon from "./ThreadIcons";
 
@@ -19,14 +19,48 @@ const BADGE_COLORS: Record<string, string> = {
   needs_approval: "#e5a63c",
   error: "#f14c4c",
 };
+const INDICATOR_SIZE = "calc(var(--font-size, 12px) * 2)";
+const BADGE_DOT_SIZE = "calc(var(--font-size, 12px) * 1)";
 
-function BadgeDot({ badge }: { badge: ThreadBadge }) {
+function WorkingSpinner() {
+  return (
+    <svg
+      viewBox="0 0 12 12"
+      aria-label="Working"
+      style={{
+        width: INDICATOR_SIZE,
+        height: INDICATOR_SIZE,
+        flexShrink: 0,
+        display: "inline-block",
+      }}
+    >
+      <circle cx="6" cy="6" r="4.5" fill="none" stroke="var(--text-secondary)" strokeOpacity="0.35" strokeWidth="1.2" />
+      <g>
+        <ellipse cx="6" cy="1.7" rx="1.8" ry="1" fill="var(--text-secondary)" />
+        <animateTransform
+          attributeName="transform"
+          type="rotate"
+          from="0 6 6"
+          to="360 6 6"
+          dur="0.9s"
+          repeatCount="indefinite"
+        />
+      </g>
+    </svg>
+  );
+}
+
+function BadgeDot({ badge, isWorking }: { badge: ThreadBadge; isWorking: boolean }) {
+  if (isWorking) {
+    return <WorkingSpinner />;
+  }
+
   if (badge && BADGE_COLORS[badge]) {
     return (
       <span
         style={{
-          width: 8,
-          height: 8,
+          width: BADGE_DOT_SIZE,
+          height: BADGE_DOT_SIZE,
           borderRadius: "50%",
           backgroundColor: BADGE_COLORS[badge],
           flexShrink: 0,
@@ -39,8 +73,8 @@ function BadgeDot({ badge }: { badge: ThreadBadge }) {
   return (
     <span
       style={{
-        width: 8,
-        height: 8,
+        width: INDICATOR_SIZE,
+        height: INDICATOR_SIZE,
         flexShrink: 0,
         display: "inline-block",
       }}
@@ -72,6 +106,23 @@ export default function ThreadItem({ thread, isActive, onSelect }: ThreadItemPro
   const info = useAppStore((s) => s.transcriptInfo[thread.id]);
   const rawSubtitle = getThreadSubtitle(thread, info);
   const badge: ThreadBadge = info?.badge ?? null;
+  const subtitleNeedsBadge: ThreadBadge = (
+    rawSubtitle.startsWith("Waiting for approval")
+      ? "needs_approval"
+      : rawSubtitle.startsWith("Waiting for input")
+        ? "needs_input"
+        : null
+  );
+  const effectiveBadge: ThreadBadge = (
+    badge
+    ?? (info?.idleReason === "waiting_for_approval"
+      ? "needs_approval"
+      : info?.idleReason === "waiting_for_input"
+        ? "needs_input"
+        : subtitleNeedsBadge)
+  );
+  const isWorking = isThreadLikelyWorking(thread, info);
+  const showActivityAge = !isWorking && !effectiveBadge;
 
   // Debounce "Waiting for ..." subtitles — in bypass-permission mode Claude
   // emits approval-like tool_use events that are auto-approved instantly, so
@@ -104,6 +155,11 @@ export default function ThreadItem({ thread, isActive, onSelect }: ThreadItemPro
     };
   }, [rawSubtitle]);
 
+  // Defensive fallback: never render a blank subtitle when a thread is active.
+  const displaySubtitle = subtitle.trim().length > 0
+    ? subtitle
+    : (isWorking ? "Working" : "Idle");
+
   // Enter edit mode when triggered from title bar dropdown
   useEffect(() => {
     if (renamingThreadId === thread.id) {
@@ -133,7 +189,7 @@ export default function ThreadItem({ thread, isActive, onSelect }: ThreadItemPro
 
   const handleClose = useCallback(async (e: React.MouseEvent) => {
     e.stopPropagation();
-    if (info?.status === "working") {
+    if (isWorking) {
       const confirmed = await ask("This thread has a running process. Close it?", {
         title: "Close Thread",
         kind: "warning",
@@ -143,7 +199,7 @@ export default function ThreadItem({ thread, isActive, onSelect }: ThreadItemPro
       if (!confirmed) return;
     }
     removeThread(thread.id);
-  }, [thread.id, removeThread]);
+  }, [thread.id, removeThread, isWorking]);
 
   return (
     <div
@@ -180,29 +236,34 @@ export default function ThreadItem({ thread, isActive, onSelect }: ThreadItemPro
         />
       ) : (
         <div style={styles.contentWrapper}>
-          {/* Top row: icon + name + age/trash */}
-          <div style={styles.nameRow}>
-            <ThreadIcon type={thread.type} />
-            <span style={styles.name}>{thread.name}</span>
-            {hovered ? (
-              <button
-                onClick={handleClose}
-                className="icon-btn"
-                style={styles.trashButton}
-                title="Delete thread"
-              >
-                <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M2 4h12M5.333 4V2.667a1.333 1.333 0 011.334-1.334h2.666a1.333 1.333 0 011.334 1.334V4M13 4v9.333a1.333 1.333 0 01-1.333 1.334H4.333A1.333 1.333 0 013 13.333V4h10z" />
-                </svg>
-              </button>
-            ) : (
-              age && <span style={styles.age}>{age}</span>
-            )}
+          <div style={styles.textContent}>
+            {/* Top row: icon + name + age/trash */}
+            <div style={styles.nameRow}>
+              <ThreadIcon type={thread.type} />
+              <span style={styles.name}>{thread.name}</span>
+            </div>
+            {/* Bottom row: subtitle */}
+            <div style={styles.subtitleRow}>
+              <span style={styles.subtitle}>{displaySubtitle}</span>
+            </div>
           </div>
-          {/* Bottom row: subtitle + badge dot (right-aligned) */}
-          <div style={styles.subtitleRow}>
-            <span style={styles.subtitle}>{subtitle}</span>
-            <BadgeDot badge={badge} />
+          <div style={styles.statusColumn}>
+            {hovered
+              ? (
+                <button
+                  onClick={handleClose}
+                  className="icon-btn"
+                  style={styles.trashButton}
+                  title="Delete thread"
+                >
+                  <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M2 4h12M5.333 4V2.667a1.333 1.333 0 011.334-1.334h2.666a1.333 1.333 0 011.334 1.334V4M13 4v9.333a1.333 1.333 0 01-1.333 1.334H4.333A1.333 1.333 0 013 13.333V4h10z" />
+                  </svg>
+                </button>
+              )
+              : showActivityAge && age
+              ? <span style={styles.age}>{age}</span>
+              : <BadgeDot badge={effectiveBadge} isWorking={isWorking} />}
           </div>
         </div>
       )}
@@ -221,6 +282,13 @@ const styles = {
     transition: "background-color 0.1s ease",
   } as React.CSSProperties,
   contentWrapper: {
+    display: "flex",
+    alignItems: "center",
+    gap: "6px",
+    flex: 1,
+    minWidth: 0,
+  } as React.CSSProperties,
+  textContent: {
     display: "flex",
     flexDirection: "column" as const,
     flex: 1,
@@ -245,6 +313,14 @@ const styles = {
     alignItems: "center",
     height: "16px",
   } as React.CSSProperties,
+  statusColumn: {
+    width: INDICATOR_SIZE,
+    minWidth: INDICATOR_SIZE,
+    alignSelf: "stretch",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+  } as React.CSSProperties,
   subtitle: {
     color: "var(--text-primary)",
     fontSize: "var(--font-size-sm)",
@@ -265,11 +341,14 @@ const styles = {
     border: "none",
     color: "var(--text-secondary)",
     cursor: "pointer",
-    padding: "0 2px",
+    padding: 0,
+    width: INDICATOR_SIZE,
+    height: INDICATOR_SIZE,
     flexShrink: 0,
     lineHeight: 1,
     display: "flex",
     alignItems: "center",
+    justifyContent: "center",
   } as React.CSSProperties,
   input: {
     background: "var(--bg-input)",

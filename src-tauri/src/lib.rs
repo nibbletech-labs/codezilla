@@ -4,6 +4,7 @@ mod git;
 mod pty;
 mod transcript;
 
+use log::{error, info};
 use pty::PtyManager;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -107,11 +108,15 @@ async fn spawn_pty(
     activity_mode: Option<String>,
 ) -> Result<(), String> {
     validate_session_id(&session_id)?;
+    info!("Spawning PTY session {}", session_id);
     let mut manager = state.lock().await;
     manager.reap_dead();
     manager
-        .spawn(session_id, rows, cols, channel, cwd, command, activity_mode)
-        .map_err(|e| e.to_string())?;
+        .spawn(session_id.clone(), rows, cols, channel, cwd, command, activity_mode)
+        .map_err(|e| {
+            error!("Failed to spawn PTY session {}: {}", session_id, e);
+            e.to_string()
+        })?;
     session_count.fetch_add(1, Ordering::Relaxed);
     Ok(())
 }
@@ -148,8 +153,12 @@ async fn kill_pty(
     session_id: String,
 ) -> Result<(), String> {
     validate_session_id(&session_id)?;
+    info!("Killing PTY session {}", session_id);
     let mut manager = state.lock().await;
-    manager.kill(&session_id).map_err(|e| e.to_string())?;
+    manager.kill(&session_id).map_err(|e| {
+        error!("Failed to kill PTY session {}: {}", session_id, e);
+        e.to_string()
+    })?;
     // Saturating subtract: counter may already be 0 if session exited naturally
     let prev = session_count.load(Ordering::Relaxed);
     if prev > 0 {
@@ -158,10 +167,16 @@ async fn kill_pty(
     Ok(())
 }
 
-/// Check if there are running PTY sessions and confirm quit if so.
+/// Check if there are actively processing PTY sessions and confirm quit if so.
 /// Returns true if the app should proceed with quitting.
-fn confirm_quit_if_needed(session_count: &PtySessionCount, handle: &tauri::AppHandle) -> bool {
-    if session_count.load(Ordering::Relaxed) == 0 {
+fn confirm_quit_if_needed(pty_state: &PtyState, handle: &tauri::AppHandle) -> bool {
+    let has_active_sessions = tauri::async_runtime::block_on(async {
+        let mut manager = pty_state.lock().await;
+        manager.reap_dead();
+        manager.has_active_sessions()
+    });
+
+    if !has_active_sessions {
         return true;
     }
 
@@ -228,18 +243,35 @@ fn sync_accent_menu(
 pub fn run() {
     let pty_state: PtyState = Arc::new(Mutex::new(PtyManager::new()));
     let pty_session_count: PtySessionCount = Arc::new(AtomicUsize::new(0));
-    let session_count_for_menu = pty_session_count.clone();
-    let session_count_for_window = pty_session_count.clone();
+    let pty_state_for_menu = pty_state.clone();
+    let pty_state_for_window = pty_state.clone();
     let watcher_state: fs::watcher::WatcherState = Arc::new(std::sync::Mutex::new(None));
     let transcript_state: transcript::TranscriptState =
         Arc::new(std::sync::Mutex::new(transcript::TranscriptManager::new()));
 
     tauri::Builder::default()
+        .plugin(
+            tauri_plugin_log::Builder::new()
+                .targets([
+                    tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::Stdout),
+                    tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::LogDir {
+                        file_name: None,
+                    }),
+                    tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::Webview),
+                ])
+                .max_file_size(5_000_000) // 5 MB
+                .rotation_strategy(tauri_plugin_log::RotationStrategy::KeepSome(3))
+                .level(log::LevelFilter::Info)
+                .level_for("codezilla_lib", log::LevelFilter::Debug)
+                .timezone_strategy(tauri_plugin_log::TimezoneStrategy::UseLocal)
+                .build(),
+        )
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_store::Builder::default().build())
         .plugin(tauri_plugin_window_state::Builder::default().build())
         .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .manage(pty_state.clone())
         .manage(pty_session_count)
         .manage(watcher_state)
@@ -250,6 +282,7 @@ pub fn run() {
             accent_items: std::sync::Mutex::new(Vec::new()),
         })
         .setup(move |app| {
+            info!("Codezilla starting up");
             #[cfg(target_os = "macos")]
             {
                 use tauri::menu::{CheckMenuItem, Menu, MenuItemBuilder, PredefinedMenuItem, Submenu};
@@ -350,6 +383,7 @@ pub fn run() {
                     ("accent-rose",   "Rose",   "#e5446d", "#ffffff", false),
                     ("accent-teal",   "Teal",   "#14b8a6", "#ffffff", false),
                     ("accent-amber",  "Amber",  "#f59e0b", "#ffffff", false),
+                    ("accent-grey",   "Grey",   "#9ca3af", "#ffffff", false),
                 ];
                 let mut accent_menu_items: Vec<(&str, &str, &str, IconMenuItem<tauri::Wry>)> = Vec::new();
                 for &(menu_id, label, hex, tick_color, is_default) in accent_defs {
@@ -443,7 +477,8 @@ pub fn run() {
                 app.on_menu_event(move |app, event| {
                     let id = event.id().0.clone();
                     if id == "quit" {
-                        if confirm_quit_if_needed(&session_count_for_menu, app) {
+                        info!("Quit requested via menu");
+                        if confirm_quit_if_needed(&pty_state_for_menu, app) {
                             // Save window state before destroy (destroy bypasses CloseRequested)
                             use tauri_plugin_window_state::AppHandleExt;
                             let _ = app.save_window_state(tauri_plugin_window_state::StateFlags::all());
@@ -493,15 +528,17 @@ pub fn run() {
         .on_window_event(move |window, event| {
             match event {
                 tauri::WindowEvent::CloseRequested { api, .. } => {
+                    info!("Window close requested");
                     // Always prevent the default close so we can handle it like Cmd+Q
                     api.prevent_close();
-                    if confirm_quit_if_needed(&session_count_for_window, window.app_handle()) {
+                    if confirm_quit_if_needed(&pty_state_for_window, window.app_handle()) {
                         use tauri_plugin_window_state::AppHandleExt;
                         let _ = window.app_handle().save_window_state(tauri_plugin_window_state::StateFlags::all());
                         let _ = window.destroy();
                     }
                 }
                 tauri::WindowEvent::Destroyed => {
+                    info!("Window destroyed, killing all PTY sessions");
                     let state = pty_state.clone();
                     tauri::async_runtime::spawn(async move {
                         let mut manager = state.lock().await;

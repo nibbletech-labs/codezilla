@@ -1,0 +1,64 @@
+.shiki-wrap .hljs,
+.file-preview-markdown .md-rendered .hljs {
+  display: block;
+  background: transparent;
+  color: var(--text-primary);
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-x: hidden;
+}
+
+.shiki-wrap .hljs-comment,
+.shiki-wrap .hljs-quote,
+.file-preview-markdown .md-rendered .hljs-comment,
+.file-preview-markdown .md-rendered .hljs-quote {
+  color: #7d8590;
+  color: color-mix(in srgb, var(--text-secondary) 85%, #7d8590 15%);
+}
+
+.shiki-wrap .hljs-string,
+.shiki-wrap .hljs-attr,
+.file-preview-markdown .md-rendered .hljs-string,
+.file-preview-markdown .md-rendered .hljs-attr {
+  color: #3fb950;
+  color: color-mix(in srgb, var(--text-primary) 20%, #3fb950 80%);
+}
+
+.shiki-wrap .hljs-number,
+.shiki-wrap .hljs-literal,
+.file-preview-markdown .md-rendered .hljs-number,
+.file-preview-markdown .md-rendered .hljs-literal {
+  color: #d29922;
+  color: color-mix(in srgb, var(--text-primary) 20%, #d29922 80%);
+}
+
+.shiki-wrap .hljs-keyword,
+.shiki-wrap .hljs-title,
+.shiki-wrap .hljs-section,
+.shiki-wrap .hljs-name,
+.file-preview-markdown .md-rendered .hljs-keyword,
+.file-preview-markdown .md-rendered .hljs-title,
+.file-preview-markdown .md-rendered .hljs-section,
+.file-preview-markdown .md-rendered .hljs-name {
+  color: #58a6ff;
+  color: color-mix(in srgb, var(--text-primary) 20%, #58a6ff 80%);
+}
+
+.shiki-wrap .hljs-link,
+.shiki-wrap .hljs-bullet,
+.file-preview-markdown .md-rendered .hljs-link,
+.file-preview-markdown .md-rendered .hljs-bullet {
+  color: #a371f7;
+  color: color-mix(in srgb, var(--text-primary) 20%, #a371f7 80%);
+}
+
+.shiki-wrap .hljs-emphasis,
+.file-preview-markdown .md-rendered .hljs-emphasis {
+  font-style: italic;
+}
+
+.shiki-wrap .hljs-strong,
+.file-preview-markdown .md-rendered .hljs-strong {
+  font-weight: 600;
+}

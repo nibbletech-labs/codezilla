@@ -1,4 +1,4 @@
-export type AccentColorId = "blue" | "green" | "purple" | "orange" | "rose" | "teal" | "amber";
+export type AccentColorId = "blue" | "green" | "purple" | "orange" | "rose" | "teal" | "amber" | "grey";
 export type AppearanceMode = "dark" | "light" | "system";
 
 export interface AccentColor {
@@ -18,6 +18,7 @@ export const ACCENT_COLORS: AccentColor[] = [
   { id: "rose",   label: "Rose",   value: "#e5446d", selectionDark: "#5c1a2b", selectionLight: "#f4b8c7", textOnAccent: "#ffffff" },
   { id: "teal",   label: "Teal",   value: "#14b8a6", selectionDark: "#083b35", selectionLight: "#b2ebe4", textOnAccent: "#ffffff" },
   { id: "amber",  label: "Amber",  value: "#f59e0b", selectionDark: "#5c3d04", selectionLight: "#fbe0a1", textOnAccent: "#ffffff" },
+  { id: "grey",   label: "Grey",   value: "#9ca3af", selectionDark: "#374151", selectionLight: "#d1d5db", textOnAccent: "#ffffff" },
 ];
 
 export interface Palette {

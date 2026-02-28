@@ -2,10 +2,27 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useAppStore } from "../../store/appStore";
 import { pickDirectory } from "../../lib/tauri";
-import type { ThreadType } from "../../store/types";
+import type { ThreadType, Project } from "../../store/types";
 import { THREAD_NEW_LABELS } from "../../store/types";
 import ThreadItem from "./ThreadItem";
 import ThreadIcon from "./ThreadIcons";
+import ProjectIcon from "../ProjectIcon";
+import { IconPicker } from "../IconPicker";
+import {
+  DndContext,
+  closestCenter,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+} from "@dnd-kit/core";
+import {
+  SortableContext,
+  useSortable,
+  verticalListSortingStrategy,
+} from "@dnd-kit/sortable";
+import { restrictToVerticalAxis } from "@dnd-kit/modifiers";
+import { CSS } from "@dnd-kit/utilities";
 
 const THREAD_TYPES: ThreadType[] = ["claude", "codex", "shell"];
 
@@ -18,10 +35,32 @@ export default function LeftPanel() {
   const addThread = useAppStore((s) => s.addThread);
   const setActiveProject = useAppStore((s) => s.setActiveProject);
   const setActiveThread = useAppStore((s) => s.setActiveThread);
+  const baseFontSize = useAppStore((s) => s.baseFontSize);
   const [hoverProjectId, setHoverProjectId] = useState<string | null>(null);
   const [menuProjectId, setMenuProjectId] = useState<string | null>(null);
   const [menuPos, setMenuPos] = useState<{ x: number; y: number } | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
+  const reorderProjects = useAppStore((s) => s.reorderProjects);
+  const setProjectIcon = useAppStore((s) => s.setProjectIcon);
+  const [iconPickerProjectId, setIconPickerProjectId] = useState<string | null>(null);
+  const [iconPickerPos, setIconPickerPos] = useState<{ x: number; y: number } | null>(null);
+
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
+  );
+
+  const handleDragEnd = useCallback(
+    (event: DragEndEvent) => {
+      const { active, over } = event;
+      if (!over || active.id === over.id) return;
+      const oldIndex = projects.findIndex((p) => p.id === active.id);
+      const newIndex = projects.findIndex((p) => p.id === over.id);
+      if (oldIndex !== -1 && newIndex !== -1) {
+        reorderProjects(oldIndex, newIndex);
+      }
+    },
+    [projects, reorderProjects],
+  );
 
   const handleAddProject = useCallback(async () => {
     const path = await pickDirectory();
@@ -87,65 +126,35 @@ export default function LeftPanel() {
           </div>
         )}
 
-        {projects.map((project) => {
-          const projectThreads = threads.filter(
-            (t) => t.projectId === project.id,
-          );
-          const isActive = project.id === activeProjectId;
-          return (
-            <div key={project.id} style={styles.project}>
-              <div
-                style={{
-                  ...styles.projectHeader,
-                  backgroundColor: isActive && !activeThreadId
-                    ? "var(--accent-selection)"
-                    : hoverProjectId === project.id
-                      ? "var(--bg-hover)"
-                      : "transparent",
-                }}
-                onClick={() => setActiveProject(project.id)}
-                onMouseEnter={() => setHoverProjectId(project.id)}
-                onMouseLeave={() => setHoverProjectId(null)}
-              >
-                {project.missing && (
-                  <span style={styles.warningIcon} title="Directory not found">⚠</span>
-                )}
-                <svg width="14" height="14" viewBox="0 0 16 16" fill="var(--text-secondary)" style={{ flexShrink: 0 }}>
-                  <path d="M1.5 2A1.5 1.5 0 0 0 0 3.5v9A1.5 1.5 0 0 0 1.5 14h13a1.5 1.5 0 0 0 1.5-1.5V5.5A1.5 1.5 0 0 0 14.5 4H8.21l-1.6-1.6A1.5 1.5 0 0 0 5.55 2H1.5z" />
-                </svg>
-                <span
-                  style={{
-                    ...styles.projectName,
-                    ...(project.missing ? { opacity: 0.5 } : {}),
-                  }}
-                  title={project.path}
-                >
-                  {project.name}
-                </span>
-                <button
-                  onClick={(e) => handleNewThreadClick(e, project.id)}
-                  style={styles.newThreadBtn}
-                  title="New thread"
-                >
-                  +
-                </button>
-              </div>
-
-              {projectThreads.length > 0 && (
-                <div style={styles.projectBody}>
-                  {projectThreads.map((thread) => (
-                    <ThreadItem
-                      key={thread.id}
-                      thread={thread}
-                      isActive={thread.id === activeThreadId}
-                      onSelect={() => setActiveThread(thread.id)}
-                    />
-                  ))}
-                </div>
-              )}
-            </div>
-          );
-        })}
+        <DndContext
+          sensors={sensors}
+          collisionDetection={closestCenter}
+          modifiers={[restrictToVerticalAxis]}
+          onDragEnd={handleDragEnd}
+        >
+          <SortableContext
+            items={projects.map((p) => p.id)}
+            strategy={verticalListSortingStrategy}
+          >
+            {projects.map((project) => (
+              <SortableProjectItem
+                key={project.id}
+                project={project}
+                threads={threads}
+                activeProjectId={activeProjectId}
+                activeThreadId={activeThreadId}
+                baseFontSize={baseFontSize}
+                hoverProjectId={hoverProjectId}
+                setHoverProjectId={setHoverProjectId}
+                setActiveProject={setActiveProject}
+                setActiveThread={setActiveThread}
+                handleNewThreadClick={handleNewThreadClick}
+                setIconPickerProjectId={setIconPickerProjectId}
+                setIconPickerPos={setIconPickerPos}
+              />
+            ))}
+          </SortableContext>
+        </DndContext>
       </div>
 
       {/* New thread type picker popup — rendered via portal to escape transform stacking context */}
@@ -168,6 +177,140 @@ export default function LeftPanel() {
           ))}
         </div>,
         document.body,
+      )}
+
+      {/* Icon picker popover */}
+      {iconPickerProjectId && iconPickerPos && createPortal(
+        <IconPicker
+          anchor={iconPickerPos}
+          currentIcon={projects.find((p) => p.id === iconPickerProjectId)?.icon}
+          onSelect={(icon) => {
+            setProjectIcon(iconPickerProjectId, icon);
+          }}
+          onRemove={() => {
+            setProjectIcon(iconPickerProjectId, undefined);
+          }}
+          onClose={() => {
+            setIconPickerProjectId(null);
+            setIconPickerPos(null);
+          }}
+        />,
+        document.body,
+      )}
+    </div>
+  );
+}
+
+interface SortableProjectItemProps {
+  project: Project;
+  threads: ReturnType<typeof useAppStore.getState>["threads"];
+  activeProjectId: string | null;
+  activeThreadId: string | null;
+  baseFontSize: number;
+  hoverProjectId: string | null;
+  setHoverProjectId: (id: string | null) => void;
+  setActiveProject: (id: string) => void;
+  setActiveThread: (id: string) => void;
+  handleNewThreadClick: (e: React.MouseEvent, projectId: string) => void;
+  setIconPickerProjectId: (id: string | null) => void;
+  setIconPickerPos: (pos: { x: number; y: number } | null) => void;
+}
+
+function SortableProjectItem({
+  project,
+  threads,
+  activeProjectId,
+  activeThreadId,
+  baseFontSize,
+  hoverProjectId,
+  setHoverProjectId,
+  setActiveProject,
+  setActiveThread,
+  handleNewThreadClick,
+  setIconPickerProjectId,
+  setIconPickerPos,
+}: SortableProjectItemProps) {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id: project.id });
+
+  const style: React.CSSProperties = {
+    ...styles.project,
+    transform: CSS.Transform.toString(transform),
+    transition,
+    opacity: isDragging ? 0.5 : 1,
+    zIndex: isDragging ? 10 : undefined,
+    position: "relative",
+  };
+
+  const projectThreads = threads.filter((t) => t.projectId === project.id);
+  const isActive = project.id === activeProjectId;
+
+  return (
+    <div ref={setNodeRef} style={style} {...attributes} {...listeners}>
+      <div
+        style={{
+          ...styles.projectHeader,
+          backgroundColor:
+            isActive && !activeThreadId
+              ? "var(--accent-selection)"
+              : hoverProjectId === project.id
+                ? "var(--bg-hover)"
+                : "transparent",
+        }}
+        onClick={() => setActiveProject(project.id)}
+        onMouseEnter={() => setHoverProjectId(project.id)}
+        onMouseLeave={() => setHoverProjectId(null)}
+      >
+        {project.missing && (
+          <span style={styles.warningIcon} title="Directory not found">
+            ⚠
+          </span>
+        )}
+        <ProjectIcon
+          project={project}
+          size={baseFontSize + 2}
+          onClick={(e) => {
+            e.stopPropagation();
+            const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+            setIconPickerProjectId(project.id);
+            setIconPickerPos({ x: rect.left, y: rect.bottom + 4 });
+          }}
+        />
+        <span
+          style={{
+            ...styles.projectName,
+            ...(project.missing ? { opacity: 0.5 } : {}),
+          }}
+          title={project.path}
+        >
+          {project.name}
+        </span>
+        <button
+          onClick={(e) => handleNewThreadClick(e, project.id)}
+          style={styles.newThreadBtn}
+          title="New thread"
+        >
+          +
+        </button>
+      </div>
+
+      {projectThreads.length > 0 && (
+        <div style={styles.projectBody}>
+          {projectThreads.map((thread) => (
+            <ThreadItem
+              key={thread.id}
+              thread={thread}
+              isActive={thread.id === activeThreadId}
+              onSelect={() => setActiveThread(thread.id)}
+            />
+          ))}
+        </div>
       )}
     </div>
   );
@@ -207,14 +350,14 @@ const styles = {
   },
   headerText: {
     color: "var(--text-secondary)",
-    fontSize: "11px",
+    fontSize: "var(--font-size-sm)",
     textTransform: "uppercase" as const,
     letterSpacing: "0.5px",
   },
   addProjectButton: {
     color: "var(--accent)",
     border: "1px solid var(--accent)",
-    fontSize: "11px",
+    fontSize: "var(--font-size-sm)",
     borderRadius: "3px",
     padding: "2px 8px",
     display: "inline-flex",
@@ -230,7 +373,7 @@ const styles = {
     padding: "24px 12px",
     textAlign: "center" as const,
     color: "var(--text-secondary)",
-    fontSize: "13px",
+    fontSize: "var(--font-size)",
   },
   emptyButton: {
     background: "var(--accent)",
@@ -239,10 +382,11 @@ const styles = {
     padding: "6px 16px",
     borderRadius: "3px",
     cursor: "pointer",
-    fontSize: "13px",
+    fontSize: "var(--font-size)",
   },
   project: {
     borderBottom: "1px solid var(--border-subtle)",
+    marginTop: "6px",
   },
   projectHeader: {
     display: "flex",
@@ -254,7 +398,7 @@ const styles = {
   } as React.CSSProperties,
   projectName: {
     color: "var(--text-heading)",
-    fontSize: "var(--font-size)",
+    fontSize: "calc(var(--font-size) + 2px)",
     fontWeight: 600,
     flex: 1,
     overflow: "hidden",
@@ -265,7 +409,7 @@ const styles = {
     background: "none",
     border: "none",
     color: "var(--accent)",
-    fontSize: "16px",
+    fontSize: "calc(var(--font-size) + 3px)",
     cursor: "pointer",
     padding: "0 4px",
     flexShrink: 0,
@@ -276,7 +420,7 @@ const styles = {
     paddingBottom: "4px",
   },
   warningIcon: {
-    fontSize: "12px",
+    fontSize: "var(--font-size-sm)",
     flexShrink: 0,
   } as React.CSSProperties,
   threadMenu: {

@@ -10,6 +10,8 @@
     "dialog:default",
     "store:default",
     "window-state:default",
-    "updater:default"
+    "updater:default",
+    "process:default",
+    "log:default"
   ]
 }

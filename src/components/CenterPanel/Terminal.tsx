@@ -1,4 +1,5 @@
 import { useEffect, useRef, useCallback, useState } from "react";
+import { createPortal } from "react-dom";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebglAddon } from "@xterm/addon-webgl";
@@ -23,6 +24,8 @@ import { useAppStore } from "../../store/appStore";
 import type { Thread, ThreadType } from "../../store/types";
 import { THREAD_NEW_LABELS } from "../../store/types";
 import ThreadIcon from "../LeftPanel/ThreadIcons";
+import ProjectIcon from "../ProjectIcon";
+import { IconPicker } from "../IconPicker";
 import {
   clearActivity,
   isOutputActivitySuppressed,
@@ -58,24 +61,85 @@ const RESIZE_ACTIVITY_SUPPRESS_MS = 900;
 const TOUCH_DEBOUNCE_MS = 30_000;
 const touchTimestamps = new Map<string, number>();
 const INPUT_ECHO_SUPPRESS_MS = 450;
-type ActivityDetectionMode = "legacy" | "hybrid" | "marker";
+const PROGRESS_IDLE_RECOVERY_MS = 4500;
+const INTERRUPT_HINT_ACTIVE_MS = 12_000;
+const INTERRUPT_HINT_LOOKBACK_LINES = 8;
+type ActivityDetectionMode = "hybrid" | "marker";
 
 function parseActivityDetectionMode(raw: string | undefined): ActivityDetectionMode {
-  const normalized = raw?.trim().toLowerCase();
-  if (normalized === "legacy" || normalized === "hybrid" || normalized === "marker") {
-    return normalized;
-  }
+  if (raw?.trim().toLowerCase() === "marker") return "marker";
   return "hybrid";
 }
 
 const ACTIVITY_DETECTION_MODE = parseActivityDetectionMode(
   import.meta.env.VITE_THREAD_ACTIVITY_MODE,
 );
-const MARKER_EVENTS_ENABLED = ACTIVITY_DETECTION_MODE !== "legacy";
 const STRICT_MARKER_MODE = ACTIVITY_DETECTION_MODE === "marker";
+const BOTTOM_TOLERANCE_LINES = 1;
 
 function nextPtySource(source: RuntimeStateSource): RuntimeStateSource {
   return source === "transcript" || source === "mixed" ? "mixed" : "pty";
+}
+
+function hasInterruptHint(text: string): boolean {
+  return /\besc\s+to\s+interrupt\b/i.test(text);
+}
+
+function hasClaudeStarActivityHint(text: string): boolean {
+  // Decorative star spinner (U+2720-U+274B) + ellipsis — Claude's rotating star animation.
+  if (/[\u2720-\u274B].*\u2026/.test(text)) return true;
+  // Progress timer on active spinner line: "… (Xs" or "… (Xm Ys".
+  // Requires ellipsis before the timer — completed tool results like "● Read (2s)" have no "…".
+  if (/\u2026[^\n]*\((?:\d+m\s+)?\d+s/.test(text)) return true;
+  // Thinking indicator — "thinking)" appears in progress line during extended thinking.
+  if (/\bthinking\)/.test(text)) return true;
+  return false;
+}
+
+function hasThreadActivityFallbackHint(threadType: ThreadType, text: string): boolean {
+  if (threadType === "codex") return hasInterruptHint(text);
+  if (threadType === "claude") return hasClaudeStarActivityHint(text);
+  return false;
+}
+
+function terminalTailHasActivityHint(
+  terminal: Terminal,
+  threadType: ThreadType,
+  lookbackLines: number,
+): boolean {
+  const buffer = terminal.buffer.active;
+  const endY = buffer.baseY + buffer.cursorY;
+  for (let i = 0; i < lookbackLines; i += 1) {
+    const line = buffer.getLine(endY - i);
+    if (!line) continue;
+    const text = line.translateToString(true);
+    if (hasThreadActivityFallbackHint(threadType, text)) return true;
+  }
+  return false;
+}
+
+function isTerminalAtBottom(terminal: Terminal): boolean {
+  const buf = terminal.buffer.active;
+  return buf.baseY === 0 || buf.viewportY >= buf.baseY - BOTTOM_TOLERANCE_LINES;
+}
+
+function getTerminalDistanceFromBottom(terminal: Terminal): number {
+  const buf = terminal.buffer.active;
+  return Math.max(0, buf.baseY - buf.viewportY);
+}
+
+function restoreTerminalViewportAfterFit(
+  terminal: Terminal,
+  wasAtBottom: boolean,
+  distanceFromBottom: number,
+): void {
+  if (wasAtBottom) {
+    terminal.scrollToBottom();
+    return;
+  }
+  const buf = terminal.buffer.active;
+  const targetViewportY = Math.max(0, Math.min(buf.baseY, buf.baseY - distanceFromBottom));
+  terminal.scrollToLine(targetViewportY);
 }
 
 function applyResolvedCoreStatus(
@@ -102,14 +166,15 @@ function applyResolvedCoreStatus(
   resolved.subtitle = deriveSubtitle(resolved);
 
   if (nextStatus === "working") {
-    // Preserve attention-requiring badges through brief PTY activity blips
-    // (e.g. resize redraws). The transcript watcher is the authoritative
-    // badge setter and will clear/update them when the idle reason changes.
-    const keepBadge = current.badge === "needs_input" || current.badge === "needs_approval";
+    // PTY is active — tool is executing (was approved or auto-approved).
+    // Clear speculative idle reasons and badges set from transcript hints.
+    // Resize redraws are already suppressed via suppressOutputActivity,
+    // so this won't misfire during real approval waits.
     return {
       ...resolved,
-      badge: keepBadge ? current.badge : null,
-      badgeSince: keepBadge ? current.badgeSince : null,
+      idleReason: "none",
+      badge: null,
+      badgeSince: null,
     };
   }
 
@@ -218,6 +283,7 @@ export default function TerminalMultiplexer() {
   const projects = useAppStore((s) => s.projects);
   const addThread = useAppStore((s) => s.addThread);
   const removeProject = useAppStore((s) => s.removeProject);
+  const setProjectIcon = useAppStore((s) => s.setProjectIcon);
   const markThreadExited = useAppStore((s) => s.markThreadExited);
   const resumeThread = useAppStore((s) => s.resumeThread);
   const activeProject = projects.find((p) => p.id === activeProjectId);
@@ -228,6 +294,7 @@ export default function TerminalMultiplexer() {
 
   const [showScrollButton, setShowScrollButton] = useState(false);
   const [loadingSession, setLoadingSession] = useState<string | null>(null);
+  const [iconPickerPos, setIconPickerPos] = useState<{ x: number; y: number } | null>(null);
   const scrollCallbackRef = useRef<((atBottom: boolean) => void) | null>(null);
   scrollCallbackRef.current = (atBottom: boolean) => setShowScrollButton(!atBottom);
   const onFirstOutputRef = useRef<((sessionId: string) => void) | null>(null);
@@ -258,15 +325,10 @@ export default function TerminalMultiplexer() {
       const instance = instancesRef.current.get(active.sessionId);
       if (instance) {
         suppressOutputActivity(active.id, RESIZE_ACTIVITY_SUPPRESS_MS);
-        const buf = instance.terminal.buffer.active;
-        const wasAtBottom = buf.viewportY >= buf.baseY;
-        const savedViewportY = buf.viewportY;
+        const wasAtBottom = isTerminalAtBottom(instance.terminal);
+        const distanceFromBottom = getTerminalDistanceFromBottom(instance.terminal);
         instance.fitAddon.fit();
-        if (wasAtBottom) {
-          instance.terminal.scrollToBottom();
-        } else {
-          instance.terminal.scrollToLine(Math.min(savedViewportY, instance.terminal.buffer.active.baseY));
-        }
+        restoreTerminalViewportAfterFit(instance.terminal, wasAtBottom, distanceFromBottom);
         const rows = instance.terminal.rows;
         const cols = instance.terminal.cols;
         const last = lastDimsRef.current.get(active.sessionId);
@@ -340,25 +402,41 @@ export default function TerminalMultiplexer() {
 
     for (const [sessionId, instance] of instances) {
       if (sessionId === activeSessionId) {
-        instance.container.style.display = "block";
+        instance.container.style.visibility = "visible";
+        instance.container.style.pointerEvents = "auto";
+        instance.container.style.zIndex = "2";
         if (sessionChanged) {
           if (activeThread) {
             suppressOutputActivity(activeThread.id, RESIZE_ACTIVITY_SUPPRESS_MS);
           }
-          instance.fitAddon.fit();
-          instance.terminal.scrollToBottom();
-          setShowScrollButton(false);
-          const rows = instance.terminal.rows;
-          const cols = instance.terminal.cols;
-          const last = lastDimsRef.current.get(sessionId);
-          if (!last || last.rows !== rows || last.cols !== cols) {
-            lastDimsRef.current.set(sessionId, { rows, cols });
-            resizePty(sessionId, rows, cols).catch(console.error);
-          }
-          instance.terminal.focus();
+          // Defer fit/scroll until after the browser has reflowed the newly-visible container.
+          const capturedSessionId = sessionId;
+          const capturedInstance = instance;
+          requestAnimationFrame(() => {
+            const latest = useAppStore.getState();
+            const latestActiveSessionId = latest.activeThreadId
+              ? latest.threads.find((t) => t.id === latest.activeThreadId)?.sessionId ?? null
+              : null;
+            if (latestActiveSessionId !== capturedSessionId) {
+              return;
+            }
+            capturedInstance.fitAddon.fit();
+            capturedInstance.terminal.scrollToBottom();
+            setShowScrollButton(false);
+            const rows = capturedInstance.terminal.rows;
+            const cols = capturedInstance.terminal.cols;
+            const last = lastDimsRef.current.get(capturedSessionId);
+            if (!last || last.rows !== rows || last.cols !== cols) {
+              lastDimsRef.current.set(capturedSessionId, { rows, cols });
+              resizePty(capturedSessionId, rows, cols).catch(console.error);
+            }
+            capturedInstance.terminal.focus();
+          });
         }
       } else {
-        instance.container.style.display = "none";
+        instance.container.style.visibility = "hidden";
+        instance.container.style.pointerEvents = "none";
+        instance.container.style.zIndex = "1";
       }
     }
   }, [activeSessionId]);
@@ -371,20 +449,13 @@ export default function TerminalMultiplexer() {
       if (thread) {
         suppressOutputActivity(thread.id, RESIZE_ACTIVITY_SUPPRESS_MS);
       }
-      const buf = instance.terminal.buffer.active;
-      const wasAtBottom = buf.viewportY >= buf.baseY;
-      const savedViewportY = buf.viewportY;
+      const wasAtBottom = isTerminalAtBottom(instance.terminal);
+      const distanceFromBottom = getTerminalDistanceFromBottom(instance.terminal);
 
       instance.terminal.options.fontSize = baseFontSize;
       instance.fitAddon.fit();
 
-      if (wasAtBottom) {
-        instance.terminal.scrollToBottom();
-      } else {
-        instance.terminal.scrollToLine(
-          Math.min(savedViewportY, instance.terminal.buffer.active.baseY),
-        );
-      }
+      restoreTerminalViewportAfterFit(instance.terminal, wasAtBottom, distanceFromBottom);
 
       const rows = instance.terminal.rows;
       const cols = instance.terminal.cols;
@@ -457,9 +528,19 @@ export default function TerminalMultiplexer() {
           }}
         >
           {activeProject && (
-            <div style={{ color: "var(--text-primary)", fontSize: "calc(var(--font-size) + 10px)", fontWeight: 600, marginBottom: "2px" }}>
-              {activeProject.name}
-            </div>
+            <>
+              <ProjectIcon
+                project={activeProject}
+                size={baseFontSize + 22}
+                onClick={(e) => {
+                  const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                  setIconPickerPos({ x: rect.left, y: rect.bottom + 4 });
+                }}
+              />
+              <div style={{ color: "var(--text-primary)", fontSize: "calc(var(--font-size) + 10px)", fontWeight: 600, marginBottom: "2px" }}>
+                {activeProject.name}
+              </div>
+            </>
           )}
           <div style={{ color: "var(--text-secondary)", fontSize: "var(--font-size)", marginBottom: "4px" }}>
             {activeProjectId ? "Start a session" : "Select a project to begin"}
@@ -480,6 +561,21 @@ export default function TerminalMultiplexer() {
             <RemoveProjectButton onClick={() => removeProject(activeProjectId)} />
           )}
         </div>
+      )}
+      {/* Icon picker for project home */}
+      {activeProject && iconPickerPos && createPortal(
+        <IconPicker
+          anchor={iconPickerPos}
+          currentIcon={activeProject.icon}
+          onSelect={(icon) => {
+            setProjectIcon(activeProject.id, icon);
+          }}
+          onRemove={() => {
+            setProjectIcon(activeProject.id, undefined);
+          }}
+          onClose={() => setIconPickerPos(null)}
+        />,
+        document.body,
       )}
     </div>
   );
@@ -602,10 +698,11 @@ function createTerminalInstance(
   onFirstOutput: ((sessionId: string) => void) | null,
 ) {
   if (!thread.sessionId) return;
+  const sessionId = thread.sessionId;
 
   const container = document.createElement("div");
   container.style.cssText =
-    "position:absolute;top:0;right:0;bottom:0;left:6px;display:none;";
+    "position:absolute;top:0;right:0;bottom:0;left:6px;visibility:hidden;pointer-events:none;z-index:1;";
   wrapper.appendChild(container);
 
   const storeState = useAppStore.getState();
@@ -636,9 +733,8 @@ function createTerminalInstance(
     // Canvas fallback
   }
 
-  // Don't call fit() here — container is display:none so FitAddon would
-  // measure 0×0 and resize the terminal to minimum (2×1). The show/hide
-  // effect will fit after setting display:block.
+  // Fit happens in the active-thread show/hide effect after this container
+  // is marked visible and the browser has had a frame to settle layout.
   const instance: TerminalInstance = { terminal, fitAddon, container, isAtBottom: true };
   instances.set(thread.sessionId, instance);
 
@@ -646,15 +742,16 @@ function createTerminalInstance(
   // Check on both scroll events and after new output is written, so the
   // button appears reliably when the user is scrolled up.
   const checkScrollState = () => {
-    const buf = terminal.buffer.active;
-    const atBottom = buf.baseY === 0 || buf.viewportY >= buf.baseY - 1;
+    const atBottom = isTerminalAtBottom(terminal);
     instance.isAtBottom = atBottom;
     const activeId = useAppStore.getState().activeThreadId;
     if (activeId === thread.id && onScrollStateChange) {
       onScrollStateChange(atBottom);
     }
   };
-  terminal.onScroll(checkScrollState);
+  terminal.onScroll(() => {
+    checkScrollState();
+  });
 
   // Register file path link provider for Cmd+click navigation
   const project = useAppStore
@@ -695,11 +792,15 @@ function createTerminalInstance(
     terminal.registerLinkProvider(commitLinkProvider);
   }
 
-  const sessionId = thread.sessionId;
   const outputQueue: Uint8Array[] = [];
   let flushingOutput = false;
   let markerEventsObserved = false;
+  let waitingForCommandStart = false;
   let progressActive = false;
+  let lastProgressEventAt = 0;
+  let lastProgressActiveAt = 0;
+  let lastOutputAt = 0;
+  let lastCtrlCAt = 0;
   let inputEchoSuppressUntil = 0;
   let hasReceivedOutput = false;
 
@@ -714,7 +815,9 @@ function createTerminalInstance(
         return;
       }
       try {
+        const wasAtBottom = instance.isAtBottom;
         terminal.write(chunk, () => {
+          if (wasAtBottom) terminal.scrollToBottom();
           checkScrollState();
           // Break synchronous recursion on very high-volume streams.
           setTimeout(pump, 0);
@@ -740,48 +843,119 @@ function createTerminalInstance(
 
     if (event.event === "Output") {
       const { data } = event.data as PtyOutputData;
+      const outputChunk = new Uint8Array(data);
       if (!hasReceivedOutput) {
         hasReceivedOutput = true;
         sessionsWithOutput.add(sessionId);
         onFirstOutput?.(sessionId);
       }
-      outputQueue.push(new Uint8Array(data));
+      outputQueue.push(outputChunk);
       flushOutput();
       recordOutput(thread.id);
-      // Debounced lastActivityAt touch
-      const now = Date.now();
-      const lastTouch = touchTimestamps.get(thread.id) ?? 0;
-      if (now - lastTouch >= TOUCH_DEBOUNCE_MS) {
-        touchTimestamps.set(thread.id, now);
-        useAppStore.getState().touchThread(thread.id);
+      lastOutputAt = Date.now();
+      // Only count unsuppressed PTY output as real activity.
+      // Suppressed output is often UI-induced redraw noise (resize/input echo).
+      if (!isOutputActivitySuppressed(thread.id)) {
+        const now = Date.now();
+        const lastTouch = touchTimestamps.get(thread.id) ?? 0;
+        if (now - lastTouch >= TOUCH_DEBOUNCE_MS) {
+          touchTimestamps.set(thread.id, now);
+          useAppStore.getState().touchThread(thread.id);
+        }
       }
     } else if (event.event === "Activity") {
       const { active, source } = event.data as PtyActivityData;
       const fromProgress = source === "progress";
+      const now = Date.now();
+      const interruptFallbackActive = thread.type !== "shell"
+        && now - lastOutputAt <= INTERRUPT_HINT_ACTIVE_MS
+        && terminalTailHasActivityHint(terminal, thread.type, INTERRUPT_HINT_LOOKBACK_LINES);
+      const outputSuppressed = now <= inputEchoSuppressUntil
+        && isOutputActivitySuppressed(thread.id);
+
+      // When the transcript has already confirmed the turn is done (result event
+      // fired, semanticPhase === "waiting"), don't suppress the idle signal even
+      // if the star hint is still active. The spinner cleanup can leave the hint
+      // live for up to 12 s, which would otherwise delay the "Done" badge by the
+      // full stale-PTY-recovery window (5 s) on top of that.
+      // Guard: only treat the transcript as "confirmed done" if no progress-active
+      // marker has arrived since the transcript last moved to "waiting". A new
+      // progress-active after the transcript's last event means a new turn has
+      // already started at the PTY level — the "waiting" state is stale and the
+      // activity hint should win.
+      const transcriptInfo = !active && thread.type !== "shell"
+        ? useAppStore.getState().transcriptInfo[thread.id]
+        : null;
+      const transcriptConfirmedDone = transcriptInfo != null
+        && transcriptInfo.semanticPhase === "waiting"
+        && transcriptInfo.idleReason === "none"
+        && transcriptInfo.lastError == null
+        && transcriptInfo.pendingToolUseIds.size === 0
+        && lastProgressActiveAt <= (transcriptInfo.lastParsedTime ?? 0);
+      const userCancelled = now - lastCtrlCAt < 5_000;
+      const effectiveInterruptFallback = interruptFallbackActive && !transcriptConfirmedDone && !userCancelled;
 
       if (fromProgress) {
         progressActive = active;
+        lastProgressEventAt = now;
+        if (active) lastProgressActiveAt = now;
+      }
+
+      // When the star animation or activity hint is still visible, don't let
+      // a brief progress-idle marker flip the status to idle. The CLI is
+      // visually active (spinner/status line) even if progress markers gap.
+      if (fromProgress && !active && thread.type !== "shell" && effectiveInterruptFallback) {
+        return;
       }
 
       // Once command start/end markers are observed, only process progress-sourced
-      // activity events — output-based heuristics are superseded by markers.
-      if (MARKER_EVENTS_ENABLED && markerEventsObserved && !fromProgress) {
+      // activity events. Exception: for Claude/Codex, allow output-active as a
+      // recovery path when progress markers briefly desync from visible output.
+      if (markerEventsObserved && !fromProgress) {
+        if (
+          !active
+          && thread.type !== "shell"
+          && effectiveInterruptFallback
+        ) {
+          return;
+        }
+        if (
+          active
+          && thread.type !== "shell"
+          && !outputSuppressed
+          && !waitingForCommandStart
+        ) {
+          applyPtyActivityUpdate(thread, true, "output", "output_activity_marker_fallback");
+          return;
+        }
+        if (
+          !active
+          && thread.type !== "shell"
+          && progressActive
+          && now - lastProgressEventAt > PROGRESS_IDLE_RECOVERY_MS
+        ) {
+          // Progress markers can occasionally get stuck active; let output-idle
+          // recover runtime status in that case.
+          progressActive = false;
+          applyPtyActivityUpdate(thread, false, "output", "output_idle_progress_stale_recovery");
+        }
         return;
       }
 
       // Progress markers are authoritative: if the CLI says it's active
       // (spinner visible), ignore the output watchdog's idle timeout.
-      // Claude/Codex sessions don't use the shell wrapper (no CommandStart),
-      // so the watchdog isn't suppressed — but progress markers are reliable.
+      // If the progress marker stream goes stale, recover via output-idle.
       if (!fromProgress && !active && progressActive) {
+        if (now - lastProgressEventAt <= PROGRESS_IDLE_RECOVERY_MS) {
+          return;
+        }
+        progressActive = false;
+      }
+      if (!fromProgress && !active && thread.type !== "shell" && effectiveInterruptFallback) {
         return;
       }
 
-      if (
-        !fromProgress
-        && Date.now() <= inputEchoSuppressUntil
-        && isOutputActivitySuppressed(thread.id)
-      ) {
+      if (!fromProgress && outputSuppressed) {
         return;
       }
 
@@ -794,21 +968,17 @@ function createTerminalInstance(
           : (active ? "output_activity" : "output_idle"),
       );
     } else if (event.event === "CommandStart") {
-      if (!MARKER_EVENTS_ENABLED) {
-        return;
-      }
       markerEventsObserved = true;
+      waitingForCommandStart = false;
       applyPtyCommandStart(thread);
     } else if (event.event === "CommandEnd") {
-      if (!MARKER_EVENTS_ENABLED) {
-        return;
-      }
       markerEventsObserved = true;
+      waitingForCommandStart = true;
       const { exit_code } = event.data as PtyCommandEndData;
       applyPtyCommandEnd(thread, exit_code);
     } else if (event.event === "Exit") {
       const { code } = event.data as PtyExitData;
-      if (MARKER_EVENTS_ENABLED && markerEventsObserved) {
+      if (markerEventsObserved) {
         applyPtyCommandEnd(thread, code ?? null);
       } else {
         applyPtyActivityUpdate(thread, false, "output", "output_idle");
@@ -858,6 +1028,12 @@ function createTerminalInstance(
 
   // Wire input
   terminal.onData((data: string) => {
+    if (data.includes("\x03")) lastCtrlCAt = Date.now();
+    const submittedInput = data.includes("\r") || data.includes("\n");
+    if (submittedInput) {
+      // User-entered text should count as activity even before PTY output arrives.
+      useAppStore.getState().touchThread(thread.id);
+    }
     if (!data.includes("\r") && !data.includes("\n")) {
       inputEchoSuppressUntil = Date.now() + INPUT_ECHO_SUPPRESS_MS;
       suppressOutputActivity(thread.id, INPUT_ECHO_SUPPRESS_MS);

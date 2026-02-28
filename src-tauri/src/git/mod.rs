@@ -1,5 +1,6 @@
 pub mod types;
 
+use log::error;
 use std::process::Command;
 use types::{CommitFileStat, CommitInfo, GitFileStatus, GitStatusEntry};
 
@@ -43,7 +44,10 @@ pub fn get_git_branch(path: String) -> Result<String, String> {
         .args(["rev-parse", "--abbrev-ref", "HEAD"])
         .current_dir(repo_path)
         .output()
-        .map_err(|e| format!("Failed to run git: {}", e))?;
+        .map_err(|e| {
+            error!("Failed to run git rev-parse: {}", e);
+            format!("Failed to run git: {}", e)
+        })?;
 
     if !output.status.success() {
         return Err("Not a git repository".to_string());

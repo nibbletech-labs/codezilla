@@ -17,7 +17,7 @@ export default function StatusBar() {
 
   const subtitle = activeThread ? getThreadSubtitle(activeThread, info) : null;
   const costUsd = info?.costUsd ?? null;
-  const { status, version: updateVersion, progress, downloadAndInstall, dismiss } =
+  const { status, version: updateVersion, progress, downloadAndInstall, dismiss, restart } =
     useUpdater();
 
   return (
@@ -72,7 +72,17 @@ export default function StatusBar() {
         </span>
       )}
       {status === "ready" && (
-        <span style={{ opacity: 0.85 }}>
+        <span
+          role="button"
+          tabIndex={0}
+          onClick={restart}
+          onKeyDown={(e) => e.key === "Enter" && restart()}
+          style={{
+            cursor: "pointer",
+            textDecoration: "underline",
+            textUnderlineOffset: "2px",
+          }}
+        >
           Update ready — restart to apply
         </span>
       )}

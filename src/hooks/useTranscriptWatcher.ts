@@ -6,6 +6,12 @@ import type { TranscriptInfo } from "../store/transcriptTypes";
 import type { RuntimeStateSource } from "../store/transcriptTypes";
 import { parseClaudeLineDetailed, parseCodexLineDetailed } from "../lib/transcriptParser";
 import { transcriptReducer, deriveSubtitle } from "../lib/transcriptStateMachine";
+import { deriveCoreRuntimeStatus } from "../lib/threadActivityCore";
+import {
+  isTurnCompletionEvent,
+  shouldAssignDoneBadgeOnCompletion,
+  shouldPromoteToWaitingFallback,
+} from "../lib/transcriptStatusRules";
 import {
   watchTranscript,
   unwatchTranscript,
@@ -33,6 +39,9 @@ interface CodexBindingPayload {
 const discoveryInFlight = new Set<string>();
 const discoveryTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const parseMetrics = new Map<string, ParseMetrics>();
+const codexReregistrationTimes = new Map<string, number>();
+
+const CODEX_REREG_COOLDOWN_MS = 300_000; // 5 minutes between re-registration attempts
 
 const DISCOVERY_INITIAL_DELAY_MS = 1500;
 const DISCOVERY_RETRY_MS = 2000;
@@ -201,6 +210,23 @@ export function useTranscriptWatcher() {
           : "transcript";
       const nextWithDiagnostics = withDiagnostics(next, metrics, nextSource);
 
+      // Most transcript turn-completion events are authoritative. If PTY activity
+      // got stuck active, force the runtime status back to idle.
+      //
+      // Exception: Codex `event_msg.task_complete` can appear before all visible
+      // terminal activity has settled, so don't force-idle on that signal alone.
+      const shouldForceIdleOnCompletion =
+        isTurnCompletionEvent(parsed.event)
+        && parsed.signalKey !== "codex.event.task_complete";
+      if (shouldForceIdleOnCompletion && nextWithDiagnostics.ptyActive) {
+        nextWithDiagnostics.ptyActive = false;
+        nextWithDiagnostics.status = deriveCoreRuntimeStatus(
+          nextWithDiagnostics.status,
+          false,
+        );
+        nextWithDiagnostics.subtitle = deriveSubtitle(nextWithDiagnostics);
+      }
+
       if (DEBUG_TRANSCRIPT_SIGNALS) {
         console.debug(
           `[transcript-signal] ${thread.type}:${thread_id} signal=${parsed.signalKey} group=${parsed.signalGroup} phase=${parsed.semanticPhase} event=${parsed.event.type} idleHint=${parsed.idleReasonHint}`,
@@ -220,12 +246,47 @@ export function useTranscriptWatcher() {
         if (nextWithDiagnostics.idleReason === "waiting_for_approval") {
           nextWithDiagnostics.badge = "needs_approval";
           nextWithDiagnostics.badgeSince = nextWithDiagnostics.badgeSince ?? Date.now();
+          nextWithDiagnostics.badgeDismissedAt = null;
         } else if (nextWithDiagnostics.idleReason === "waiting_for_input") {
           nextWithDiagnostics.badge = "needs_input";
           nextWithDiagnostics.badgeSince = nextWithDiagnostics.badgeSince ?? Date.now();
+          nextWithDiagnostics.badgeDismissedAt = null;
         } else if (nextWithDiagnostics.lastError && !nextWithDiagnostics.badge) {
           nextWithDiagnostics.badge = "error";
           nextWithDiagnostics.badgeSince = nextWithDiagnostics.badgeSince ?? Date.now();
+          nextWithDiagnostics.badgeDismissedAt = null;
+        }
+      }
+      // Once the transcript replay reaches a completion event, the historical
+      // re-run is done. Clear the resuming flag so semantic signals are used again.
+      if (thread.resuming && isTurnCompletionEvent(parsed.event)) {
+        state.clearResuming(thread_id);
+      }
+
+      if (isTurnCompletionEvent(parsed.event)) {
+        const completionTimestamp = Math.max(
+          nextWithDiagnostics.lastEventTime,
+          nextWithDiagnostics.lastParsedTime ?? 0,
+        );
+        const completionAlreadyDismissed = nextWithDiagnostics.badgeDismissedAt != null
+          && nextWithDiagnostics.badgeDismissedAt >= completionTimestamp;
+
+        if (
+          thread_id === state.activeThreadId
+          && shouldAssignDoneBadgeOnCompletion(nextWithDiagnostics, thread.type)
+        ) {
+          // Completion happened while visible, so suppress any delayed done badge
+          // from fallback timers after the user switches away.
+          nextWithDiagnostics.badgeDismissedAt = completionTimestamp;
+        } else if (
+          thread_id !== state.activeThreadId
+          && !nextWithDiagnostics.badge
+          && !completionAlreadyDismissed
+          && shouldAssignDoneBadgeOnCompletion(nextWithDiagnostics, thread.type)
+        ) {
+          nextWithDiagnostics.badge = "done";
+          nextWithDiagnostics.badgeSince = nextWithDiagnostics.badgeSince ?? Date.now();
+          nextWithDiagnostics.badgeDismissedAt = null;
         }
       }
 
@@ -279,14 +340,19 @@ export function useTranscriptWatcher() {
             }, DISCOVERY_INITIAL_DELAY_MS);
           } else if (thread.type === "codex") {
             const project = state.projects.find((p) => p.id === thread.projectId);
-            const expectedCodexId = thread.resuming ? thread.codexThreadId : null;
+            // Always use CWD+time matching (null expectedCodexId) rather than session-id matching.
+            // Session-id matching causes premature binding to the OLD rollout file before Codex
+            // creates a fresh one for a new run (resume or otherwise). CWD+time naturally finds
+            // the fresh file once Codex writes it, regardless of whether Codex appends to the
+            // existing file or creates a new one. The codexThreadId is still used for the
+            // `codex resume {id}` CLI command in Terminal.tsx.
 
             if (project?.path) {
               registerCodexThread(
                 thread.id,
                 project.path,
                 Date.now(),
-                expectedCodexId,
+                null,
               ).catch((error) => {
                 console.error(error);
                 const current = useAppStore.getState().transcriptInfo[thread.id] ?? createInitialTranscriptInfo();
@@ -329,6 +395,7 @@ export function useTranscriptWatcher() {
             unregisterCodexThread(thread.id).catch(console.error);
           }
           discoveryInFlight.delete(thread.id);
+          codexReregistrationTimes.delete(thread.id);
           const discoveryTimer = discoveryTimers.get(thread.id);
           if (discoveryTimer != null) {
             clearTimeout(discoveryTimer);
@@ -360,6 +427,7 @@ export function useTranscriptWatcher() {
           }
           state.clearTranscriptInfo(prev.id);
           discoveryInFlight.delete(prev.id);
+          codexReregistrationTimes.delete(prev.id);
           const discoveryTimer = discoveryTimers.get(prev.id);
           if (discoveryTimer != null) {
             clearTimeout(discoveryTimer);
@@ -376,34 +444,84 @@ export function useTranscriptWatcher() {
 
   // Badge cleanup + done-confirmation timer
   useEffect(() => {
-    const DONE_CONFIRM_MS = 2000;
+    const DEFAULT_DONE_CONFIRM_MS = 6000;
+    const CODEX_DONE_CONFIRM_MS = 12000;
+    const STALE_PTY_ACTIVE_MS = 5000;
 
     const interval = setInterval(() => {
       const state = useAppStore.getState();
       const now = Date.now();
 
       for (const [threadId, info] of Object.entries(state.transcriptInfo)) {
-        // Promote "responding" → "waiting" after 2s of no new transcript lines.
-        // Uses lastLineTime (updated for ALL lines including ignored progress
-        // heartbeats) so extended thinking doesn't trigger premature "Done".
-        const lastActivity = Math.max(info.lastEventTime, info.lastLineTime ?? 0);
+        const thread = state.threads.find((candidate) => candidate.id === threadId);
+        const threadType = thread?.type ?? null;
+
+        // Stale PTY recovery: the transcript says the turn finished
+        // (semanticPhase == "waiting") but ptyActive is stuck true because
+        // a progress marker never sent its idle counterpart.  Force-idle
+        // after STALE_PTY_ACTIVE_MS so the thread doesn't stay "Working".
         if (
-          info.semanticPhase === "responding" &&
-          info.status === "idle" &&
-          now - lastActivity >= DONE_CONFIRM_MS
+          info.ptyActive
+          && info.semanticPhase === "waiting"
+          && info.idleReason === "none"
+          && !info.lastError
+          && info.pendingToolUseIds.size === 0
+          && info.ptyLastTransitionAt
+          && now - info.ptyLastTransitionAt > STALE_PTY_ACTIVE_MS
         ) {
+          const updated: TranscriptInfo = {
+            ...info,
+            ptyActive: false,
+            status: deriveCoreRuntimeStatus(info.status, false),
+            ptyLastTransitionReason: "stale_pty_recovery",
+            ptyLastTransitionAt: now,
+          };
+          updated.subtitle = deriveSubtitle(updated);
+          state.updateTranscriptInfo(threadId, updated);
+          continue;
+        }
+
+        const doneConfirmMs = threadType === "codex"
+          ? CODEX_DONE_CONFIRM_MS
+          : DEFAULT_DONE_CONFIRM_MS;
+        if (shouldPromoteToWaitingFallback(info, threadType, now, doneConfirmMs)) {
           const updated = {
             ...info,
             semanticPhase: "waiting" as const,
             subtitle: "",
           };
           updated.subtitle = deriveSubtitle(updated);
-          // Also set badge if thread is not active
-          if (threadId !== state.activeThreadId && !updated.badge) {
+          // Also set badge if thread is not active and user hasn't already dismissed it
+          const lastEvent = Math.max(info.lastEventTime, info.lastParsedTime ?? 0);
+          if (
+            threadId !== state.activeThreadId
+            && !updated.badge
+            && !(info.badgeDismissedAt && info.badgeDismissedAt >= lastEvent)
+          ) {
             updated.badge = "done";
             updated.badgeSince = now;
           }
           state.updateTranscriptInfo(threadId, updated);
+          continue;
+        }
+
+        // Clear stale/invalid done badges immediately (for example badges that
+        // were assigned while the thread wasn't actually in completion state).
+        if (
+          info.badge === "done"
+          && (
+            info.semanticPhase !== "waiting"
+            || info.idleReason !== "none"
+            || info.lastError != null
+            || info.pendingToolUseIds.size > 0
+            || info.ptyActive
+          )
+        ) {
+          state.updateTranscriptInfo(threadId, {
+            ...info,
+            badge: null,
+            badgeSince: null,
+          });
           continue;
         }
 
@@ -419,6 +537,25 @@ export function useTranscriptWatcher() {
             badge: null,
             badgeSince: null,
           });
+        }
+
+        // Re-register Codex binding when it failed but PTY is still active.
+        // This recovers threads where binding timed out before the user sent
+        // their first message (the rollout file doesn't exist yet at that point).
+        if (
+          info.codexBindingState === "failed"
+          && info.ptyActive
+          && thread?.type === "codex"
+          && thread.state === "running"
+        ) {
+          const lastRereg = codexReregistrationTimes.get(threadId) ?? 0;
+          if (now - lastRereg > CODEX_REREG_COOLDOWN_MS) {
+            codexReregistrationTimes.set(threadId, now);
+            const project = state.projects.find((p) => p.id === thread.projectId);
+            if (project?.path) {
+              registerCodexThread(thread.id, project.path, Date.now(), null).catch(console.error);
+            }
+          }
         }
       }
     }, 1000);

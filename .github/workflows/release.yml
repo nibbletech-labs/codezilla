@@ -32,10 +32,28 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
+      - name: Import Apple certificate
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        run: |
+          KEYCHAIN_PATH=$RUNNER_TEMP/build.keychain
+          KEYCHAIN_PASSWORD=$(openssl rand -base64 16)
+          echo "$APPLE_CERTIFICATE" | base64 --decode > $RUNNER_TEMP/certificate.p12
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security import "$RUNNER_TEMP/certificate.p12" -k "$KEYCHAIN_PATH" -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security list-keychain -d user -s "$KEYCHAIN_PATH"
+          security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+
       - name: Build Tauri app
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: npx tauri build --target aarch64-apple-darwin --bundles app,dmg,updater
 
       - name: Read release notes
@@ -55,7 +73,7 @@ jobs:
           VERSION="${{ steps.version.outputs.version }}"
           BUNDLE_DIR="src-tauri/target/aarch64-apple-darwin/release/bundle"
           SIG=$(cat "$BUNDLE_DIR/macos/Codezilla.app.tar.gz.sig")
-          URL="https://github.com/nibbletech-labs/codezilla/releases/download/v${VERSION}/Codezilla_aarch64.app.tar.gz"
+          URL="https://github.com/nibbletech-labs/codezilla/releases/download/v${VERSION}/Codezilla.app.tar.gz"
           DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
           jq -n \
             --arg v "$VERSION" \
@@ -81,6 +99,6 @@ jobs:
             --title "Codezilla $TAG" \
             --notes "${{ steps.notes.outputs.body }}" \
             "$BUNDLE_DIR/dmg/Codezilla_${VERSION}_aarch64.dmg" \
-            "$BUNDLE_DIR/macos/Codezilla.app.tar.gz#Codezilla_aarch64.app.tar.gz" \
-            "$BUNDLE_DIR/macos/Codezilla.app.tar.gz.sig#Codezilla_aarch64.app.tar.gz.sig" \
+            "$BUNDLE_DIR/macos/Codezilla.app.tar.gz" \
+            "$BUNDLE_DIR/macos/Codezilla.app.tar.gz.sig" \
             "latest.json"

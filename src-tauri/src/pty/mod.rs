@@ -1,5 +1,6 @@
 pub mod session;
 
+use log::info;
 use serde::Serialize;
 use session::PtySession;
 use std::collections::HashMap;
@@ -37,7 +38,12 @@ impl PtyManager {
     }
 
     pub fn reap_dead(&mut self) {
+        let before = self.sessions.len();
         self.sessions.retain(|_, session| session.is_alive());
+        let reaped = before - self.sessions.len();
+        if reaped > 0 {
+            info!("Reaped {} dead PTY session(s)", reaped);
+        }
     }
 
     pub fn spawn(
@@ -77,16 +83,19 @@ impl PtyManager {
         Ok(())
     }
 
-    /// Count sessions that are actively processing (not just alive and idle).
-    /// Used for quit protection so idle sessions don't block quit.
-    pub fn busy_session_count(&self) -> usize {
-        self.sessions.values().filter(|s| s.is_busy()).count()
-    }
-
     pub fn kill_all(&mut self) {
         let ids: Vec<String> = self.sessions.keys().cloned().collect();
+        if !ids.is_empty() {
+            info!("Killing all {} PTY session(s)", ids.len());
+        }
         for id in ids {
             let _ = self.kill(&id);
         }
+    }
+
+    pub fn has_active_sessions(&self) -> bool {
+        self.sessions
+            .values()
+            .any(|session| session.is_actively_processing())
     }
 }

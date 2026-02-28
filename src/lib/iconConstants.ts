@@ -1,0 +1,130 @@
+export const ICON_COLORS = [
+  { id: "gray",   label: "Gray",   value: "#9e9e9e" },
+  { id: "red",    label: "Red",    value: "#ef4444" },
+  { id: "orange", label: "Orange", value: "#e97319" },
+  { id: "amber",  label: "Amber",  value: "#f59e0b" },
+  { id: "green",  label: "Green",  value: "#4caf50" },
+  { id: "teal",   label: "Teal",   value: "#14b8a6" },
+  { id: "blue",   label: "Blue",   value: "#007acc" },
+  { id: "purple", label: "Purple", value: "#8b5cf6" },
+  { id: "rose",   label: "Rose",   value: "#ec4899" },
+];
+
+export const ICON_CATEGORIES: { label: string; icons: string[] }[] = [
+  {
+    label: "Development",
+    icons: [
+      "Code", "CodeXml", "Terminal", "Bug", "GitBranch", "GitCommitHorizontal",
+      "GitFork", "GitMerge", "GitPullRequest", "GitCompare",
+      "Database", "DatabaseZap", "Server", "ServerCog",
+      "Globe", "Cpu", "Braces", "Brackets", "FileCode", "FileJson",
+      "FileTerminal", "MonitorSmartphone", "Wifi", "HardDrive",
+      "Binary", "Blocks", "Box", "Container", "Package", "Plug",
+      "PlugZap", "Router", "Network", "CircuitBoard", "Webhook",
+      "Regex", "Variable", "Command", "Codesandbox", "Github",
+      "Laptop", "Smartphone", "Tablet", "Keyboard",
+      "Folder", "FolderCode", "FolderGit2", "FolderOpen",
+      "CloudUpload", "CloudDownload", "Satellite", "Cable",
+    ],
+  },
+  {
+    label: "Business",
+    icons: [
+      "Briefcase", "Building", "Building2", "BarChart", "BarChart3",
+      "TrendingUp", "TrendingDown", "DollarSign", "ShoppingCart", "ShoppingBag",
+      "Users", "UserCircle", "CreditCard", "PieChart", "Receipt",
+      "Landmark", "Store", "Wallet", "BadgeDollarSign", "Banknote",
+      "Calculator", "CalendarDays", "ClipboardList", "FileSpreadsheet",
+      "Inbox", "Mail", "MailOpen", "Send", "Phone", "PhoneCall",
+      "Megaphone", "Presentation", "LineChart", "Target",
+      "Handshake", "Scale", "Gavel", "Newspaper",
+    ],
+  },
+  {
+    label: "Creative",
+    icons: [
+      "Palette", "Pen", "PenTool", "Pencil", "Camera", "Music", "Music2",
+      "Film", "Brush", "PaintBucket", "Figma", "Image", "Images",
+      "Scissors", "Aperture", "Mic", "Video", "Headphones",
+      "Clapperboard", "Drama", "Podcast", "Radio", "Speaker",
+      "Type", "BookOpen", "BookMarked", "NotebookPen", "Feather",
+      "Eraser", "Highlighter", "Paintbrush", "Layers",
+      "Blend", "Pipette", "Crop", "ScanLine",
+    ],
+  },
+  {
+    label: "Objects",
+    icons: [
+      "Rocket", "Zap", "Star", "Heart", "Bookmark", "Flag",
+      "Trophy", "Crown", "Gem", "Flame", "Gift", "Anchor",
+      "Compass", "Umbrella", "Bell", "Clock", "Hourglass", "Timer",
+      "Lamp", "Flashlight", "Battery", "BatteryCharging",
+      "Wrench", "Hammer", "Axe", "Shovel", "Drill",
+      "Magnet", "Paperclip", "Pin", "MapPin", "Map",
+      "Ticket", "Tag", "Tags", "Key", "Lock", "Unlock",
+      "Glasses", "Watch", "Backpack", "Luggage",
+      "Home", "Castle", "Tent", "Warehouse", "Church",
+    ],
+  },
+  {
+    label: "Science & Nature",
+    icons: [
+      "Leaf", "Sun", "Moon", "Cloud", "Mountain", "Flower", "Flower2",
+      "TreePine", "Trees", "Snowflake", "Waves", "Sprout", "CloudRain",
+      "CloudLightning", "CloudSun", "Rainbow", "Droplets", "Wind",
+      "Thermometer", "ThermometerSun",
+      "Atom", "FlaskConical", "FlaskRound", "Microscope", "Dna",
+      "TestTube", "TestTubes", "Biohazard", "Radiation",
+      "Bug", "Bird", "Cat", "Dog", "Fish", "Rabbit", "Squirrel",
+      "Turtle", "Shell",
+    ],
+  },
+  {
+    label: "Symbols & Shapes",
+    icons: [
+      "Hash", "AtSign", "CircleDot", "Shield", "ShieldCheck",
+      "Lightbulb", "Eye", "EyeOff", "Fingerprint", "Infinity",
+      "Crosshair", "Activity", "Hexagon", "Pentagon", "Triangle",
+      "Diamond", "Circle", "Square", "Octagon", "Heart",
+      "AlertTriangle", "AlertCircle", "Info", "HelpCircle",
+      "CheckCircle", "XCircle", "Plus", "Minus",
+      "ArrowRight", "ArrowUp", "ArrowDown", "RefreshCw", "RotateCw",
+      "Sparkles", "Sparkle", "Wand2", "Swords",
+      "Power", "ToggleLeft", "Settings", "SlidersHorizontal",
+      "Search", "Filter", "ListFilter", "Gauge",
+    ],
+  },
+  {
+    label: "Food & Travel",
+    icons: [
+      "Coffee", "CupSoda", "Wine", "Beer", "UtensilsCrossed",
+      "Pizza", "Sandwich", "Cake", "IceCream", "Cherry", "Apple",
+      "Grape", "Banana", "Citrus", "Salad", "Soup", "Popcorn",
+      "Plane", "Car", "Bus", "Train", "Ship", "Bike",
+      "Fuel", "ParkingCircle", "Navigation",
+    ],
+  },
+  {
+    label: "People & Social",
+    icons: [
+      "User", "Users", "UserPlus", "UserCircle", "UserCheck",
+      "Baby", "PersonStanding", "Accessibility",
+      "MessageCircle", "MessageSquare", "MessagesSquare",
+      "ThumbsUp", "ThumbsDown", "Handshake",
+      "Share", "Share2", "ExternalLink", "Link", "Link2",
+      "Globe2", "Languages", "Smile", "Frown", "Laugh",
+      "Heart", "HeartHandshake",
+    ],
+  },
+  {
+    label: "Gaming & Sports",
+    icons: [
+      "Gamepad", "Gamepad2", "Joystick", "Dice1", "Dice5",
+      "Puzzle", "Ghost", "Sword", "Shield",
+      "Dumbbell", "Medal", "Trophy",
+      "Bike", "Footprints",
+    ],
+  },
+];
+
+export const ALL_ICON_NAMES = ICON_CATEGORIES.flatMap((c) => c.icons);

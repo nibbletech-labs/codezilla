@@ -1,3 +1,4 @@
+use log::{error, info};
 use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
 use std::io::{Read, Write};
 use std::path::Path;
@@ -23,7 +24,6 @@ enum ShellFlavor {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ActivityDetectionMode {
-    Legacy,
     Hybrid,
     Marker,
 }
@@ -173,12 +173,8 @@ fn is_long_lived_interactive_command(command: &str) -> bool {
 }
 
 fn parse_activity_detection_mode(raw: Option<&str>) -> ActivityDetectionMode {
-    let normalized = raw
-        .map(|value| value.trim().to_ascii_lowercase())
-        .unwrap_or_else(|| "hybrid".to_string());
-    match normalized.as_str() {
-        "legacy" => ActivityDetectionMode::Legacy,
-        "marker" => ActivityDetectionMode::Marker,
+    match raw.map(|v| v.trim().to_ascii_lowercase()).as_deref() {
+        Some("marker") => ActivityDetectionMode::Marker,
         _ => ActivityDetectionMode::Hybrid,
     }
 }
@@ -243,7 +239,7 @@ pub struct PtySession {
     active: Arc<AtomicBool>,
     command_running: Arc<AtomicBool>,
     progress_running: Arc<AtomicBool>,
-    progress_observed: Arc<AtomicBool>,
+    seen_progress: Arc<AtomicBool>,
     alive: Arc<AtomicBool>,
     last_rows: AtomicU16,
     last_cols: AtomicU16,
@@ -267,14 +263,13 @@ impl PtySession {
             pixel_height: 0,
         })?;
 
+        let _activity_mode = parse_activity_detection_mode(activity_mode.as_deref());
         let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_string());
         let shell_flavor = detect_shell_flavor(&shell);
-        let activity_mode = parse_activity_detection_mode(activity_mode.as_deref());
         let mut cmd = CommandBuilder::new(&shell);
         if let Some(ref run) = command {
             // Run command via login interactive shell: -i ensures .zshrc is sourced for PATH
-            let use_marker_wrapper = activity_mode != ActivityDetectionMode::Legacy
-                && !is_long_lived_interactive_command(run);
+            let use_marker_wrapper = !is_long_lived_interactive_command(run);
 
             if use_marker_wrapper {
                 if let Some(wrapper) = marker_wrapper_for_shell(shell_flavor) {
@@ -315,7 +310,7 @@ impl PtySession {
         let active = Arc::new(AtomicBool::new(false));
         let command_running = Arc::new(AtomicBool::new(false));
         let progress_running = Arc::new(AtomicBool::new(false));
-        let progress_observed = Arc::new(AtomicBool::new(false));
+        let seen_progress = Arc::new(AtomicBool::new(false));
         let alive = Arc::new(AtomicBool::new(true));
 
         // Emit initial activity snapshot.
@@ -331,7 +326,7 @@ impl PtySession {
         let reader_active = active.clone();
         let reader_command_running = command_running.clone();
         let reader_progress_running = progress_running.clone();
-        let reader_progress_observed = progress_observed.clone();
+        let reader_seen_progress = seen_progress.clone();
         let reader_alive = alive.clone();
         let reader_channel = channel.clone();
         let reader_handle = tokio::task::spawn_blocking(move || {
@@ -344,7 +339,7 @@ impl PtySession {
                 reader_active,
                 reader_command_running,
                 reader_progress_running,
-                reader_progress_observed,
+                reader_seen_progress,
                 reader_alive,
             );
         });
@@ -396,7 +391,7 @@ impl PtySession {
             active,
             command_running,
             progress_running,
-            progress_observed,
+            seen_progress,
             alive,
             last_rows: AtomicU16::new(rows),
             last_cols: AtomicU16::new(cols),
@@ -412,7 +407,7 @@ impl PtySession {
         active: Arc<AtomicBool>,
         command_running: Arc<AtomicBool>,
         progress_running: Arc<AtomicBool>,
-        progress_observed: Arc<AtomicBool>,
+        seen_progress: Arc<AtomicBool>,
         alive: Arc<AtomicBool>,
     ) {
         let mut buf = [0u8; 4096];
@@ -422,6 +417,15 @@ impl PtySession {
                 Ok(0) => break,
                 Ok(n) => {
                     let (clean_data, marker_events) = marker_parser.process_chunk(&buf[..n]);
+
+                    // Defer progress-idle events until after the output data is sent.
+                    // When a star spinner frame and a progress-idle marker arrive in the
+                    // same read() chunk, sending the idle first would let the frontend set
+                    // ptyActive=false before seeing the star — causing premature "Idle · Done".
+                    // Progress-active and command markers are still sent immediately because
+                    // we want them to precede the associated terminal output.
+                    let mut deferred_progress_idle = false;
+
                     for marker_event in marker_events {
                         match marker_event {
                             MarkerEvent::CommandStart => {
@@ -433,7 +437,7 @@ impl PtySession {
                                 let _ = channel.send(PtyEvent::CommandEnd { exit_code });
                             }
                             MarkerEvent::Progress { active: progress_active } => {
-                                progress_observed.store(true, Ordering::Relaxed);
+                                seen_progress.store(true, Ordering::Relaxed);
                                 progress_running.store(progress_active, Ordering::Relaxed);
                                 if progress_active {
                                     let now = mono_millis();
@@ -444,34 +448,42 @@ impl PtySession {
                                         source: PtyActivitySource::Progress,
                                     });
                                 } else if !command_running.load(Ordering::Relaxed) {
-                                    active.store(false, Ordering::Relaxed);
-                                    let _ = channel.send(PtyEvent::Activity {
-                                        active: false,
-                                        source: PtyActivitySource::Progress,
-                                    });
+                                    // Defer: send idle AFTER output so the frontend's
+                                    // star-animation hint detection fires first.
+                                    deferred_progress_idle = true;
                                 }
                             }
                         }
                     }
 
-                    if clean_data.is_empty() {
-                        continue;
+                    if !clean_data.is_empty() {
+                        let now = mono_millis();
+                        // Don't count output right after a resize (shell redraw, not real activity)
+                        if now > suppress_until.load(Ordering::Relaxed) {
+                            last_output.store(now, Ordering::Relaxed);
+                            if !active.swap(true, Ordering::Relaxed) {
+                                let _ = channel.send(PtyEvent::Activity {
+                                    active: true,
+                                    source: PtyActivitySource::Output,
+                                });
+                            }
+                        }
+                        let _ = channel.send(PtyEvent::Output { data: clean_data });
                     }
 
-                    let now = mono_millis();
-                    // Don't count output right after a resize (shell redraw, not real activity)
-                    if now > suppress_until.load(Ordering::Relaxed) {
-                        last_output.store(now, Ordering::Relaxed);
-                        if !active.swap(true, Ordering::Relaxed) {
-                            let _ = channel.send(PtyEvent::Activity {
-                                active: true,
-                                source: PtyActivitySource::Output,
-                            });
-                        }
+                    // Send deferred progress-idle now that output has been dispatched.
+                    if deferred_progress_idle {
+                        active.store(false, Ordering::Relaxed);
+                        let _ = channel.send(PtyEvent::Activity {
+                            active: false,
+                            source: PtyActivitySource::Progress,
+                        });
                     }
-                    let _ = channel.send(PtyEvent::Output { data: clean_data });
                 }
-                Err(_) => break,
+                Err(e) => {
+                    error!("PTY read loop error: {}", e);
+                    break;
+                }
             }
         }
 
@@ -497,6 +509,7 @@ impl PtySession {
             .and_then(|mut c| c.wait().ok())
             .map(|status| status.exit_code() as i32);
 
+        info!("PTY session exited with code {:?}", code);
         let _ = channel.send(PtyEvent::Exit { code });
     }
 
@@ -510,21 +523,24 @@ impl PtySession {
     ///
     /// For plain shell sessions (no progress markers), the output watchdog
     /// `active` flag is the only reliable signal.
-    pub fn is_alive(&self) -> bool {
-        self.alive.load(Ordering::Relaxed)
-    }
-
-    pub fn is_busy(&self) -> bool {
+    pub fn is_actively_processing(&self) -> bool {
         if !self.alive.load(Ordering::Relaxed) {
             return false;
         }
+
         if self.command_running.load(Ordering::Relaxed) {
             return true;
         }
-        if self.progress_observed.load(Ordering::Relaxed) {
+
+        if self.seen_progress.load(Ordering::Relaxed) {
             return self.progress_running.load(Ordering::Relaxed);
         }
+
         self.active.load(Ordering::Relaxed)
+    }
+
+    pub fn is_alive(&self) -> bool {
+        self.alive.load(Ordering::Relaxed)
     }
 
     pub fn write(&self, data: &str) -> Result<(), Box<dyn std::error::Error>> {
@@ -679,10 +695,6 @@ mod tests {
     #[test]
     fn parses_activity_mode_flags() {
         assert_eq!(
-            parse_activity_detection_mode(Some("legacy")),
-            ActivityDetectionMode::Legacy
-        );
-        assert_eq!(
             parse_activity_detection_mode(Some("marker")),
             ActivityDetectionMode::Marker
         );
@@ -690,6 +702,7 @@ mod tests {
             parse_activity_detection_mode(Some("hybrid")),
             ActivityDetectionMode::Hybrid
         );
+        // Unknown values and None default to Hybrid
         assert_eq!(
             parse_activity_detection_mode(Some("unknown")),
             ActivityDetectionMode::Hybrid

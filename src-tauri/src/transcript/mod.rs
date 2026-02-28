@@ -1,8 +1,9 @@
 pub mod discover;
 
+use log::info;
 use notify::{Event, RecommendedWatcher, RecursiveMode, Watcher};
 use serde::Serialize;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::{BufRead, BufReader, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
@@ -71,10 +72,55 @@ type SharedWatchedMap = Arc<Mutex<HashMap<PathBuf, (String, u64)>>>;
 type SharedCodexBindingState = Arc<Mutex<CodexBindingState>>;
 
 const CODEX_BIND_SCAN_INTERVAL_MS: u64 = 1000;
-const CODEX_BIND_MAX_ATTEMPTS: u32 = 120;
+const CODEX_BIND_MAX_ATTEMPTS: u32 = 600; // 10 minutes — Codex may take several minutes to write the rollout file
 const CODEX_BIND_MAX_DEPTH: u8 = 4;
 const CODEX_BIND_CANDIDATE_LIMIT: usize = 200;
 const CODEX_BIND_EARLY_SKEW_MS: u64 = 30_000;
+const CODEX_BIND_META_SCAN_LINES: usize = 64;
+const TRANSCRIPT_POLL_INTERVAL_MS: u64 = 1_000;
+
+fn drain_new_lines(path: &Path, thread_id: &str, byte_offset: &mut u64, app: &AppHandle) {
+    if let Ok(mut file) = File::open(path) {
+        if file.seek(SeekFrom::Start(*byte_offset)).is_ok() {
+            let mut reader = BufReader::new(&mut file);
+            let mut buf = String::new();
+            loop {
+                buf.clear();
+                match reader.read_line(&mut buf) {
+                    Ok(0) => break,
+                    Ok(n) => {
+                        let trimmed = buf.trim_end_matches(&['\n', '\r'][..]);
+                        if !trimmed.trim().is_empty() {
+                            let payload = TranscriptLine {
+                                thread_id: thread_id.to_string(),
+                                line: trimmed.to_string(),
+                            };
+                            let _ = app.emit("transcript-line", payload);
+                        }
+                        *byte_offset += n as u64;
+                    }
+                    Err(_) => break,
+                }
+            }
+        }
+    }
+}
+
+fn should_scan_watched_path(
+    watched_path: &Path,
+    affected_paths: &HashSet<PathBuf>,
+    poll_all: bool,
+) -> bool {
+    if poll_all {
+        return true;
+    }
+
+    affected_paths.contains(watched_path)
+        || watched_path
+            .parent()
+            .map(|parent| affected_paths.contains(parent))
+            .unwrap_or(false)
+}
 
 pub struct TranscriptManager {
     /// Reverse lookup: thread_id -> file path (for unwatch)
@@ -129,13 +175,15 @@ impl TranscriptManager {
         // Processing thread: on file events, read new lines and emit
         std::thread::spawn(move || {
             loop {
-                let event = match event_rx.recv_timeout(Duration::from_secs(5)) {
-                    Ok(ev) => ev,
+                let mut poll_all = false;
+                let mut affected_paths: HashSet<PathBuf> = HashSet::new();
+                let event = match event_rx
+                    .recv_timeout(Duration::from_millis(TRANSCRIPT_POLL_INTERVAL_MS))
+                {
+                    Ok(ev) => Some(ev),
                     Err(mpsc::RecvTimeoutError::Timeout) => {
-                        if stop_rx.try_recv().is_ok() {
-                            break;
-                        }
-                        continue;
+                        poll_all = true;
+                        None
                     }
                     Err(mpsc::RecvTimeoutError::Disconnected) => break,
                 };
@@ -144,26 +192,27 @@ impl TranscriptManager {
                     break;
                 }
 
-                // Debounce: collect events for 50ms
-                let mut affected_paths: std::collections::HashSet<PathBuf> =
-                    std::collections::HashSet::new();
-                for p in &event.paths {
-                    affected_paths.insert(p.clone());
-                }
-
-                let deadline = std::time::Instant::now() + Duration::from_millis(50);
-                loop {
-                    let remaining = deadline.saturating_duration_since(std::time::Instant::now());
-                    if remaining.is_zero() {
-                        break;
+                if let Some(event) = event {
+                    // Debounce: collect events for 50ms
+                    for p in &event.paths {
+                        affected_paths.insert(p.clone());
                     }
-                    match event_rx.recv_timeout(remaining) {
-                        Ok(ev) => {
-                            for p in &ev.paths {
-                                affected_paths.insert(p.clone());
-                            }
+
+                    let deadline = std::time::Instant::now() + Duration::from_millis(50);
+                    loop {
+                        let remaining =
+                            deadline.saturating_duration_since(std::time::Instant::now());
+                        if remaining.is_zero() {
+                            break;
                         }
-                        Err(_) => break,
+                        match event_rx.recv_timeout(remaining) {
+                            Ok(ev) => {
+                                for p in &ev.paths {
+                                    affected_paths.insert(p.clone());
+                                }
+                            }
+                            Err(_) => break,
+                        }
                     }
                 }
 
@@ -173,32 +222,18 @@ impl TranscriptManager {
                     Err(_) => continue,
                 };
 
-                for path in &affected_paths {
-                    if let Some((thread_id, byte_offset)) = guard.get_mut(path) {
-                        if let Ok(mut file) = File::open(path) {
-                            if file.seek(SeekFrom::Start(*byte_offset)).is_ok() {
-                                let mut reader = BufReader::new(&mut file);
-                                let mut buf = String::new();
-                                loop {
-                                    buf.clear();
-                                    match reader.read_line(&mut buf) {
-                                        Ok(0) => break,
-                                        Ok(n) => {
-                                            let trimmed = buf.trim_end_matches(&['\n', '\r'][..]);
-                                            if !trimmed.trim().is_empty() {
-                                                let payload = TranscriptLine {
-                                                    thread_id: thread_id.clone(),
-                                                    line: trimmed.to_string(),
-                                                };
-                                                let _ = app.emit("transcript-line", payload);
-                                            }
-                                            *byte_offset += n as u64;
-                                        }
-                                        Err(_) => break,
-                                    }
-                                }
-                            }
-                        }
+                let paths_to_scan: Vec<PathBuf> = guard
+                    .keys()
+                    .filter(|watched_path| {
+                        should_scan_watched_path(watched_path.as_path(), &affected_paths, poll_all)
+                    })
+                    .cloned()
+                    .collect();
+
+                for path in paths_to_scan {
+                    if let Some((thread_id, byte_offset)) = guard.get_mut(&path) {
+                        let thread_id = thread_id.clone();
+                        drain_new_lines(path.as_path(), &thread_id, byte_offset, &app);
                     }
                 }
             }
@@ -218,6 +253,7 @@ impl TranscriptManager {
         from_end: bool,
         app_handle: AppHandle,
     ) -> Result<(), String> {
+        info!("Watching transcript for thread {} at {}", thread_id, path);
         self.ensure_watcher(app_handle.clone())?;
 
         let file_path = PathBuf::from(&path);
@@ -269,6 +305,7 @@ impl TranscriptManager {
     }
 
     pub fn unwatch(&mut self, thread_id: &str) -> Result<(), String> {
+        info!("Unwatching transcript for thread {}", thread_id);
         if let Some(old_path) = self.thread_paths.remove(thread_id) {
             if let Ok(mut guard) = self.shared_watched.lock() {
                 guard.remove(&old_path);
@@ -296,37 +333,7 @@ impl TranscriptManager {
         app_handle: &AppHandle,
     ) -> u64 {
         let mut offset = start_offset;
-
-        let mut file = match File::open(file_path) {
-            Ok(f) => f,
-            Err(_) => return offset,
-        };
-
-        if file.seek(SeekFrom::Start(offset)).is_err() {
-            return offset;
-        }
-
-        let mut reader = BufReader::new(&mut file);
-        let mut buf = String::new();
-        loop {
-            buf.clear();
-            match reader.read_line(&mut buf) {
-                Ok(0) => break,
-                Ok(n) => {
-                    let trimmed = buf.trim_end_matches(&['\n', '\r'][..]);
-                    if !trimmed.trim().is_empty() {
-                        let payload = TranscriptLine {
-                            thread_id: thread_id.to_string(),
-                            line: trimmed.to_string(),
-                        };
-                        let _ = app_handle.emit("transcript-line", payload);
-                    }
-                    offset += n as u64;
-                }
-                Err(_) => break,
-            }
-        }
-
+        drain_new_lines(file_path.as_path(), thread_id, &mut offset, app_handle);
         offset
     }
 
@@ -634,19 +641,29 @@ fn collect_rollout_files(dir: &Path, depth: u8, out: &mut Vec<PathBuf>) {
 fn parse_codex_session_meta(path: &Path) -> Option<(String, String)> {
     let file = File::open(path).ok()?;
     let reader = BufReader::new(file);
-    for line in reader.lines().take(8) {
-        let l = line.ok()?;
+    for line in reader.lines().take(CODEX_BIND_META_SCAN_LINES) {
+        let Ok(l) = line else {
+            continue;
+        };
         if l.trim().is_empty() {
             continue;
         }
-        let value: serde_json::Value = serde_json::from_str(&l).ok()?;
-        if value.get("type")?.as_str()? != "session_meta" {
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(&l) else {
+            continue;
+        };
+        if value.get("type").and_then(|v| v.as_str()) != Some("session_meta") {
             continue;
         }
-        let payload = value.get("payload")?;
-        let session_id = payload.get("id")?.as_str()?.to_string();
-        let cwd = payload.get("cwd")?.as_str()?.to_string();
-        return Some((session_id, cwd));
+        let Some(payload) = value.get("payload") else {
+            continue;
+        };
+        let Some(session_id) = payload.get("id").and_then(|v| v.as_str()) else {
+            continue;
+        };
+        let Some(cwd) = payload.get("cwd").and_then(|v| v.as_str()) else {
+            continue;
+        };
+        return Some((session_id.to_string(), cwd.to_string()));
     }
     None
 }
@@ -881,6 +898,20 @@ pub fn get_codex_binding(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn write_temp_rollout(lines: &[&str]) -> std::path::PathBuf {
+        let mut path = std::env::temp_dir();
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        path.push(format!("codezilla-rollout-test-{nanos}.jsonl"));
+        let body = lines.join("\n");
+        fs::write(&path, body).expect("write temp rollout");
+        path
+    }
 
     fn reg(
         thread_id: &str,
@@ -979,5 +1010,62 @@ mod tests {
         let second_choice = pick_candidate(&second, &candidates, &claims)
             .expect("second thread should bind fallback when preferred is claimed");
         assert_eq!(second_choice.path, fallback.path);
+    }
+
+    #[test]
+    fn parse_codex_session_meta_skips_malformed_prefix_lines() {
+        let path = write_temp_rollout(&[
+            "not-json",
+            "{\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\"}}",
+            "{\"type\":\"session_meta\",\"payload\":{\"id\":\"sess-1\",\"cwd\":\"/repo/a\"}}",
+        ]);
+
+        let parsed = parse_codex_session_meta(&path);
+        assert_eq!(parsed, Some(("sess-1".to_string(), "/repo/a".to_string())));
+
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn parse_codex_session_meta_scans_past_first_few_lines() {
+        let mut lines: Vec<String> = (0..20)
+            .map(|_| "{\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\"}}".to_string())
+            .collect();
+        lines.push(
+            "{\"type\":\"session_meta\",\"payload\":{\"id\":\"sess-2\",\"cwd\":\"/repo/b\"}}"
+                .to_string(),
+        );
+        let refs: Vec<&str> = lines.iter().map(|s| s.as_str()).collect();
+        let path = write_temp_rollout(&refs);
+
+        let parsed = parse_codex_session_meta(&path);
+        assert_eq!(parsed, Some(("sess-2".to_string(), "/repo/b".to_string())));
+
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn should_scan_watched_path_matches_parent_dir_event() {
+        let watched = PathBuf::from("/tmp/example/rollout.jsonl");
+        let mut affected = HashSet::new();
+        affected.insert(PathBuf::from("/tmp/example"));
+
+        assert!(should_scan_watched_path(
+            watched.as_path(),
+            &affected,
+            false,
+        ));
+    }
+
+    #[test]
+    fn should_scan_watched_path_polls_all_when_idle() {
+        let watched = PathBuf::from("/tmp/example/rollout.jsonl");
+        let affected = HashSet::new();
+
+        assert!(should_scan_watched_path(
+            watched.as_path(),
+            &affected,
+            true,
+        ));
     }
 }

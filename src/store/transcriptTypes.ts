@@ -26,6 +26,7 @@ export interface TranscriptInfo extends ParserDiagnostics {
   previousStatus: TranscriptStatus | null;
   badge: ThreadBadge;
   badgeSince: number | null;
+  badgeDismissedAt: number | null;
   subtitle: string;
   costUsd: number | null;
   transcriptPath: string | null;
@@ -33,6 +34,7 @@ export interface TranscriptInfo extends ParserDiagnostics {
   pendingToolUseIds: Set<string>;
   lastToolName: string | null;
   lastToolTarget: string | null;
+  lastProgressLabel: string | null;
   lastEventTime: number;
   source: RuntimeStateSource;
   semanticPhase: SemanticPhase;
@@ -59,12 +61,14 @@ export function createInitialTranscriptInfo(): TranscriptInfo {
     previousStatus: null,
     badge: null,
     badgeSince: null,
+    badgeDismissedAt: null,
     subtitle: "Idle",
     costUsd: null,
     transcriptPath: null,
     pendingToolUseIds: new Set(),
     lastToolName: null,
     lastToolTarget: null,
+    lastProgressLabel: null,
     lastEventTime: Date.now(),
     parsedLineCount: 0,
     unparsedLineCount: 0,

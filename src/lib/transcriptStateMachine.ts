@@ -65,6 +65,13 @@ function formatToolSubtitle(info: TranscriptInfo): string {
   return target ? `${verb} ${target}` : verb;
 }
 
+function formatToolingSubtitle(info: TranscriptInfo): string {
+  if (info.lastToolName) {
+    return formatToolSubtitle(info);
+  }
+  return "Using tools";
+}
+
 function appendPlanProgress(base: string, info: TranscriptInfo): string {
   if (info.planProgress && info.planProgress.total > 0) {
     // Show which item is being worked on (1-indexed) rather than how many
@@ -94,22 +101,16 @@ export function deriveSubtitle(info: TranscriptInfo): string {
     if (info.idleReason === "waiting_for_approval") return appendPlanProgress("Waiting for approval", info);
     if (info.idleReason === "waiting_for_input") return appendPlanProgress("Waiting for input", info);
     if (info.semanticPhase === "thinking") return appendPlanProgress("Thinking", info);
-    // Show tool context only while a tool is still in-flight (pending > 0).
-    // tool_result clears all pending IDs so stale verbs won't linger.
-    if (info.semanticPhase === "tooling" && info.lastToolName && info.pendingToolUseIds.size > 0) {
-      return appendPlanProgress(formatToolSubtitle(info), info);
-    }
-    // Mid-turn phases: Claude is still working even though the PTY is momentarily quiet.
-    // Without this, the subtitle flickers to "Idle" between tool calls / during responses.
-    if (info.semanticPhase === "tooling" || info.semanticPhase === "responding") {
-      return appendPlanProgress("Working", info);
-    }
+    if (info.semanticPhase === "tooling") return appendPlanProgress(formatToolingSubtitle(info), info);
+    if (info.semanticPhase === "responding") return appendPlanProgress("Thinking", info);
     if (info.semanticPhase === "waiting" && info.lastError) return appendPlanProgress("Error", info);
     if (info.semanticPhase === "waiting") return appendPlanProgress("Idle · Done", info);
     return appendPlanProgress("Idle", info);
   }
 
   if (info.semanticPhase === "thinking") return appendPlanProgress("Thinking", info);
+  if (info.semanticPhase === "tooling") return appendPlanProgress(formatToolingSubtitle(info), info);
+  if (info.semanticPhase === "responding") return appendPlanProgress("Thinking", info);
 
   if (info.lastToolName && info.pendingToolUseIds.size > 0) {
     return appendPlanProgress(formatToolSubtitle(info), info);
@@ -133,6 +134,7 @@ export function transcriptReducer(
   let status = current.status;
   let lastToolName = current.lastToolName;
   let lastToolTarget = current.lastToolTarget;
+  let lastProgressLabel = current.lastProgressLabel;
   let costUsd = current.costUsd;
   let lastError = current.lastError;
   let planProgress = current.planProgress;
@@ -166,6 +168,13 @@ export function transcriptReducer(
     case "turn_started": {
       idleReason = "none";
       lastError = null;
+      lastToolName = null;
+      lastToolTarget = null;
+      lastProgressLabel = null;
+      // Clear completed plan progress so the counter doesn't linger after all tasks are done.
+      if (planProgress && planProgress.done >= planProgress.total) {
+        planProgress = null;
+      }
       break;
     }
 
@@ -173,6 +182,7 @@ export function transcriptReducer(
       pendingToolUseIds.add(event.id);
       lastToolName = event.name;
       lastToolTarget = deriveToolTarget(event.name, event.input);
+      lastProgressLabel = null;
       if (idleReason !== "waiting_for_approval" && idleReason !== "waiting_for_input") {
         idleReason = "none";
       }
@@ -206,16 +216,27 @@ export function transcriptReducer(
 
     case "tool_result": {
       pendingToolUseIds.delete(event.tool_use_id);
+      lastProgressLabel = null;
+      idleReason = "none";
+      break;
+    }
+
+    case "progress_update": {
+      lastProgressLabel = event.label;
       break;
     }
 
     case "assistant_text": {
+      if (semanticPhase === "responding") {
+        lastProgressLabel = null;
+      }
       break;
     }
 
     case "result": {
       costUsd = event.cost ?? costUsd;
       pendingToolUseIds.clear();
+      lastProgressLabel = null;
       break;
     }
 
@@ -229,6 +250,7 @@ export function transcriptReducer(
       pendingToolUseIds.add(event.id);
       lastToolName = event.command || "Bash";
       lastToolTarget = event.target ? truncate(event.target, 40) : null;
+      lastProgressLabel = null;
       if (idleReason !== "waiting_for_approval" && idleReason !== "waiting_for_input") {
         idleReason = "none";
       }
@@ -244,6 +266,7 @@ export function transcriptReducer(
       if (event.cost != null) {
         costUsd = (costUsd ?? 0) + event.cost;
       }
+      lastProgressLabel = null;
       break;
     }
 
@@ -252,6 +275,7 @@ export function transcriptReducer(
       pendingToolUseIds.clear();
       lastToolName = null;
       lastToolTarget = null;
+      lastProgressLabel = null;
       lastError = { message: event.message, time: now };
       break;
     }
@@ -260,6 +284,7 @@ export function transcriptReducer(
       pendingToolUseIds.clear();
       lastToolName = null;
       lastToolTarget = null;
+      lastProgressLabel = null;
       lastError = { message: event.error ?? "Turn failed", time: now };
       break;
     }
@@ -279,6 +304,7 @@ export function transcriptReducer(
     previousStatus,
     lastToolName,
     lastToolTarget,
+    lastProgressLabel,
     costUsd,
     lastError,
     planProgress,

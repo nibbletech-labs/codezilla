@@ -10,6 +10,7 @@ export type TranscriptEvent =
   | { type: "turn_started" }
   | { type: "tool_use"; id: string; name: string; input: Record<string, unknown> }
   | { type: "tool_result"; tool_use_id: string }
+  | { type: "progress_update"; label: string | null }
   | { type: "assistant_text" }
   | { type: "result"; cost: number | null; duration: number | null }
   | { type: "compaction"; newTranscriptPath: string }
@@ -92,6 +93,7 @@ function isQuestionLikeText(tail: string): boolean {
   return /\b(can you|could you|would you|do you want|what should|how should|shall I|want me to)\b/i.test(tail);
 }
 
+
 function isClaudeApprovalLikeText(tail: string): boolean {
   if (/\b(I've approved|has been approved|was approved|already approved)\b/i.test(tail)) return false;
   return /\b(do you want to allow|allow this action|approve this|waiting for approval)\b/i.test(tail);
@@ -121,12 +123,6 @@ function detectCodexIdleReasonFromAssistantText(text: string): IdleReason {
   return "none";
 }
 
-// Tools that may trigger a permission prompt in Claude Code's CLI.
-// When PTY goes idle after one of these, the user is likely being asked to approve.
-const APPROVAL_LIKELY_TOOLS = new Set([
-  "Write", "Edit", "Bash", "NotebookEdit", "WebFetch", "WebSearch",
-]);
-
 function detectClaudeIdleReasonFromToolRequest(
   toolName: string | null | undefined,
   toolInput: Record<string, unknown> | null | undefined,
@@ -136,9 +132,6 @@ function detectClaudeIdleReasonFromToolRequest(
     return "waiting_for_input";
   }
   if (toolInput?.sandbox_permissions === "require_escalated") {
-    return "waiting_for_approval";
-  }
-  if (APPROVAL_LIKELY_TOOLS.has(toolName)) {
     return "waiting_for_approval";
   }
   return "none";
@@ -174,6 +167,60 @@ function deriveCodexToolTarget(toolName: string, input: Record<string, unknown>)
     default:
       return undefined;
   }
+}
+
+function truncateLabel(label: string, max = 80): string {
+  if (label.length <= max) return label;
+  return `${label.slice(0, max)}...`;
+}
+
+function extractLastNonEmptyLine(raw: string): string | null {
+  const lines = raw
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+  if (lines.length === 0) return null;
+  return lines[lines.length - 1] ?? null;
+}
+
+function deriveHookProgressLabel(data: Record<string, unknown>): string | null {
+  const hookName = typeof data.hookName === "string" ? data.hookName.trim() : "";
+  if (hookName) return `Running ${truncateLabel(hookName, 60)}`;
+
+  const hookEvent = typeof data.hookEvent === "string" ? data.hookEvent.trim() : "";
+  if (hookEvent) return `Running ${truncateLabel(hookEvent, 60)}`;
+
+  const command = typeof data.command === "string" ? data.command.trim() : "";
+  if (command) return `Running hook ${truncateLabel(command, 50)}`;
+
+  return "Running hooks";
+}
+
+function deriveBashProgressLabel(data: Record<string, unknown>): string | null {
+  const output = typeof data.output === "string"
+    ? data.output
+    : typeof data.fullOutput === "string"
+      ? data.fullOutput
+      : "";
+  const line = extractLastNonEmptyLine(output);
+  if (line) return truncateLabel(line, 90);
+
+  const elapsed = typeof data.elapsedTimeSeconds === "number" ? data.elapsedTimeSeconds : null;
+  if (elapsed != null && Number.isFinite(elapsed)) return `Running command (${Math.round(elapsed)}s)`;
+  return "Running command";
+}
+
+function parseCodexToolInput(raw: unknown): Record<string, unknown> {
+  if (raw && typeof raw === "object" && !Array.isArray(raw)) {
+    return raw as Record<string, unknown>;
+  }
+  if (typeof raw === "string") {
+    const parsed = safeParseJson(raw);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      return parsed as Record<string, unknown>;
+    }
+  }
+  return {};
 }
 
 /**
@@ -212,7 +259,9 @@ export function parseClaudeLineDetailed(line: string): ParsedTranscriptSignal | 
   }
 
   // 3) Compaction boundary signal.
-  if (obj.type === "CompactBoundaryMessage" || obj.subtype === "CompactBoundaryMessage") {
+  //    Current format: type == "system" && subtype == "compact_boundary" (no path rotation).
+  //    Legacy format: type/subtype == "CompactBoundaryMessage" (with newTranscriptPath).
+  if (obj.subtype === "compact_boundary" || obj.type === "CompactBoundaryMessage" || obj.subtype === "CompactBoundaryMessage") {
     const newPath = (obj.newTranscriptPath as string | undefined)
       ?? ((obj.summary as { newTranscriptPath?: string } | undefined)?.newTranscriptPath ?? null);
     if (newPath) {
@@ -221,7 +270,8 @@ export function parseClaudeLineDetailed(line: string): ParsedTranscriptSignal | 
         { type: "compaction", newTranscriptPath: newPath },
       );
     }
-    return null;
+    // No path rotation — compaction stays in the same transcript file.
+    return makeParsed("claude.lifecycle.compaction", { type: "context_compacted" });
   }
 
   // 4) Result/lifecycle signal.
@@ -234,14 +284,35 @@ export function parseClaudeLineDetailed(line: string): ParsedTranscriptSignal | 
   }
 
   // 5) Claude progress signal family.
-  //    bash_progress and hook_progress are PTY-level activity — already handled by the PTY watchdog.
-  //    agent_progress reflects subagent work, not a main turn event.
   if (obj.type === "progress") {
+    const data = (obj.data as Record<string, unknown> | undefined) ?? {};
+    const dataType = typeof data.type === "string" ? data.type : "";
+    if (dataType === "agent_progress") {
+      return makeParsed("claude.progress.agent", { type: "turn_started" });
+    }
+    if (dataType === "hook_progress") {
+      return makeParsed(
+        "claude.progress.hook",
+        { type: "progress_update", label: deriveHookProgressLabel(data) },
+      );
+    }
+    if (dataType === "bash_progress") {
+      return makeParsed(
+        "claude.progress.bash",
+        { type: "progress_update", label: deriveBashProgressLabel(data) },
+      );
+    }
     return makeIgnored();
   }
 
-  // 6) System error events.
+  // 6) System events.
   if (obj.type === "system") {
+    // turn_duration is the turn-completion signal in Claude CLI >=2.1.x,
+    // replacing the older top-level "result" event.
+    if (obj.subtype === "turn_duration") {
+      const duration = (obj.durationMs as number | undefined) ?? null;
+      return makeParsed("claude.lifecycle.result", { type: "result", cost: null, duration });
+    }
     const errorMsg = (obj.error as string | undefined)
       ?? (obj.warning as string | undefined)
       ?? null;
@@ -260,14 +331,14 @@ export function parseClaudeLineDetailed(line: string): ParsedTranscriptSignal | 
     return makeParsed("claude.lifecycle.api_error", { type: "api_error", message: errorMsg });
   }
 
-  // 8) Summary compaction (newer format).
+  // 8) Summary compaction (speculative — no known Claude Code version uses this yet).
   if (obj.type === "summary") {
     const newPath = (obj.newTranscriptPath as string | undefined)
       ?? ((obj.summary as { newTranscriptPath?: string } | undefined)?.newTranscriptPath ?? null);
     if (newPath) {
       return makeParsed("claude.lifecycle.summary", { type: "compaction", newTranscriptPath: newPath });
     }
-    return makeIgnored();
+    return makeParsed("claude.lifecycle.summary", { type: "context_compacted" });
   }
 
   // 9) Intentionally ignored Claude types (streaming deltas, config, ping).
@@ -424,11 +495,7 @@ export function parseCodexLineDetailed(line: string): ParsedTranscriptSignal | n
       const id = (payload.call_id as string | undefined) ?? (payload.id as string | undefined) ?? null;
       if (!id) return null;
       const toolName = (payload.name as string | undefined) ?? "tool";
-      const rawArgs = payload.arguments as string | undefined;
-      const parsedArgs = rawArgs && typeof rawArgs === "string" ? safeParseJson(rawArgs) : null;
-      const toolInput = (parsedArgs && typeof parsedArgs === "object")
-        ? parsedArgs as Record<string, unknown>
-        : {};
+      const toolInput = parseCodexToolInput(payload.arguments ?? payload.input);
       const idleReasonHint = detectCodexIdleReasonFromToolRequest(toolName, toolInput);
       const target = deriveCodexToolTarget(toolName, toolInput);
       return makeParsed(
@@ -438,10 +505,30 @@ export function parseCodexLineDetailed(line: string): ParsedTranscriptSignal | n
       );
     }
 
+    if (payloadType === "custom_tool_call") {
+      const id = (payload.call_id as string | undefined) ?? (payload.id as string | undefined) ?? null;
+      if (!id) return null;
+      const toolName = (payload.name as string | undefined) ?? "tool";
+      const toolInput = parseCodexToolInput(payload.input ?? payload.arguments);
+      const idleReasonHint = detectCodexIdleReasonFromToolRequest(toolName, toolInput);
+      const target = deriveCodexToolTarget(toolName, toolInput);
+      return makeParsed(
+        "codex.response.custom_tool_call",
+        { type: "command_started", id, command: toolName, target },
+        idleReasonHint,
+      );
+    }
+
     if (payloadType === "function_call_output") {
       const id = (payload.call_id as string | undefined) ?? (payload.id as string | undefined) ?? null;
       if (!id) return null;
       return makeParsed("codex.response.function_call_output", { type: "item_completed", id });
+    }
+
+    if (payloadType === "custom_tool_call_output") {
+      const id = (payload.call_id as string | undefined) ?? (payload.id as string | undefined) ?? null;
+      if (!id) return null;
+      return makeParsed("codex.response.custom_tool_call_output", { type: "item_completed", id });
     }
 
     if (payloadType === "message" && payload.role === "assistant") {
@@ -458,7 +545,7 @@ export function parseCodexLineDetailed(line: string): ParsedTranscriptSignal | n
           ) {
             const text = String((block as { text?: string }).text ?? "");
             const idleReasonHint = detectCodexIdleReasonFromAssistantText(text);
-            return makeParsed("codex.response.assistant_message", { type: "turn_completed", cost: null }, idleReasonHint);
+            return makeParsed("codex.response.assistant_message", { type: "assistant_text" }, idleReasonHint);
           }
         }
       }
@@ -477,10 +564,32 @@ export function parseCodexLineDetailed(line: string): ParsedTranscriptSignal | n
 
   if (type === "event_msg") {
     const payload = (obj.payload as Record<string, unknown> | undefined) ?? {};
+    if (payload.type === "agent_reasoning") {
+      return makeParsed("codex.event.agent_reasoning", { type: "turn_started" });
+    }
+    if (payload.type === "task_started") {
+      return makeParsed("codex.event.task_started", { type: "turn_started" });
+    }
+    if (payload.type === "task_complete") {
+      const lastMessage = payload.last_agent_message as string | undefined;
+      const idleReasonHint = lastMessage ? detectCodexIdleReasonFromAssistantText(lastMessage) : "none";
+      return makeParsed(
+        "codex.event.task_complete",
+        { type: "turn_completed", cost: null },
+        idleReasonHint,
+      );
+    }
+    if (payload.type === "turn_aborted") {
+      const reason = payload.reason as string | undefined;
+      return makeParsed(
+        "codex.event.turn_aborted",
+        { type: "turn_failed", error: reason ?? null },
+      );
+    }
     if (payload.type === "agent_message") {
       const message = payload.message as string | undefined;
       const idleReasonHint = message ? detectCodexIdleReasonFromAssistantText(message) : "none";
-      return makeParsed("codex.event.agent_message", { type: "turn_completed", cost: null }, idleReasonHint);
+      return makeParsed("codex.event.agent_message", { type: "assistant_text" }, idleReasonHint);
     }
     if (payload.type === "request_user_input" || payload.type === "elicitation_request") {
       return makeParsed(

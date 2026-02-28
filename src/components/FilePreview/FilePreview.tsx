@@ -1,7 +1,10 @@
 import { useEffect, useState, useCallback, useRef } from "react";
+import { open as openUrl } from "@tauri-apps/plugin-shell";
 import { readFile, readFileBase64, getFileDiffStat, revealInFinder } from "../../lib/tauri";
 import { sanitizeHtml } from "../../lib/sanitize";
 import { useShiki } from "../../hooks/useShiki";
+import { isMarkdownFile, renderMarkdown } from "../../lib/markdownRenderer";
+import { highlightWithHljs } from "../../lib/hljs";
 import { useAppStore } from "../../store/appStore";
 import { useGitStatus } from "../../hooks/useGitStatus";
 import { useResolvedAppearance } from "../../hooks/useResolvedAppearance";
@@ -14,7 +17,7 @@ interface FilePreviewProps {
 }
 
 type FileCategory = "text" | "image" | "native";
-type ViewMode = "file" | "diff";
+type ViewMode = "file" | "diff" | "rendered";
 type DiffLayout = "unified" | "side-by-side";
 
 const IMAGE_EXTS = new Set([
@@ -64,7 +67,8 @@ export default function FilePreview({ filePath, line, onClose }: FilePreviewProp
   const [content, setContent] = useState<string | null>(null);
   const [imageDataUrl, setImageDataUrl] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [viewMode, setViewMode] = useState<ViewMode>("file");
+  const isMarkdown = isMarkdownFile(filePath);
+  const [viewMode, setViewMode] = useState<ViewMode>(isMarkdown ? "rendered" : "file");
   const [diffLayout, setDiffLayout] = useState<DiffLayout>("unified");
   const highlighter = useShiki();
   const resolvedAppearance = useResolvedAppearance();
@@ -93,6 +97,11 @@ export default function FilePreview({ filePath, line, onClose }: FilePreviewProp
       })
       .catch(() => {});
   }, [filePath, projectPath, fileGitStatus]);
+
+  // Reset view mode when file changes
+  useEffect(() => {
+    setViewMode(isMarkdown ? "rendered" : "file");
+  }, [filePath, isMarkdown]);
 
   useEffect(() => {
     setContent(null);
@@ -138,12 +147,30 @@ export default function FilePreview({ filePath, line, onClose }: FilePreviewProp
         onClose();
         return;
       }
+      // Swallow Backspace/Delete so they don't leak through to the terminal behind the preview
+      if (e.key === "Backspace" || e.key === "Delete") {
+        e.preventDefault();
+        e.stopPropagation();
+        return;
+      }
       // D toggles diff view
       if (e.key === "d" || e.key === "D") {
         const tag = (e.target as HTMLElement)?.tagName;
         if (tag === "INPUT" || tag === "TEXTAREA") return;
         e.preventDefault();
-        setViewMode((v) => (v === "file" ? "diff" : "file"));
+        setViewMode((v) => {
+          if (v === "diff") return isMarkdown ? "rendered" : "file";
+          return "diff";
+        });
+        return;
+      }
+      // M toggles rendered/raw for markdown files
+      if (e.key === "m" || e.key === "M") {
+        const tag = (e.target as HTMLElement)?.tagName;
+        if (tag === "INPUT" || tag === "TEXTAREA") return;
+        if (!isMarkdown) return;
+        e.preventDefault();
+        setViewMode((v) => (v === "rendered" ? "file" : "rendered"));
         return;
       }
       // S toggles diff layout (only in diff mode)
@@ -163,7 +190,7 @@ export default function FilePreview({ filePath, line, onClose }: FilePreviewProp
     // Use capture phase so we intercept before xterm's handler sends keys to PTY
     window.addEventListener("keydown", handleKeyDown, true);
     return () => window.removeEventListener("keydown", handleKeyDown, true);
-  }, [onClose]);
+  }, [onClose, isMarkdown]);
 
   const handleBackdropClick = useCallback(
     (e: React.MouseEvent) => {
@@ -172,18 +199,47 @@ export default function FilePreview({ filePath, line, onClose }: FilePreviewProp
     [onClose],
   );
 
+  const handleMarkdownClick = useCallback((e: React.MouseEvent) => {
+    const anchor = (e.target as HTMLElement).closest("a");
+    if (!anchor) return;
+    e.preventDefault();
+    const href = anchor.getAttribute("href");
+    if (!href) return;
+    if (href.startsWith("#")) {
+      // Internal anchor — scroll within the preview body
+      const target = bodyRef.current?.querySelector(decodeURIComponent(href));
+      if (target) target.scrollIntoView({ behavior: "smooth" });
+    } else if (href.startsWith("http://") || href.startsWith("https://")) {
+      openUrl(href).catch(console.error);
+    }
+  }, []);
+
   const lang = getLangFromPath(filePath);
+  const shikiTheme = resolvedAppearance === "dark" ? "vitesse-dark" : "vitesse-light";
 
   let highlightedHtml: string | null = null;
-  if (highlighter && content && lang) {
-    try {
-      highlightedHtml = highlighter.codeToHtml(content, {
-        lang,
-        theme: resolvedAppearance === "dark" ? "vitesse-dark" : "vitesse-light",
-      });
-    } catch {
-      // Language not loaded — fall back to plain text
+  if (content && lang) {
+    if (highlighter) {
+      try {
+        highlightedHtml = highlighter.codeToHtml(content, {
+          lang,
+          theme: shikiTheme,
+        });
+      } catch {
+        // Fall back below.
+      }
     }
+
+    // Fallback when Shiki is unavailable in the current runtime.
+    if (!highlightedHtml) {
+      const fallback = highlightWithHljs(content, lang);
+      if (fallback) highlightedHtml = sanitizeHtml(fallback);
+    }
+  }
+
+  let renderedMarkdownHtml: string | null = null;
+  if (isMarkdown && content && viewMode === "rendered") {
+    renderedMarkdownHtml = renderMarkdown(content, highlighter, shikiTheme);
   }
 
   const isLoading =
@@ -202,6 +258,17 @@ export default function FilePreview({ filePath, line, onClose }: FilePreviewProp
       return <div style={styles.loading}>Loading...</div>;
     }
 
+    if (viewMode === "rendered" && renderedMarkdownHtml) {
+      return (
+        <div className="file-preview-markdown" style={styles.markdownBody} onClick={handleMarkdownClick}>
+          <div
+            className="md-rendered"
+            dangerouslySetInnerHTML={{ __html: renderedMarkdownHtml }}
+          />
+        </div>
+      );
+    }
+
     if (category === "image" && imageDataUrl) {
       return (
         <div style={styles.mediaContainer}>
@@ -216,7 +283,7 @@ export default function FilePreview({ filePath, line, onClose }: FilePreviewProp
           <style>{LINE_NUMBER_CSS}</style>
           <div
             className="shiki-wrap"
-            dangerouslySetInnerHTML={{ __html: sanitizeHtml(highlightedHtml) }}
+            dangerouslySetInnerHTML={{ __html: highlightedHtml }}
           />
         </div>
       );
@@ -266,7 +333,7 @@ export default function FilePreview({ filePath, line, onClose }: FilePreviewProp
                 {gitBadge.label}
               </span>
             )}
-            {viewMode === "file" && fileDiffStat && (
+            {viewMode !== "diff" && fileDiffStat && (
               <span style={{ fontSize: "11px", whiteSpace: "nowrap" }}>
                 <span style={{ color: "#89d185" }}>+{fileDiffStat[0]}</span>
                 {" "}
@@ -281,10 +348,18 @@ export default function FilePreview({ filePath, line, onClose }: FilePreviewProp
                   <kbd style={styles.kbd}>D</kbd> File
                   {" "}
                   <kbd style={styles.kbd}>S</kbd> {diffLayout === "unified" ? "Split" : "Unified"}
+                  {isMarkdown && <>{" "}<kbd style={styles.kbd}>M</kbd> Rendered</>}
+                </>
+              ) : viewMode === "rendered" ? (
+                <>
+                  <kbd style={styles.kbd}>M</kbd> Raw
+                  {" "}
+                  <kbd style={styles.kbd}>D</kbd> Diff
                 </>
               ) : (
                 <>
                   <kbd style={styles.kbd}>D</kbd> Diff
+                  {isMarkdown && <>{" "}<kbd style={styles.kbd}>M</kbd> Rendered</>}
                 </>
               )}
             </span>
@@ -324,10 +399,13 @@ function getLangFromPath(filePath: string): string | null {
     tsx: "tsx",
     jsx: "jsx",
     json: "json",
+    jsonc: "json",
+    json5: "json",
     html: "html",
     htm: "html",
     css: "css",
     md: "markdown",
+    markdown: "markdown",
     mdx: "markdown",
     rs: "rust",
     py: "python",
@@ -470,6 +548,10 @@ const styles = {
     maxWidth: "100%",
     maxHeight: "100%",
     objectFit: "contain" as const,
+  } as React.CSSProperties,
+  markdownBody: {
+    overflowWrap: "break-word" as const,
+    wordBreak: "break-word" as const,
   } as React.CSSProperties,
   code: {
     fontSize: "13px",

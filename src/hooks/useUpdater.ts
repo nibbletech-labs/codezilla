@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { check } from "@tauri-apps/plugin-updater";
+import { relaunch } from "@tauri-apps/plugin-process";
 
 type UpdateStatus = "idle" | "checking" | "available" | "downloading" | "ready" | "error";
 
@@ -56,5 +57,9 @@ export function useUpdater() {
     setVersion(null);
   }, []);
 
-  return { status, version, progress, downloadAndInstall, dismiss };
+  const restart = useCallback(() => {
+    relaunch();
+  }, []);
+
+  return { status, version, progress, downloadAndInstall, dismiss, restart };
 }

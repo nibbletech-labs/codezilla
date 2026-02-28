@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import { useAppStore } from "../../store/appStore";
 import { ask } from "@tauri-apps/plugin-dialog";
+import { isThreadLikelyWorking } from "../../lib/threadRuntime";
 
 interface TitleBarDropdownProps {
   anchorRect: { x: number; y: number; width: number; height: number };
@@ -41,7 +42,7 @@ export default function TitleBarDropdown({ anchorRect, onClose }: TitleBarDropdo
   };
 
   const handleRemove = async () => {
-    if (info?.status === "working") {
+    if (isThreadLikelyWorking(thread, info)) {
       const confirmed = await ask("This thread has a running process. Close it?", {
         title: "Close Thread",
         kind: "warning",
