@@ -3,6 +3,26 @@ pub mod watcher;
 use ignore::WalkBuilder;
 use log::error;
 use serde::Serialize;
+use std::ffi::OsStr;
+
+/// macOS system files that should never appear in the file explorer.
+const HIDDEN_NAMES: &[&str] = &[
+    ".DS_Store",
+    ".AppleDouble",
+    ".LSOverride",
+    ".Spotlight-V100",
+    ".Trashes",
+    ".fseventsd",
+    ".TemporaryItems",
+    ".com.apple.timemachine.donotpresent",
+    "Thumbs.db",       // Windows
+    "desktop.ini",     // Windows
+];
+
+fn is_os_hidden(name: &OsStr) -> bool {
+    let s = name.to_string_lossy();
+    HIDDEN_NAMES.iter().any(|&h| s == h) || s.starts_with("._")
+}
 
 pub fn canonicalize_path(raw: &str) -> Result<std::path::PathBuf, String> {
     std::path::Path::new(raw)
@@ -37,8 +57,8 @@ pub fn read_directory(path: String) -> Result<Vec<FileEntry>, String> {
         .hidden(false)
         .git_ignore(false) // show all files; git status colours indicate ignored/untracked
         .filter_entry(|entry| {
-            // Always hide .git directory
-            if entry.file_name() == ".git" {
+            let name = entry.file_name();
+            if name == ".git" || is_os_hidden(name) {
                 return false;
             }
             true
@@ -81,7 +101,10 @@ pub fn scan_all_files(path: String) -> Result<Vec<String>, String> {
 
     let files: Vec<String> = WalkBuilder::new(root)
         .hidden(false)
-        .filter_entry(|entry| entry.file_name() != ".git")
+        .filter_entry(|entry| {
+            let name = entry.file_name();
+            name != ".git" && !is_os_hidden(name)
+        })
         .build()
         .filter_map(|result| result.ok())
         .filter(|entry| entry.path().is_file())
