@@ -47,6 +47,7 @@ const DISCOVERY_INITIAL_DELAY_MS = 1500;
 const DISCOVERY_RETRY_MS = 2000;
 const DISCOVERY_MAX_ATTEMPTS = 30;
 const PARSER_DEGRADED_MIN_UNPARSED = 20;
+const IGNORED_UPDATE_MIN_INTERVAL_MS = 250;
 
 function parseBooleanFlag(raw: string | undefined, defaultValue: boolean): boolean {
   if (raw == null || raw.trim() === "") return defaultValue;
@@ -68,6 +69,7 @@ const DEBUG_TRANSCRIPT_SIGNALS = parseBooleanFlag(
 interface ParseMetrics {
   parsed: number;
   unparsed: number;
+  ignored: number;
   lastLineTime: number | null;
   lastParsedTime: number | null;
 }
@@ -78,6 +80,7 @@ function getParseMetrics(threadId: string): ParseMetrics {
     metrics = {
       parsed: 0,
       unparsed: 0,
+      ignored: 0,
       lastLineTime: null,
       lastParsedTime: null,
     };
@@ -101,6 +104,7 @@ function withDiagnostics(
     ...info,
     parsedLineCount: metrics.parsed,
     unparsedLineCount: metrics.unparsed,
+    ignoredLineCount: metrics.ignored,
     lastLineTime: metrics.lastLineTime,
     lastParsedTime: metrics.lastParsedTime,
     parserHealth: getParserHealth(metrics.parsed, metrics.unparsed),
@@ -112,16 +116,42 @@ function shouldEmitUnparsedUpdate(unparsedCount: number): boolean {
   return unparsedCount <= 3 || unparsedCount % 50 === 0;
 }
 
+const ignoredUpdateTimestamps = new Map<string, number>();
+
+function shouldEmitIgnoredUpdate(
+  threadId: string,
+  ignoredCount: number,
+  now: number,
+): boolean {
+  const last = ignoredUpdateTimestamps.get(threadId) ?? 0;
+  if (
+    ignoredCount <= 3
+    || ignoredCount % 25 === 0
+    || now - last >= IGNORED_UPDATE_MIN_INTERVAL_MS
+  ) {
+    ignoredUpdateTimestamps.set(threadId, now);
+    return true;
+  }
+  return false;
+}
+
 export function useTranscriptWatcher() {
   const prevThreadsRef = useRef<Thread[]>([]);
+  const threadLookupRef = useRef<Map<string, Thread>>(new Map());
   if (!ENABLE_TRANSCRIPT_WATCHER) return;
+
+  useEffect(() => {
+    const initialThreads = useAppStore.getState().threads;
+    prevThreadsRef.current = initialThreads;
+    threadLookupRef.current = new Map(initialThreads.map((thread) => [thread.id, thread]));
+  }, []);
 
   // Listen for deterministic Codex binding updates from Rust
   useEffect(() => {
     const unlisten = listen<CodexBindingPayload>("codex-binding-update", (event) => {
       const payload = event.payload;
       const state = useAppStore.getState();
-      const thread = state.threads.find((t) => t.id === payload.thread_id);
+      const thread = threadLookupRef.current.get(payload.thread_id);
       if (!thread || thread.type !== "codex") return;
 
       if (payload.codex_session_id) {
@@ -161,7 +191,7 @@ export function useTranscriptWatcher() {
     const unlisten = listen<TranscriptLinePayload>("transcript-line", (event) => {
       const { thread_id, line } = event.payload;
       const state = useAppStore.getState();
-      const thread = state.threads.find((t) => t.id === thread_id);
+      const thread = threadLookupRef.current.get(thread_id);
       if (!thread) return;
 
       const now = Date.now();
@@ -188,12 +218,11 @@ export function useTranscriptWatcher() {
       // We still update lastLineTime so the done-confirmation timer knows
       // transcript data is still flowing (e.g. progress heartbeats during thinking).
       if (parsed.event.type === "ignored") {
-        const current = state.transcriptInfo[thread_id] ?? createInitialTranscriptInfo();
-        state.updateTranscriptInfo(thread_id, {
-          ...current,
-          ignoredLineCount: current.ignoredLineCount + 1,
-          lastLineTime: now,
-        });
+        metrics.ignored += 1;
+        if (shouldEmitIgnoredUpdate(thread_id, metrics.ignored, now)) {
+          const current = state.transcriptInfo[thread_id] ?? createInitialTranscriptInfo();
+          state.updateTranscriptInfo(thread_id, withDiagnostics(current, metrics));
+        }
         return;
       }
 
@@ -314,6 +343,7 @@ export function useTranscriptWatcher() {
       // Advance immediately to avoid re-entrant subscribe loops when this
       // callback performs store writes (e.g. updateTranscriptInfo).
       prevThreadsRef.current = currentThreads;
+      threadLookupRef.current = new Map(currentThreads.map((t) => [t.id, t]));
 
       // Build a lookup map for O(1) access instead of O(N) .find() per thread.
       const prevMap = new Map(prevThreads.map((t) => [t.id, t]));
@@ -328,6 +358,7 @@ export function useTranscriptWatcher() {
           parseMetrics.set(thread.id, {
             parsed: 0,
             unparsed: 0,
+            ignored: 0,
             lastLineTime: null,
             lastParsedTime: null,
           });
@@ -406,6 +437,7 @@ export function useTranscriptWatcher() {
           discoveryInFlight.delete(thread.id);
           codexReregistrationTimes.delete(thread.id);
           parseMetrics.delete(thread.id);
+          ignoredUpdateTimestamps.delete(thread.id);
           const discoveryTimer = discoveryTimers.get(thread.id);
           if (discoveryTimer != null) {
             clearTimeout(discoveryTimer);
@@ -445,6 +477,7 @@ export function useTranscriptWatcher() {
             discoveryTimers.delete(prev.id);
           }
           parseMetrics.delete(prev.id);
+          ignoredUpdateTimestamps.delete(prev.id);
         }
       }
 

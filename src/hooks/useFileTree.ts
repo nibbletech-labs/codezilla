@@ -1,12 +1,18 @@
-import { useState, useCallback, useEffect, useRef } from "react";
+import { useState, useCallback, useEffect, useMemo, useRef } from "react";
 import { readDirectory, type FileEntry } from "../lib/tauri";
 import { useAppStore } from "../store/appStore";
+
+const EMPTY_EXPANDED_PATHS: string[] = [];
 
 export function useFileTree(projectId: string | null, projectPath: string | null) {
   const [dirCache, setDirCache] = useState<Map<string, FileEntry[]>>(new Map());
   const [isLoading, setIsLoading] = useState(false);
-  const expandedPaths = useAppStore((s) =>
-    projectId ? s.getExpandedPaths(projectId) : new Set<string>(),
+  const expandedPathList = useAppStore((s) =>
+    projectId ? (s.expandedPaths[projectId] ?? EMPTY_EXPANDED_PATHS) : EMPTY_EXPANDED_PATHS,
+  );
+  const expandedPaths = useMemo(
+    () => new Set(expandedPathList),
+    [expandedPathList],
   );
   const toggleExpandedPath = useAppStore((s) => s.toggleExpandedPath);
   const prevProjectPath = useRef<string | null>(null);

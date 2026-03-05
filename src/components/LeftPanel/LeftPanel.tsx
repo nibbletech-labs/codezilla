@@ -44,6 +44,12 @@ export default function LeftPanel() {
   const setProjectIcon = useAppStore((s) => s.setProjectIcon);
   const [iconPickerProjectId, setIconPickerProjectId] = useState<string | null>(null);
   const [iconPickerPos, setIconPickerPos] = useState<{ x: number; y: number } | null>(null);
+  const [ageTick, setAgeTick] = useState(0);
+
+  useEffect(() => {
+    const id = setInterval(() => setAgeTick((n) => n + 1), 60_000);
+    return () => clearInterval(id);
+  }, []);
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
@@ -151,6 +157,7 @@ export default function LeftPanel() {
                 handleNewThreadClick={handleNewThreadClick}
                 setIconPickerProjectId={setIconPickerProjectId}
                 setIconPickerPos={setIconPickerPos}
+                ageTick={ageTick}
               />
             ))}
           </SortableContext>
@@ -214,6 +221,7 @@ interface SortableProjectItemProps {
   handleNewThreadClick: (e: React.MouseEvent, projectId: string) => void;
   setIconPickerProjectId: (id: string | null) => void;
   setIconPickerPos: (pos: { x: number; y: number } | null) => void;
+  ageTick: number;
 }
 
 function SortableProjectItem({
@@ -229,6 +237,7 @@ function SortableProjectItem({
   handleNewThreadClick,
   setIconPickerProjectId,
   setIconPickerPos,
+  ageTick,
 }: SortableProjectItemProps) {
   const {
     attributes,
@@ -307,6 +316,7 @@ function SortableProjectItem({
               key={thread.id}
               thread={thread}
               isActive={thread.id === activeThreadId}
+              ageTick={ageTick}
               onSelect={() => setActiveThread(thread.id)}
             />
           ))}

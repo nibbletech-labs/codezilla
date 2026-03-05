@@ -14,13 +14,22 @@ const STATUS_PRIORITY: Record<GitFileStatus, number> = {
 
 export type GitStatusMap = Map<string, GitFileStatus>;
 
+function mapsEqual(a: GitStatusMap, b: GitStatusMap): boolean {
+  if (a.size !== b.size) return false;
+  for (const [path, status] of a) {
+    if (b.get(path) !== status) return false;
+  }
+  return true;
+}
+
 export function useGitStatus(projectPath: string | null): GitStatusMap {
   const [statusMap, setStatusMap] = useState<GitStatusMap>(new Map());
   const prevPath = useRef<string | null>(null);
+  const refreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const fetchStatus = useCallback(async () => {
     if (!projectPath) {
-      setStatusMap(new Map());
+      setStatusMap((prev) => (prev.size === 0 ? prev : new Map()));
       return;
     }
 
@@ -44,12 +53,20 @@ export function useGitStatus(projectPath: string | null): GitStatusMap {
         }
       }
 
-      setStatusMap(map);
+      setStatusMap((prev) => (mapsEqual(prev, map) ? prev : map));
     } catch (err) {
       console.error("Failed to fetch git status:", err);
-      setStatusMap(new Map());
+      setStatusMap((prev) => (prev.size === 0 ? prev : new Map()));
     }
   }, [projectPath]);
+
+  const scheduleFetchStatus = useCallback((delayMs = 350) => {
+    if (refreshTimer.current) clearTimeout(refreshTimer.current);
+    refreshTimer.current = setTimeout(() => {
+      refreshTimer.current = null;
+      fetchStatus();
+    }, delayMs);
+  }, [fetchStatus]);
 
   useEffect(() => {
     if (projectPath !== prevPath.current) {
@@ -62,12 +79,16 @@ export function useGitStatus(projectPath: string | null): GitStatusMap {
   useEffect(() => {
     if (!projectPath) return;
     const unlisten = listen<string[]>("fs-change", () => {
-      fetchStatus();
+      scheduleFetchStatus();
     });
     return () => {
+      if (refreshTimer.current) {
+        clearTimeout(refreshTimer.current);
+        refreshTimer.current = null;
+      }
       unlisten.then((fn) => fn());
     };
-  }, [projectPath, fetchStatus]);
+  }, [projectPath, scheduleFetchStatus]);
 
   return statusMap;
 }

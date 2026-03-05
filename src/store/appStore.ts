@@ -167,16 +167,18 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   updateTranscriptInfo: (threadId, info) => {
-    set((s) => ({
-      transcriptInfo: { ...s.transcriptInfo, [threadId]: info },
-    }));
+    if (get().transcriptInfo[threadId] === info) return;
+    set((s) => {
+      s.transcriptInfo[threadId] = info;
+      return { transcriptInfo: s.transcriptInfo };
+    });
   },
 
   clearTranscriptInfo: (threadId) => {
+    if (!(threadId in get().transcriptInfo)) return;
     set((s) => {
-      const next = { ...s.transcriptInfo };
-      delete next[threadId];
-      return { transcriptInfo: next };
+      delete s.transcriptInfo[threadId];
+      return { transcriptInfo: s.transcriptInfo };
     });
   },
 

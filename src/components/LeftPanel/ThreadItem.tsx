@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback } from "react";
+import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import { ask } from "@tauri-apps/plugin-dialog";
 import { useAppStore } from "../../store/appStore";
 import type { Thread } from "../../store/types";
@@ -10,6 +10,7 @@ import ThreadIcon from "./ThreadIcons";
 interface ThreadItemProps {
   thread: Thread;
   isActive: boolean;
+  ageTick: number;
   onSelect: () => void;
 }
 
@@ -82,7 +83,7 @@ function BadgeDot({ badge, isWorking }: { badge: ThreadBadge; isWorking: boolean
   );
 }
 
-export default function ThreadItem({ thread, isActive, onSelect }: ThreadItemProps) {
+export default function ThreadItem({ thread, isActive, ageTick, onSelect }: ThreadItemProps) {
   const [editing, setEditing] = useState(false);
   const [editValue, setEditValue] = useState(thread.name);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -93,14 +94,10 @@ export default function ThreadItem({ thread, isActive, onSelect }: ThreadItemPro
   const sidebarOpenedForRename = useAppStore((s) => s.sidebarOpenedForRename);
   const [hovered, setHovered] = useState(false);
 
-  // Periodic tick to keep age labels fresh
-  const [, setTick] = useState(0);
-  useEffect(() => {
-    const id = setInterval(() => setTick((n) => n + 1), 60_000);
-    return () => clearInterval(id);
-  }, []);
-
-  const age = timeAgo(thread.lastActivityAt);
+  const age = useMemo(
+    () => timeAgo(thread.lastActivityAt),
+    [thread.lastActivityAt, ageTick],
+  );
 
   // Subscribe to transcript info for this thread
   const info = useAppStore((s) => s.transcriptInfo[thread.id]);
