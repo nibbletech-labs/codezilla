@@ -40,19 +40,20 @@ export function useGitDiffStat(projectPath: string | null): GitDiffStat {
     };
   }, [projectPath, fetchStat]);
 
-  // Poll every 10s, but only if the project had activity in the past 60s
-  const activeProjectId = useAppStore((s) => s.activeProjectId);
-  const threads = useAppStore((s) => s.threads);
+  // Poll every 10s, but only if the project had activity in the past 60s.
+  // Read threads via getState() inside the interval to avoid subscribing to the
+  // full threads array, which would re-render this hook on every thread mutation.
   useEffect(() => {
     if (!projectPath) return;
     const id = setInterval(() => {
+      const state = useAppStore.getState();
       const now = Date.now();
-      const projectThreads = threads.filter((t) => t.projectId === activeProjectId);
+      const projectThreads = state.threads.filter((t) => t.projectId === state.activeProjectId);
       const recentActivity = projectThreads.some((t) => now - t.lastActivityAt < 60_000);
       if (recentActivity) fetchStat();
     }, 10_000);
     return () => clearInterval(id);
-  }, [projectPath, fetchStat, activeProjectId, threads]);
+  }, [projectPath, fetchStat]);
 
   return stat;
 }

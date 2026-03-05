@@ -312,6 +312,7 @@ function SortableProjectItem({
           ))}
         </div>
       )}
+      <div style={styles.projectDivider} />
     </div>
   );
 }
@@ -341,6 +342,7 @@ const styles = {
     display: "flex",
     flexDirection: "column" as const,
     overflow: "hidden",
+    borderRight: "1px solid var(--border-default)",
   },
   header: {
     display: "flex",
@@ -385,7 +387,6 @@ const styles = {
     fontSize: "var(--font-size)",
   },
   project: {
-    borderBottom: "1px solid var(--border-subtle)",
     marginTop: "6px",
   },
   projectHeader: {
@@ -415,6 +416,11 @@ const styles = {
     flexShrink: 0,
     lineHeight: 1,
   } as React.CSSProperties,
+  projectDivider: {
+    height: "1px",
+    margin: "0 12px",
+    background: "linear-gradient(to right, transparent, var(--border-default) 30%, var(--border-default) 70%, transparent)",
+  },
   projectBody: {
     paddingLeft: "8px",
     paddingBottom: "4px",

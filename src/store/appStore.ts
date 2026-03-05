@@ -4,7 +4,7 @@ import { THREAD_LABELS } from "./types";
 import type { TranscriptInfo } from "./transcriptTypes";
 import type { AccentColorId, AppearanceMode } from "../lib/themes";
 
-const MAX_EXITED_THREADS_PER_PROJECT = 200;
+const MAX_EXITED_THREADS_PER_PROJECT = 50;
 
 interface AppState {
   // Data
@@ -198,7 +198,8 @@ export const useAppStore = create<AppState>((set, get) => ({
     };
     set((s) => ({
       projects: [...s.projects, project],
-      activeProjectId: s.activeProjectId ?? project.id,
+      activeProjectId: project.id,
+      activeThreadId: null,
     }));
   },
 
@@ -213,6 +214,9 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   removeProject: (projectId) => {
     set((s) => {
+      const removedThreadIds = new Set(
+        s.threads.filter((t) => t.projectId === projectId).map((t) => t.id),
+      );
       const remainingProjects = s.projects.filter((p) => p.id !== projectId);
       const remainingThreads = s.threads.filter(
         (t) => t.projectId !== projectId,
@@ -226,10 +230,21 @@ export const useAppStore = create<AppState>((set, get) => ({
       const nextExpandedPaths = { ...s.expandedPaths };
       delete nextExpandedPaths[projectId];
 
+      // Clean up transcriptInfo for all removed threads
+      let nextTranscriptInfo = s.transcriptInfo;
+      const hasOrphans = [...removedThreadIds].some(id => id in s.transcriptInfo);
+      if (hasOrphans) {
+        nextTranscriptInfo = { ...s.transcriptInfo };
+        for (const id of removedThreadIds) {
+          delete nextTranscriptInfo[id];
+        }
+      }
+
       return {
         projects: remainingProjects,
         threads: remainingThreads,
         expandedPaths: nextExpandedPaths,
+        transcriptInfo: nextTranscriptInfo,
         activeProjectId:
           s.activeProjectId === projectId
             ? (remainingProjects[0]?.id ?? null)
@@ -283,9 +298,18 @@ export const useAppStore = create<AppState>((set, get) => ({
         .filter(t => t.state === "exited" || t.state === "dormant")
         .sort((a, b) => a.lastActivityAt - b.lastActivityAt);
       const excess = exited.length - MAX_EXITED_THREADS_PER_PROJECT;
+      let nextTranscriptInfo = s.transcriptInfo;
       if (excess > 0) {
         const toRemove = new Set(exited.slice(0, excess).map(t => t.id));
         newThreads = newThreads.filter(t => !toRemove.has(t.id));
+        // Clean up transcriptInfo for pruned threads
+        const hasOrphans = [...toRemove].some(id => id in s.transcriptInfo);
+        if (hasOrphans) {
+          nextTranscriptInfo = { ...s.transcriptInfo };
+          for (const id of toRemove) {
+            delete nextTranscriptInfo[id];
+          }
+        }
       }
 
       return {
@@ -300,6 +324,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         threads: newThreads,
         activeThreadId: thread.id,
         activeProjectId: projectId,
+        transcriptInfo: nextTranscriptInfo,
       };
     });
     return thread;
@@ -307,8 +332,12 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   removeThread: (threadId) => {
     set((s) => {
+      // Clean up transcriptInfo for the removed thread
+      const nextTranscriptInfo = { ...s.transcriptInfo };
+      delete nextTranscriptInfo[threadId];
+
       if (s.activeThreadId !== threadId) {
-        return { threads: s.threads.filter((t) => t.id !== threadId) };
+        return { threads: s.threads.filter((t) => t.id !== threadId), transcriptInfo: nextTranscriptInfo };
       }
 
       const deleted = s.threads.find((t) => t.id === threadId);
@@ -324,6 +353,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       return {
         threads: s.threads.filter((t) => t.id !== threadId),
         activeThreadId: next?.id ?? null,
+        transcriptInfo: nextTranscriptInfo,
       };
     });
   },
@@ -355,12 +385,18 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   markThreadExited: (threadId, exitCode) => {
-    set((s) => ({
-      threads: s.threads.map((t) =>
-        t.id === threadId ? { ...t, state: "exited" as const, exitCode, lastActivityAt: Date.now() } : t,
-      ),
-      activeThreadId: s.activeThreadId === threadId ? null : s.activeThreadId,
-    }));
+    set((s) => {
+      // Clean up transcriptInfo for exited thread to prevent unbounded growth
+      const nextTranscriptInfo = { ...s.transcriptInfo };
+      delete nextTranscriptInfo[threadId];
+      return {
+        threads: s.threads.map((t) =>
+          t.id === threadId ? { ...t, state: "exited" as const, exitCode, lastActivityAt: Date.now() } : t,
+        ),
+        activeThreadId: s.activeThreadId === threadId ? null : s.activeThreadId,
+        transcriptInfo: nextTranscriptInfo,
+      };
+    });
   },
 
   resumeThread: (threadId) => {

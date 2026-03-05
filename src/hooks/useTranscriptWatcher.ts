@@ -305,12 +305,21 @@ export function useTranscriptWatcher() {
     const unsub = useAppStore.subscribe((state) => {
       const prevThreads = prevThreadsRef.current;
       const currentThreads = state.threads;
+
+      // Skip entirely when the threads array reference hasn't changed.
+      // This callback fires on every store mutation (including frequent
+      // transcriptInfo updates), but we only care about thread lifecycle.
+      if (currentThreads === prevThreads) return;
+
       // Advance immediately to avoid re-entrant subscribe loops when this
       // callback performs store writes (e.g. updateTranscriptInfo).
       prevThreadsRef.current = currentThreads;
 
+      // Build a lookup map for O(1) access instead of O(N) .find() per thread.
+      const prevMap = new Map(prevThreads.map((t) => [t.id, t]));
+
       for (const thread of currentThreads) {
-        const prev = prevThreads.find((t) => t.id === thread.id);
+        const prev = prevMap.get(thread.id);
         const justStarted =
           thread.state === "running" && (!prev || prev.state !== "running");
 
@@ -388,7 +397,7 @@ export function useTranscriptWatcher() {
           }
         }
 
-        // Thread exited or removed — stop watching
+        // Thread exited or removed — stop watching and clean up all tracking maps
         if (prev?.state === "running" && thread.state !== "running") {
           unwatchTranscript(thread.id).catch(console.error);
           if (thread.type === "codex") {
@@ -396,6 +405,7 @@ export function useTranscriptWatcher() {
           }
           discoveryInFlight.delete(thread.id);
           codexReregistrationTimes.delete(thread.id);
+          parseMetrics.delete(thread.id);
           const discoveryTimer = discoveryTimers.get(thread.id);
           if (discoveryTimer != null) {
             clearTimeout(discoveryTimer);
@@ -419,8 +429,9 @@ export function useTranscriptWatcher() {
       }
 
       // Handle removed threads
+      const currentMap = new Map(currentThreads.map((t) => [t.id, t]));
       for (const prev of prevThreads) {
-        if (!currentThreads.find((t) => t.id === prev.id)) {
+        if (!currentMap.has(prev.id)) {
           unwatchTranscript(prev.id).catch(console.error);
           if (prev.type === "codex") {
             unregisterCodexThread(prev.id).catch(console.error);
@@ -452,8 +463,11 @@ export function useTranscriptWatcher() {
       const state = useAppStore.getState();
       const now = Date.now();
 
+      // Build lookup map once per tick instead of .find() per entry (O(N²) → O(N)).
+      const threadMap = new Map(state.threads.map((t) => [t.id, t]));
+
       for (const [threadId, info] of Object.entries(state.transcriptInfo)) {
-        const thread = state.threads.find((candidate) => candidate.id === threadId);
+        const thread = threadMap.get(threadId);
         const threadType = thread?.type ?? null;
 
         // Stale PTY recovery: the transcript says the turn finished

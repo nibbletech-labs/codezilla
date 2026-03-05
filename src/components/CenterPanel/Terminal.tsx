@@ -49,6 +49,11 @@ function isValidUUID(value: string | null | undefined): value is string {
 // Track sessions that have received first PTY output (shared across instances)
 const sessionsWithOutput = new Set<string>();
 
+// Track WebGL addons so we can dispose when too many contexts are active.
+// Browsers typically allow 8-16 WebGL contexts; exceeding this causes freezes.
+const MAX_WEBGL_CONTEXTS = 6;
+const webglAddons = new Map<string, import("@xterm/addon-webgl").WebglAddon>();
+
 interface TerminalInstance {
   terminal: Terminal;
   fitAddon: FitAddon;
@@ -200,6 +205,14 @@ function applyPtyActivityUpdate(
     && STRICT_MARKER_MODE
     && current.ptyLifecycleSource === "marker"
   ) {
+    return;
+  }
+
+  // Skip no-op output transitions: if the PTY state isn't actually changing
+  // and the signal is output-based (not markers), don't reset timestamps.
+  // This prevents system-level noise (display wake, shell prompt repaints)
+  // from repeatedly resetting the done-confirmation timer.
+  if (lifecycleSource === "output" && active === current.ptyActive) {
     return;
   }
 
@@ -362,6 +375,11 @@ export default function TerminalMultiplexer() {
     for (const [sessionId, instance] of instances) {
       if (!currentSessionIds.has(sessionId)) {
         killPty(sessionId).catch(console.error);
+        const addon = webglAddons.get(sessionId);
+        if (addon) {
+          addon.dispose();
+          webglAddons.delete(sessionId);
+        }
         instance.terminal.dispose();
         if (instance.container.parentNode === wrapper) {
           wrapper.removeChild(instance.container);
@@ -490,6 +508,11 @@ export default function TerminalMultiplexer() {
     return () => {
       for (const [sessionId, instance] of instancesRef.current) {
         killPty(sessionId).catch(console.error);
+        const addon = webglAddons.get(sessionId);
+        if (addon) {
+          addon.dispose();
+          webglAddons.delete(sessionId);
+        }
         instance.terminal.dispose();
       }
       instancesRef.current.clear();
@@ -726,9 +749,22 @@ function createTerminalInstance(
   terminal.open(container);
 
   try {
+    // Evict oldest WebGL context if at limit to prevent browser context exhaustion
+    if (webglAddons.size >= MAX_WEBGL_CONTEXTS) {
+      const oldestKey = webglAddons.keys().next().value;
+      if (oldestKey != null) {
+        const oldAddon = webglAddons.get(oldestKey);
+        oldAddon?.dispose();
+        webglAddons.delete(oldestKey);
+      }
+    }
     const webglAddon = new WebglAddon();
-    webglAddon.onContextLoss(() => webglAddon.dispose());
+    webglAddon.onContextLoss(() => {
+      webglAddon.dispose();
+      webglAddons.delete(sessionId);
+    });
     terminal.loadAddon(webglAddon);
+    webglAddons.set(sessionId, webglAddon);
   } catch {
     // Canvas fallback
   }
@@ -793,7 +829,9 @@ function createTerminalInstance(
   }
 
   const outputQueue: Uint8Array[] = [];
-  let flushingOutput = false;
+  let outputQueueBytes = 0;
+  const MAX_OUTPUT_QUEUE_BYTES = 8 * 1024 * 1024; // 8MB cap
+  let flushScheduled = false;
   let markerEventsObserved = false;
   let waitingForCommandStart = false;
   let progressActive = false;
@@ -805,31 +843,46 @@ function createTerminalInstance(
   let hasReceivedOutput = false;
 
   const flushOutput = () => {
-    if (flushingOutput) return;
-    flushingOutput = true;
+    if (flushScheduled) return;
+    flushScheduled = true;
 
-    const pump = () => {
-      const chunk = outputQueue.shift();
-      if (!chunk) {
-        flushingOutput = false;
-        return;
+    requestAnimationFrame(() => {
+      flushScheduled = false;
+      if (outputQueue.length === 0) return;
+
+      // Merge all pending chunks into a single xterm write.
+      // This reduces terminal.write() + scrollToBottom() + render calls
+      // from hundreds-per-second to at most once-per-frame (~60/s).
+      let merged: Uint8Array;
+      if (outputQueue.length === 1) {
+        merged = outputQueue[0];
+      } else {
+        let totalLength = 0;
+        for (const chunk of outputQueue) totalLength += chunk.length;
+        merged = new Uint8Array(totalLength);
+        let offset = 0;
+        for (const chunk of outputQueue) {
+          merged.set(chunk, offset);
+          offset += chunk.length;
+        }
       }
+      outputQueue.length = 0;
+      outputQueueBytes = 0;
+
+      const wasAtBottom = instance.isAtBottom;
       try {
-        const wasAtBottom = instance.isAtBottom;
-        terminal.write(chunk, () => {
+        terminal.write(merged, () => {
           if (wasAtBottom) terminal.scrollToBottom();
           checkScrollState();
-          // Break synchronous recursion on very high-volume streams.
-          setTimeout(pump, 0);
+          // If more chunks arrived during the write, schedule another flush
+          if (outputQueue.length > 0) flushOutput();
         });
       } catch (err) {
         console.error(`[terminal] failed flushing PTY output for ${thread.id}:`, err);
         outputQueue.length = 0;
-        flushingOutput = false;
+        outputQueueBytes = 0;
       }
-    };
-
-    pump();
+    });
   };
 
   // PTY channel
@@ -849,7 +902,11 @@ function createTerminalInstance(
         sessionsWithOutput.add(sessionId);
         onFirstOutput?.(sessionId);
       }
-      outputQueue.push(outputChunk);
+      // Cap output queue to prevent unbounded memory growth when renderer stalls
+      if (outputQueueBytes < MAX_OUTPUT_QUEUE_BYTES) {
+        outputQueue.push(outputChunk);
+        outputQueueBytes += outputChunk.length;
+      }
       flushOutput();
       recordOutput(thread.id);
       lastOutputAt = Date.now();
@@ -871,7 +928,7 @@ function createTerminalInstance(
         && now - lastOutputAt <= INTERRUPT_HINT_ACTIVE_MS
         && terminalTailHasActivityHint(terminal, thread.type, INTERRUPT_HINT_LOOKBACK_LINES);
       const outputSuppressed = now <= inputEchoSuppressUntil
-        && isOutputActivitySuppressed(thread.id);
+        || isOutputActivitySuppressed(thread.id);
 
       // When the transcript has already confirmed the turn is done (result event
       // fired, semanticPhase === "waiting"), don't suppress the idle signal even
@@ -984,6 +1041,7 @@ function createTerminalInstance(
         applyPtyActivityUpdate(thread, false, "output", "output_idle");
       }
       clearActivity(thread.id);
+      touchTimestamps.delete(thread.id);
       try {
         terminal.write(
           `\r\n\x1b[90m[Process exited with code ${code ?? "unknown"}]\x1b[0m\r\n`,
