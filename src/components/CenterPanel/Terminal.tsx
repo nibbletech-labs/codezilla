@@ -54,11 +54,38 @@ const sessionsWithOutput = new Set<string>();
 const MAX_WEBGL_CONTEXTS = 6;
 const webglAddons = new Map<string, import("@xterm/addon-webgl").WebglAddon>();
 
+/** Lazily attach a WebGL addon to a terminal the first time it becomes visible. */
+function ensureWebgl(sessionId: string, terminal: Terminal) {
+  if (webglAddons.has(sessionId)) return;
+  try {
+    if (webglAddons.size >= MAX_WEBGL_CONTEXTS) {
+      const oldestKey = webglAddons.keys().next().value;
+      if (oldestKey != null) {
+        const oldAddon = webglAddons.get(oldestKey);
+        oldAddon?.dispose();
+        webglAddons.delete(oldestKey);
+      }
+    }
+    const webglAddon = new WebglAddon();
+    webglAddon.onContextLoss(() => {
+      webglAddon.dispose();
+      webglAddons.delete(sessionId);
+    });
+    terminal.loadAddon(webglAddon);
+    webglAddons.set(sessionId, webglAddon);
+  } catch {
+    // Canvas fallback
+  }
+}
+
 interface TerminalInstance {
   terminal: Terminal;
   fitAddon: FitAddon;
   container: HTMLDivElement;
   isAtBottom: boolean;
+  visible: boolean;
+  /** Drain any buffered output (call when making terminal visible). */
+  flushPendingOutput: () => void;
 }
 
 const THREAD_TYPES: ThreadType[] = ["claude", "codex", "shell"];
@@ -121,6 +148,26 @@ function terminalTailHasActivityHint(
     if (hasThreadActivityFallbackHint(threadType, text)) return true;
   }
   return false;
+}
+
+/** Scan the tail of the raw output queue for activity hints.
+ *  Used for hidden terminals whose xterm buffer is stale (not being written to). */
+const QUEUE_HINT_TAIL_BYTES = 4096;
+function outputQueueTailHasActivityHint(
+  queue: Uint8Array[],
+  threadType: ThreadType,
+): boolean {
+  if (queue.length === 0) return false;
+  // Decode the last few KB of queued output — enough to cover the spinner line.
+  let remaining = QUEUE_HINT_TAIL_BYTES;
+  let tail = "";
+  for (let i = queue.length - 1; i >= 0 && remaining > 0; i--) {
+    const chunk = queue[i];
+    const slice = remaining >= chunk.length ? chunk : chunk.subarray(chunk.length - remaining);
+    tail = new TextDecoder("utf-8", { fatal: false }).decode(slice) + tail;
+    remaining -= slice.length;
+  }
+  return hasThreadActivityFallbackHint(threadType, tail);
 }
 
 function isTerminalAtBottom(terminal: Terminal): boolean {
@@ -423,6 +470,12 @@ export default function TerminalMultiplexer() {
         instance.container.style.visibility = "visible";
         instance.container.style.pointerEvents = "auto";
         instance.container.style.zIndex = "2";
+        instance.visible = true;
+        // Attach WebGL on first visibility (deferred from creation to avoid
+        // expensive GPU context init for background terminals on launch).
+        ensureWebgl(sessionId, instance.terminal);
+        // Drain any output that accumulated while hidden
+        instance.flushPendingOutput();
         if (sessionChanged) {
           if (activeThread) {
             suppressOutputActivity(activeThread.id, RESIZE_ACTIVITY_SUPPRESS_MS);
@@ -452,6 +505,7 @@ export default function TerminalMultiplexer() {
           });
         }
       } else {
+        instance.visible = false;
         instance.container.style.visibility = "hidden";
         instance.container.style.pointerEvents = "none";
         instance.container.style.zIndex = "1";
@@ -748,30 +802,15 @@ function createTerminalInstance(
   terminal.loadAddon(fitAddon);
   terminal.open(container);
 
-  try {
-    // Evict oldest WebGL context if at limit to prevent browser context exhaustion
-    if (webglAddons.size >= MAX_WEBGL_CONTEXTS) {
-      const oldestKey = webglAddons.keys().next().value;
-      if (oldestKey != null) {
-        const oldAddon = webglAddons.get(oldestKey);
-        oldAddon?.dispose();
-        webglAddons.delete(oldestKey);
-      }
-    }
-    const webglAddon = new WebglAddon();
-    webglAddon.onContextLoss(() => {
-      webglAddon.dispose();
-      webglAddons.delete(sessionId);
-    });
-    terminal.loadAddon(webglAddon);
-    webglAddons.set(sessionId, webglAddon);
-  } catch {
-    // Canvas fallback
-  }
+  // WebGL addon is deferred until the terminal is first made visible
+  // to avoid expensive GPU context creation for background terminals on launch.
 
   // Fit happens in the active-thread show/hide effect after this container
   // is marked visible and the browser has had a frame to settle layout.
-  const instance: TerminalInstance = { terminal, fitAddon, container, isAtBottom: true };
+  const instance: TerminalInstance = {
+    terminal, fitAddon, container, isAtBottom: true,
+    visible: false, flushPendingOutput: () => {},
+  };
   instances.set(thread.sessionId, instance);
 
   // Track scroll position to show/hide "scroll to bottom" button.
@@ -828,9 +867,23 @@ function createTerminalInstance(
     terminal.registerLinkProvider(commitLinkProvider);
   }
 
+  // --- Output buffering strategy ---
+  // Visible terminal: output is written to xterm.js via requestAnimationFrame,
+  //   capped at MAX_WRITE_PER_FRAME per frame to avoid blocking the main thread
+  //   during output bursts (e.g. Claude resume replaying conversation history).
+  // Hidden terminal: output accumulates in the queue but is NOT written to
+  //   xterm.js (no parsing, no WebGL rendering, no CPU cost). The queue is
+  //   flushed when the terminal becomes visible via instance.flushPendingOutput().
+  //   The queue evicts oldest chunks to stay under cap, so the latest output is
+  //   always preserved.
+  // Activity tracking (badges, status, touchThread) runs regardless of
+  //   visibility. The activity-hint fallback (star spinner detection) uses
+  //   outputQueueTailHasActivityHint() to scan raw queue bytes when the xterm
+  //   buffer is stale.
   const outputQueue: Uint8Array[] = [];
   let outputQueueBytes = 0;
   const MAX_OUTPUT_QUEUE_BYTES = 8 * 1024 * 1024; // 8MB cap
+  const MAX_WRITE_PER_FRAME = 256 * 1024; // 256KB — avoid blocking UI with huge terminal.write() calls
   let flushScheduled = false;
   let markerEventsObserved = false;
   let waitingForCommandStart = false;
@@ -849,32 +902,43 @@ function createTerminalInstance(
     requestAnimationFrame(() => {
       flushScheduled = false;
       if (outputQueue.length === 0) return;
+      // Skip write for hidden terminals — data stays buffered in the queue
+      // and will be flushed when the terminal becomes visible.
+      if (!instance.visible) return;
 
-      // Merge all pending chunks into a single xterm write.
-      // This reduces terminal.write() + scrollToBottom() + render calls
-      // from hundreds-per-second to at most once-per-frame (~60/s).
+      // Merge pending chunks up to MAX_WRITE_PER_FRAME.
+      // Capping the write size keeps the main thread responsive during
+      // bursts (e.g. Claude resume replaying conversation history).
+      // Remaining data is drained on subsequent frames.
+      let writeBytes = 0;
+      let writeChunks = 0;
+      for (const chunk of outputQueue) {
+        if (writeBytes + chunk.length > MAX_WRITE_PER_FRAME && writeChunks > 0) break;
+        writeBytes += chunk.length;
+        writeChunks++;
+      }
+
+      const chunks = outputQueue.splice(0, writeChunks);
+      outputQueueBytes -= writeBytes;
+
       let merged: Uint8Array;
-      if (outputQueue.length === 1) {
-        merged = outputQueue[0];
+      if (chunks.length === 1) {
+        merged = chunks[0];
       } else {
-        let totalLength = 0;
-        for (const chunk of outputQueue) totalLength += chunk.length;
-        merged = new Uint8Array(totalLength);
-        let offset = 0;
-        for (const chunk of outputQueue) {
-          merged.set(chunk, offset);
-          offset += chunk.length;
+        merged = new Uint8Array(writeBytes);
+        let off = 0;
+        for (const chunk of chunks) {
+          merged.set(chunk, off);
+          off += chunk.length;
         }
       }
-      outputQueue.length = 0;
-      outputQueueBytes = 0;
 
       const wasAtBottom = instance.isAtBottom;
       try {
         terminal.write(merged, () => {
           if (wasAtBottom) terminal.scrollToBottom();
           checkScrollState();
-          // If more chunks arrived during the write, schedule another flush
+          // If more data remains (capped write or new arrivals), schedule next frame
           if (outputQueue.length > 0) flushOutput();
         });
       } catch (err) {
@@ -883,6 +947,13 @@ function createTerminalInstance(
         outputQueueBytes = 0;
       }
     });
+  };
+
+  // Expose flush for visibility transitions
+  instance.flushPendingOutput = () => {
+    if (outputQueue.length === 0) return;
+    flushScheduled = false;
+    flushOutput();
   };
 
   // PTY channel
@@ -902,12 +973,18 @@ function createTerminalInstance(
         sessionsWithOutput.add(sessionId);
         onFirstOutput?.(sessionId);
       }
-      // Cap output queue to prevent unbounded memory growth when renderer stalls
-      if (outputQueueBytes < MAX_OUTPUT_QUEUE_BYTES) {
-        outputQueue.push(outputChunk);
-        outputQueueBytes += outputChunk.length;
+      // Always keep the latest output: evict oldest chunks when over cap
+      // (old behaviour dropped new data, losing the latest output for hidden terminals)
+      outputQueue.push(outputChunk);
+      outputQueueBytes += outputChunk.length;
+      while (outputQueueBytes > MAX_OUTPUT_QUEUE_BYTES && outputQueue.length > 1) {
+        outputQueueBytes -= outputQueue.shift()!.length;
       }
-      flushOutput();
+      // Only drive the RAF flush loop for the visible terminal.
+      // Hidden terminals accumulate in the queue and drain on switch.
+      if (instance.visible) {
+        flushOutput();
+      }
       recordOutput(thread.id);
       lastOutputAt = Date.now();
       // Only count unsuppressed PTY output as real activity.
@@ -924,9 +1001,14 @@ function createTerminalInstance(
       const { active, source } = event.data as PtyActivityData;
       const fromProgress = source === "progress";
       const now = Date.now();
+      // Check for activity hints (star spinner, "esc to interrupt", etc.).
+      // For hidden terminals the xterm buffer is stale (output is queued but
+      // not written), so we scan the raw output queue tail instead.
       const interruptFallbackActive = thread.type !== "shell"
         && now - lastOutputAt <= INTERRUPT_HINT_ACTIVE_MS
-        && terminalTailHasActivityHint(terminal, thread.type, INTERRUPT_HINT_LOOKBACK_LINES);
+        && (instance.visible
+          ? terminalTailHasActivityHint(terminal, thread.type, INTERRUPT_HINT_LOOKBACK_LINES)
+          : outputQueueTailHasActivityHint(outputQueue, thread.type));
       const outputSuppressed = now <= inputEchoSuppressUntil
         || isOutputActivitySuppressed(thread.id);
 

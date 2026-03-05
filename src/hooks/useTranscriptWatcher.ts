@@ -494,12 +494,16 @@ export function useTranscriptWatcher() {
 
     const interval = setInterval(() => {
       const state = useAppStore.getState();
+      const transcriptEntries = Object.entries(state.transcriptInfo);
+      // Skip all work when there are no transcript entries (e.g. app just
+      // launched and no threads have been started/resumed yet).
+      if (transcriptEntries.length === 0) return;
       const now = Date.now();
 
       // Build lookup map once per tick instead of .find() per entry (O(N²) → O(N)).
       const threadMap = new Map(state.threads.map((t) => [t.id, t]));
 
-      for (const [threadId, info] of Object.entries(state.transcriptInfo)) {
+      for (const [threadId, info] of transcriptEntries) {
         const thread = threadMap.get(threadId);
         const threadType = thread?.type ?? null;
 
