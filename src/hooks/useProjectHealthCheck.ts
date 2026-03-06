@@ -11,6 +11,7 @@ export function useProjectHealthCheck() {
 
   useEffect(() => {
     const check = async () => {
+      if (document.hidden) return;
       for (const project of useAppStore.getState().projects) {
         try {
           const exists = await pathExists(project.path);

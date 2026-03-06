@@ -63,6 +63,7 @@ export function useGitDiffStat(projectPath: string | null): GitDiffStat {
   useEffect(() => {
     if (!projectPath) return;
     const id = setInterval(() => {
+      if (document.hidden) return;
       const state = useAppStore.getState();
       const now = Date.now();
       const projectThreads = state.threads.filter((t) => t.projectId === state.activeProjectId);

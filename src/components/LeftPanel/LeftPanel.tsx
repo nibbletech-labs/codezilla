@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useAppStore } from "../../store/appStore";
 import { pickDirectory } from "../../lib/tauri";
@@ -28,7 +28,6 @@ const THREAD_TYPES: ThreadType[] = ["claude", "codex", "shell"];
 
 export default function LeftPanel() {
   const projects = useAppStore((s) => s.projects);
-  const threads = useAppStore((s) => s.threads);
   const activeProjectId = useAppStore((s) => s.activeProjectId);
   const activeThreadId = useAppStore((s) => s.activeThreadId);
   const addProject = useAppStore((s) => s.addProject);
@@ -36,7 +35,6 @@ export default function LeftPanel() {
   const setActiveProject = useAppStore((s) => s.setActiveProject);
   const setActiveThread = useAppStore((s) => s.setActiveThread);
   const baseFontSize = useAppStore((s) => s.baseFontSize);
-  const [hoverProjectId, setHoverProjectId] = useState<string | null>(null);
   const [menuProjectId, setMenuProjectId] = useState<string | null>(null);
   const [menuPos, setMenuPos] = useState<{ x: number; y: number } | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -47,7 +45,10 @@ export default function LeftPanel() {
   const [ageTick, setAgeTick] = useState(0);
 
   useEffect(() => {
-    const id = setInterval(() => setAgeTick((n) => n + 1), 60_000);
+    const id = setInterval(() => {
+      if (document.hidden) return;
+      setAgeTick((n) => n + 1);
+    }, 60_000);
     return () => clearInterval(id);
   }, []);
 
@@ -146,12 +147,9 @@ export default function LeftPanel() {
               <SortableProjectItem
                 key={project.id}
                 project={project}
-                threads={threads}
                 activeProjectId={activeProjectId}
                 activeThreadId={activeThreadId}
                 baseFontSize={baseFontSize}
-                hoverProjectId={hoverProjectId}
-                setHoverProjectId={setHoverProjectId}
                 setActiveProject={setActiveProject}
                 setActiveThread={setActiveThread}
                 handleNewThreadClick={handleNewThreadClick}
@@ -210,12 +208,9 @@ export default function LeftPanel() {
 
 interface SortableProjectItemProps {
   project: Project;
-  threads: ReturnType<typeof useAppStore.getState>["threads"];
   activeProjectId: string | null;
   activeThreadId: string | null;
   baseFontSize: number;
-  hoverProjectId: string | null;
-  setHoverProjectId: (id: string | null) => void;
   setActiveProject: (id: string) => void;
   setActiveThread: (id: string) => void;
   handleNewThreadClick: (e: React.MouseEvent, projectId: string) => void;
@@ -226,12 +221,9 @@ interface SortableProjectItemProps {
 
 function SortableProjectItem({
   project,
-  threads,
   activeProjectId,
   activeThreadId,
   baseFontSize,
-  hoverProjectId,
-  setHoverProjectId,
   setActiveProject,
   setActiveThread,
   handleNewThreadClick,
@@ -248,6 +240,20 @@ function SortableProjectItem({
     isDragging,
   } = useSortable({ id: project.id });
 
+  const [hovered, setHovered] = useState(false);
+
+  // Subscribe to thread IDs for this project — only re-renders on add/remove
+  const threadIdKey = useAppStore((s) =>
+    s.threads
+      .filter((t) => t.projectId === project.id)
+      .map((t) => t.id)
+      .join(","),
+  );
+  const threadIds = useMemo(
+    () => threadIdKey ? threadIdKey.split(",") : [],
+    [threadIdKey],
+  );
+
   const style: React.CSSProperties = {
     ...styles.project,
     transform: CSS.Transform.toString(transform),
@@ -257,7 +263,6 @@ function SortableProjectItem({
     position: "relative",
   };
 
-  const projectThreads = threads.filter((t) => t.projectId === project.id);
   const isActive = project.id === activeProjectId;
 
   return (
@@ -268,13 +273,13 @@ function SortableProjectItem({
           backgroundColor:
             isActive && !activeThreadId
               ? "var(--accent-selection)"
-              : hoverProjectId === project.id
+              : hovered
                 ? "var(--bg-hover)"
                 : "transparent",
         }}
         onClick={() => setActiveProject(project.id)}
-        onMouseEnter={() => setHoverProjectId(project.id)}
-        onMouseLeave={() => setHoverProjectId(null)}
+        onMouseEnter={() => setHovered(true)}
+        onMouseLeave={() => setHovered(false)}
       >
         {project.missing && (
           <span style={styles.warningIcon} title="Directory not found">
@@ -309,15 +314,15 @@ function SortableProjectItem({
         </button>
       </div>
 
-      {projectThreads.length > 0 && (
+      {threadIds.length > 0 && (
         <div style={styles.projectBody}>
-          {projectThreads.map((thread) => (
+          {threadIds.map((threadId) => (
             <ThreadItem
-              key={thread.id}
-              thread={thread}
-              isActive={thread.id === activeThreadId}
+              key={threadId}
+              threadId={threadId}
+              isActive={threadId === activeThreadId}
               ageTick={ageTick}
-              onSelect={() => setActiveThread(thread.id)}
+              onSelect={() => setActiveThread(threadId)}
             />
           ))}
         </div>

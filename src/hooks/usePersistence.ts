@@ -139,131 +139,54 @@ export function usePersistence() {
     };
   }, []);
 
-  // Save when projects change
+  // Persist all fields in a single effect (one load, one debounced save)
   useEffect(() => {
     if (!initialized.current) return;
     (async () => {
       try {
         const store = await load(STORE_FILE);
         await store.set(PROJECTS_KEY, projects);
+        await store.set(EXPANDED_PATHS_KEY, expandedPaths);
+        await store.set(FONT_SIZE_KEY, baseFontSize);
+        await store.set(ACCENT_COLOR_KEY, accentColorId);
+        await store.set(APPEARANCE_MODE_KEY, appearanceMode);
+        await store.set(REMEMBER_WINDOW_KEY, rememberWindowPosition);
+        await store.set(SHOW_LEFT_PANEL_KEY, showLeftPanel);
+        await store.set(SHOW_RIGHT_PANEL_KEY, showRightPanel);
+        // Guard threads against HMR store resets wiping persisted data
+        if (threads.length > 0 || threadsLoaded.current) {
+          const persisted: PersistedThread[] = threads.map((t) => ({
+            id: t.id,
+            projectId: t.projectId,
+            type: t.type,
+            name: t.name,
+            claudeSessionId: t.claudeSessionId,
+            codexThreadId: t.codexThreadId,
+            exitCode: t.exitCode,
+            lastActivityAt: t.lastActivityAt,
+          }));
+          await store.set(THREADS_KEY, persisted);
+        }
         debouncedSave(store);
       } catch (e) {
         console.error("Failed to persist state:", e);
       }
     })();
-  }, [projects]);
+  }, [projects, expandedPaths, threads, baseFontSize, accentColorId, appearanceMode, rememberWindowPosition, showLeftPanel, showRightPanel]);
 
-  // Save when expanded paths change
-  useEffect(() => {
-    if (!initialized.current) return;
-    (async () => {
-      try {
-        const store = await load(STORE_FILE);
-        await store.set(EXPANDED_PATHS_KEY, expandedPaths);
-        debouncedSave(store);
-      } catch (e) {
-        console.error("Failed to persist expanded paths:", e);
-      }
-    })();
-  }, [expandedPaths]);
-
-  // Save when font size changes
-  useEffect(() => {
-    if (!initialized.current) return;
-    (async () => {
-      try {
-        const store = await load(STORE_FILE);
-        await store.set(FONT_SIZE_KEY, baseFontSize);
-        debouncedSave(store);
-      } catch (e) {
-        console.error("Failed to persist font size:", e);
-      }
-    })();
-  }, [baseFontSize]);
-
-  // Save when accent color changes + sync Rust menu ticks
+  // Sync Rust menu state (separate from persistence — these only need their specific dep)
   useEffect(() => {
     if (!initialized.current) return;
     invoke("sync_accent_menu", { colorId: accentColorId }).catch(() => {});
-    (async () => {
-      try {
-        const store = await load(STORE_FILE);
-        await store.set(ACCENT_COLOR_KEY, accentColorId);
-        debouncedSave(store);
-      } catch (e) {
-        console.error("Failed to persist accent color:", e);
-      }
-    })();
   }, [accentColorId]);
 
-  // Save when appearance mode changes + sync Rust menu ticks
   useEffect(() => {
     if (!initialized.current) return;
     invoke("sync_appearance_menu", { mode: appearanceMode }).catch(() => {});
-    (async () => {
-      try {
-        const store = await load(STORE_FILE);
-        await store.set(APPEARANCE_MODE_KEY, appearanceMode);
-        debouncedSave(store);
-      } catch (e) {
-        console.error("Failed to persist appearance mode:", e);
-      }
-    })();
   }, [appearanceMode]);
 
-  // Save when remember window position changes + sync Rust menu checkbox
   useEffect(() => {
     if (!initialized.current) return;
     invoke("sync_remember_window_position", { checked: rememberWindowPosition }).catch(() => {});
-    (async () => {
-      try {
-        const store = await load(STORE_FILE);
-        await store.set(REMEMBER_WINDOW_KEY, rememberWindowPosition);
-        debouncedSave(store);
-      } catch (e) {
-        console.error("Failed to persist remember window position:", e);
-      }
-    })();
   }, [rememberWindowPosition]);
-
-  // Save when panel visibility changes
-  useEffect(() => {
-    if (!initialized.current) return;
-    (async () => {
-      try {
-        const store = await load(STORE_FILE);
-        await store.set(SHOW_LEFT_PANEL_KEY, showLeftPanel);
-        await store.set(SHOW_RIGHT_PANEL_KEY, showRightPanel);
-        debouncedSave(store);
-      } catch (e) {
-        console.error("Failed to persist panel visibility:", e);
-      }
-    })();
-  }, [showLeftPanel, showRightPanel]);
-
-  // Save when threads change (strip runtime-only fields)
-  useEffect(() => {
-    if (!initialized.current) return;
-    // Skip saving empty array until persistence has loaded (protects against HMR store resets)
-    if (threads.length === 0 && !threadsLoaded.current) return;
-    (async () => {
-      try {
-        const persisted: PersistedThread[] = threads.map((t) => ({
-          id: t.id,
-          projectId: t.projectId,
-          type: t.type,
-          name: t.name,
-          claudeSessionId: t.claudeSessionId,
-          codexThreadId: t.codexThreadId,
-          exitCode: t.exitCode,
-          lastActivityAt: t.lastActivityAt,
-        }));
-        const store = await load(STORE_FILE);
-        await store.set(THREADS_KEY, persisted);
-        debouncedSave(store);
-      } catch (e) {
-        console.error("Failed to persist threads:", e);
-      }
-    })();
-  }, [threads]);
 }

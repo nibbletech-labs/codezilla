@@ -62,7 +62,6 @@ interface AppState {
 
   // File tree actions
   toggleExpandedPath: (projectId: string, path: string) => void;
-  getExpandedPaths: (projectId: string) => Set<string>;
 
   // Derived helpers
   getProjectThreads: (projectId: string) => Thread[];
@@ -168,17 +167,17 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   updateTranscriptInfo: (threadId, info) => {
     if (get().transcriptInfo[threadId] === info) return;
-    set((s) => {
-      s.transcriptInfo[threadId] = info;
-      return { transcriptInfo: s.transcriptInfo };
-    });
+    set((s) => ({
+      transcriptInfo: { ...s.transcriptInfo, [threadId]: info },
+    }));
   },
 
   clearTranscriptInfo: (threadId) => {
     if (!(threadId in get().transcriptInfo)) return;
     set((s) => {
-      delete s.transcriptInfo[threadId];
-      return { transcriptInfo: s.transcriptInfo };
+      const next = { ...s.transcriptInfo };
+      delete next[threadId];
+      return { transcriptInfo: next };
     });
   },
 
@@ -480,10 +479,6 @@ export const useAppStore = create<AppState>((set, get) => ({
       const next = idx >= 0 ? current.filter((p) => p !== path) : [...current, path];
       return { expandedPaths: { ...s.expandedPaths, [projectId]: next } };
     });
-  },
-
-  getExpandedPaths: (projectId) => {
-    return new Set(get().expandedPaths[projectId] ?? []);
   },
 
   getProjectThreads: (projectId) => {

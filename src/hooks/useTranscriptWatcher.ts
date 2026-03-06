@@ -493,6 +493,7 @@ export function useTranscriptWatcher() {
     const STALE_PTY_ACTIVE_MS = 5000;
 
     const interval = setInterval(() => {
+      if (document.hidden) return;
       const state = useAppStore.getState();
       const transcriptEntries = Object.entries(state.transcriptInfo);
       // Skip all work when there are no transcript entries (e.g. app just

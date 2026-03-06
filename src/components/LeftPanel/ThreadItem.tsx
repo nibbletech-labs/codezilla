@@ -1,14 +1,13 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import { ask } from "@tauri-apps/plugin-dialog";
 import { useAppStore } from "../../store/appStore";
-import type { Thread } from "../../store/types";
 import type { ThreadBadge } from "../../store/transcriptTypes";
 import { getThreadSubtitle, isThreadLikelyWorking } from "../../lib/threadRuntime";
 import { timeAgo } from "../../lib/timeAgo";
 import ThreadIcon from "./ThreadIcons";
 
 interface ThreadItemProps {
-  thread: Thread;
+  threadId: string;
   isActive: boolean;
   ageTick: number;
   onSelect: () => void;
@@ -83,9 +82,10 @@ function BadgeDot({ badge, isWorking }: { badge: ThreadBadge; isWorking: boolean
   );
 }
 
-export default function ThreadItem({ thread, isActive, ageTick, onSelect }: ThreadItemProps) {
+export default function ThreadItem({ threadId, isActive, ageTick, onSelect }: ThreadItemProps) {
+  const thread = useAppStore((s) => s.threads.find((t) => t.id === threadId));
   const [editing, setEditing] = useState(false);
-  const [editValue, setEditValue] = useState(thread.name);
+  const [editValue, setEditValue] = useState(thread?.name ?? "");
   const inputRef = useRef<HTMLInputElement>(null);
   const renameThread = useAppStore((s) => s.renameThread);
   const removeThread = useAppStore((s) => s.removeThread);
@@ -95,13 +95,13 @@ export default function ThreadItem({ thread, isActive, ageTick, onSelect }: Thre
   const [hovered, setHovered] = useState(false);
 
   const age = useMemo(
-    () => timeAgo(thread.lastActivityAt),
-    [thread.lastActivityAt, ageTick],
+    () => thread ? timeAgo(thread.lastActivityAt) : "",
+    [thread?.lastActivityAt, ageTick],
   );
 
   // Subscribe to transcript info for this thread
-  const info = useAppStore((s) => s.transcriptInfo[thread.id]);
-  const rawSubtitle = getThreadSubtitle(thread, info);
+  const info = useAppStore((s) => s.transcriptInfo[threadId]);
+  const rawSubtitle = thread ? getThreadSubtitle(thread, info) : "";
   const badge: ThreadBadge = info?.badge ?? null;
   const subtitleNeedsBadge: ThreadBadge = (
     rawSubtitle.startsWith("Waiting for approval")
@@ -118,8 +118,10 @@ export default function ThreadItem({ thread, isActive, ageTick, onSelect }: Thre
         ? "needs_input"
         : subtitleNeedsBadge)
   );
-  const isWorking = isThreadLikelyWorking(thread, info);
+  const isWorking = thread ? isThreadLikelyWorking(thread, info) : false;
   const showActivityAge = !isWorking && !effectiveBadge;
+
+  if (!thread) return null;
 
   // Debounce "Waiting for ..." subtitles — in bypass-permission mode Claude
   // emits approval-like tool_use events that are auto-approved instantly, so
@@ -159,12 +161,12 @@ export default function ThreadItem({ thread, isActive, ageTick, onSelect }: Thre
 
   // Enter edit mode when triggered from title bar dropdown
   useEffect(() => {
-    if (renamingThreadId === thread.id) {
+    if (renamingThreadId === threadId) {
       setEditValue(thread.name);
       setEditing(true);
       clearRenamingThread();
     }
-  }, [renamingThreadId, thread.id, thread.name, clearRenamingThread]);
+  }, [renamingThreadId, threadId, thread.name, clearRenamingThread]);
 
   useEffect(() => {
     if (editing && inputRef.current) {
@@ -176,13 +178,13 @@ export default function ThreadItem({ thread, isActive, ageTick, onSelect }: Thre
   const commitRename = useCallback(() => {
     const trimmed = editValue.trim();
     if (trimmed && trimmed !== thread.name) {
-      renameThread(thread.id, trimmed);
+      renameThread(threadId, trimmed);
     }
     setEditing(false);
     if (sidebarOpenedForRename) {
       useAppStore.setState({ sidebarOpenedForRename: false, showLeftPanel: false });
     }
-  }, [editValue, thread.id, thread.name, renameThread, sidebarOpenedForRename]);
+  }, [editValue, threadId, thread.name, renameThread, sidebarOpenedForRename]);
 
   const handleClose = useCallback(async (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -195,8 +197,8 @@ export default function ThreadItem({ thread, isActive, ageTick, onSelect }: Thre
       });
       if (!confirmed) return;
     }
-    removeThread(thread.id);
-  }, [thread.id, removeThread, isWorking]);
+    removeThread(threadId);
+  }, [threadId, removeThread, isWorking]);
 
   return (
     <div

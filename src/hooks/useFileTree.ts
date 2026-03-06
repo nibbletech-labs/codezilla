@@ -36,9 +36,11 @@ export function useFileTree(projectId: string | null, projectPath: string | null
   }, [projectPath]);
 
   // Load expanded directories that aren't cached yet
+  const dirCacheRef = useRef(dirCache);
+  dirCacheRef.current = dirCache;
   useEffect(() => {
     if (!projectPath) return;
-    const uncached = Array.from(expandedPaths).filter((p) => !dirCache.has(p));
+    const uncached = Array.from(expandedPaths).filter((p) => !dirCacheRef.current.has(p));
     if (uncached.length === 0) return;
 
     Promise.allSettled(
@@ -57,7 +59,7 @@ export function useFileTree(projectId: string | null, projectPath: string | null
         return next;
       });
     });
-  }, [expandedPaths, projectPath, dirCache]);
+  }, [expandedPaths, projectPath]);
 
   const toggleExpand = useCallback(
     (path: string) => {
