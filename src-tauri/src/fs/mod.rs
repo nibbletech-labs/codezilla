@@ -231,3 +231,24 @@ pub fn reveal_in_finder(path: String, project_root: Option<String>) -> Result<()
 
     Ok(())
 }
+
+#[tauri::command]
+pub fn open_in_default_app(path: String, project_root: Option<String>) -> Result<(), String> {
+    let file_path = canonicalize_path(&path)?;
+
+    if let Some(ref root) = project_root {
+        let canonical_root = canonicalize_path(root)?;
+        validate_within_root(&file_path, &canonical_root)?;
+    }
+
+    if !file_path.exists() {
+        return Err(format!("Path not found: {}", path));
+    }
+
+    std::process::Command::new("open")
+        .arg(file_path.to_string_lossy().as_ref())
+        .spawn()
+        .map_err(|e| format!("Failed to open file: {}", e))?;
+
+    Ok(())
+}

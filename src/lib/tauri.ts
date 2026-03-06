@@ -102,6 +102,10 @@ export function revealInFinder(path: string, projectRoot?: string): Promise<void
   return invoke("reveal_in_finder", { path, projectRoot });
 }
 
+export function openInDefaultApp(path: string, projectRoot?: string): Promise<void> {
+  return invoke("open_in_default_app", { path, projectRoot });
+}
+
 export function startWatching(path: string): Promise<void> {
   return invoke("start_watching", { path });
 }

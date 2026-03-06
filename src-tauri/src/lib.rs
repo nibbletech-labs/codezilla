@@ -504,6 +504,7 @@ pub fn run() {
             fs::read_file_base64,
             fs::preview_file,
             fs::reveal_in_finder,
+            fs::open_in_default_app,
             fs::path_exists,
             fs::watcher::start_watching,
             fs::watcher::stop_watching,

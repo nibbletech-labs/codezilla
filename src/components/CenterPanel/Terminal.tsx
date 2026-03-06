@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebglAddon } from "@xterm/addon-webgl";
+import { WebLinksAddon } from "@xterm/addon-web-links";
 import { Channel } from "@tauri-apps/api/core";
 import {
   spawnPty,
@@ -73,6 +74,9 @@ function ensureWebgl(sessionId: string, terminal: Terminal) {
     });
     terminal.loadAddon(webglAddon);
     webglAddons.set(sessionId, webglAddon);
+    // Force full repaint — the WebGL renderer takes over from canvas but
+    // won't automatically redraw existing buffer content.
+    terminal.refresh(0, terminal.rows - 1);
   } catch {
     // Canvas fallback
   }
@@ -800,6 +804,7 @@ function createTerminalInstance(
 
   const fitAddon = new FitAddon();
   terminal.loadAddon(fitAddon);
+  terminal.loadAddon(new WebLinksAddon());
   terminal.open(container);
 
   // WebGL addon is deferred until the terminal is first made visible
@@ -885,6 +890,7 @@ function createTerminalInstance(
   const MAX_OUTPUT_QUEUE_BYTES = 8 * 1024 * 1024; // 8MB cap
   const MAX_WRITE_PER_FRAME = 256 * 1024; // 256KB — avoid blocking UI with huge terminal.write() calls
   let flushScheduled = false;
+  let evictedSinceFlush = false;
   let markerEventsObserved = false;
   let waitingForCommandStart = false;
   let progressActive = false;
@@ -921,12 +927,23 @@ function createTerminalInstance(
       const chunks = outputQueue.splice(0, writeChunks);
       outputQueueBytes -= writeBytes;
 
+      // If eviction dropped oldest chunks, the remaining data may start
+      // mid-escape-sequence. Prepend an SGR reset so xterm's parser
+      // doesn't inherit corrupted state (wrong colors/attributes).
+      const needsReset = evictedSinceFlush;
+      if (needsReset) evictedSinceFlush = false;
+      const SGR_RESET = [0x1b, 0x5b, 0x30, 0x6d]; // \x1b[0m
+
       let merged: Uint8Array;
-      if (chunks.length === 1) {
+      if (chunks.length === 1 && !needsReset) {
         merged = chunks[0];
       } else {
-        merged = new Uint8Array(writeBytes);
+        merged = new Uint8Array(writeBytes + (needsReset ? SGR_RESET.length : 0));
         let off = 0;
+        if (needsReset) {
+          merged.set(SGR_RESET, 0);
+          off = SGR_RESET.length;
+        }
         for (const chunk of chunks) {
           merged.set(chunk, off);
           off += chunk.length;
@@ -979,6 +996,7 @@ function createTerminalInstance(
       outputQueueBytes += outputChunk.length;
       while (outputQueueBytes > MAX_OUTPUT_QUEUE_BYTES && outputQueue.length > 1) {
         outputQueueBytes -= outputQueue.shift()!.length;
+        evictedSinceFlush = true;
       }
       // Only drive the RAF flush loop for the visible terminal.
       // Hidden terminals accumulate in the queue and drain on switch.
