@@ -4,6 +4,7 @@ import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebglAddon } from "@xterm/addon-webgl";
 import { WebLinksAddon } from "@xterm/addon-web-links";
+import { open as openUrl } from "@tauri-apps/plugin-shell";
 import { Channel } from "@tauri-apps/api/core";
 import {
   spawnPty,
@@ -804,7 +805,9 @@ function createTerminalInstance(
 
   const fitAddon = new FitAddon();
   terminal.loadAddon(fitAddon);
-  terminal.loadAddon(new WebLinksAddon());
+  terminal.loadAddon(new WebLinksAddon((_event, uri) => {
+    openUrl(uri);
+  }));
   terminal.open(container);
 
   // WebGL addon is deferred until the terminal is first made visible
