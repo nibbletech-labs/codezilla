@@ -1,4 +1,5 @@
 mod config;
+mod launchd;
 mod fs;
 mod git;
 mod pty;
@@ -522,6 +523,15 @@ pub fn run() {
             transcript::unregister_codex_thread,
             transcript::get_codex_binding,
             transcript::discover::discover_transcript,
+            launchd::write_launchd_entry,
+            launchd::remove_launchd_entry,
+            launchd::list_launchd_entries,
+            launchd::list_job_runs,
+            launchd::read_job_log,
+            launchd::delete_job_logs,
+            launchd::reveal_log_in_finder,
+            launchd::run_job_now,
+            launchd::prune_job_logs,
             sync_remember_window_position,
             sync_appearance_menu,
             sync_accent_menu

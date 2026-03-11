@@ -6,8 +6,10 @@ import type { ThreadType, Project } from "../../store/types";
 import { THREAD_NEW_LABELS } from "../../store/types";
 import ThreadItem from "./ThreadItem";
 import ThreadIcon from "./ThreadIcons";
+import JobItem from "./JobItem";
 import ProjectIcon from "../ProjectIcon";
 import { IconPicker } from "../IconPicker";
+import { JobCreationForm } from "../ScheduledJobs";
 import {
   DndContext,
   closestCenter,
@@ -40,8 +42,12 @@ export default function LeftPanel() {
   const menuRef = useRef<HTMLDivElement>(null);
   const reorderProjects = useAppStore((s) => s.reorderProjects);
   const setProjectIcon = useAppStore((s) => s.setProjectIcon);
+  const activeJobId = useAppStore((s) => s.activeJobId);
+  const setActiveJob = useAppStore((s) => s.setActiveJob);
   const [iconPickerProjectId, setIconPickerProjectId] = useState<string | null>(null);
   const [iconPickerPos, setIconPickerPos] = useState<{ x: number; y: number } | null>(null);
+  const [jobFormProjectId, setJobFormProjectId] = useState<string | null>(null);
+  const [jobFormPos, setJobFormPos] = useState<{ x: number; y: number } | null>(null);
   const [ageTick, setAgeTick] = useState(0);
 
   useEffect(() => {
@@ -149,9 +155,11 @@ export default function LeftPanel() {
                 project={project}
                 activeProjectId={activeProjectId}
                 activeThreadId={activeThreadId}
+                activeJobId={activeJobId}
                 baseFontSize={baseFontSize}
                 setActiveProject={setActiveProject}
                 setActiveThread={setActiveThread}
+                setActiveJob={setActiveJob}
                 handleNewThreadClick={handleNewThreadClick}
                 setIconPickerProjectId={setIconPickerProjectId}
                 setIconPickerPos={setIconPickerPos}
@@ -180,7 +188,32 @@ export default function LeftPanel() {
               onClick={() => handleSpawnThread(type)}
             />
           ))}
+          <div style={{ height: 1, margin: "4px 0", background: "var(--border-subtle, var(--border-default))" }} />
+          <NewThreadMenuItem
+            type="shell"
+            label="Scheduled Job"
+            onClick={() => {
+              setJobFormProjectId(menuProjectId);
+              setJobFormPos(menuPos);
+              setMenuProjectId(null);
+              setMenuPos(null);
+            }}
+            icon={<ClockMenuIcon />}
+          />
         </div>,
+        document.body,
+      )}
+
+      {/* Scheduled job creation form */}
+      {jobFormProjectId && jobFormPos && createPortal(
+        <JobCreationForm
+          projectId={jobFormProjectId}
+          anchor={jobFormPos}
+          onClose={() => {
+            setJobFormProjectId(null);
+            setJobFormPos(null);
+          }}
+        />,
         document.body,
       )}
 
@@ -210,9 +243,11 @@ interface SortableProjectItemProps {
   project: Project;
   activeProjectId: string | null;
   activeThreadId: string | null;
+  activeJobId: string | null;
   baseFontSize: number;
   setActiveProject: (id: string) => void;
   setActiveThread: (id: string) => void;
+  setActiveJob: (id: string) => void;
   handleNewThreadClick: (e: React.MouseEvent, projectId: string) => void;
   setIconPickerProjectId: (id: string | null) => void;
   setIconPickerPos: (pos: { x: number; y: number } | null) => void;
@@ -223,9 +258,11 @@ function SortableProjectItem({
   project,
   activeProjectId,
   activeThreadId,
+  activeJobId,
   baseFontSize,
   setActiveProject,
   setActiveThread,
+  setActiveJob,
   handleNewThreadClick,
   setIconPickerProjectId,
   setIconPickerPos,
@@ -252,6 +289,18 @@ function SortableProjectItem({
   const threadIds = useMemo(
     () => threadIdKey ? threadIdKey.split(",") : [],
     [threadIdKey],
+  );
+
+  // Subscribe to job IDs for this project
+  const jobIdKey = useAppStore((s) =>
+    s.scheduledJobs
+      .filter((j) => j.projectId === project.id)
+      .map((j) => j.id)
+      .join(","),
+  );
+  const jobIds = useMemo(
+    () => jobIdKey ? jobIdKey.split(",") : [],
+    [jobIdKey],
   );
 
   const style: React.CSSProperties = {
@@ -314,6 +363,9 @@ function SortableProjectItem({
         </button>
       </div>
 
+      {jobIds.length > 0 && (
+        <ScheduledSection jobIds={jobIds} activeJobId={activeJobId} setActiveJob={setActiveJob} />
+      )}
       {threadIds.length > 0 && (
         <div style={styles.projectBody}>
           {threadIds.map((threadId) => (
@@ -332,7 +384,44 @@ function SortableProjectItem({
   );
 }
 
-function NewThreadMenuItem({ type, label, onClick }: { type: ThreadType; label: string; onClick: () => void }) {
+function ScheduledSection({ jobIds, activeJobId, setActiveJob }: { jobIds: string[]; activeJobId: string | null; setActiveJob: (id: string) => void }) {
+  const [expanded, setExpanded] = useState(true);
+  return (
+    <>
+      <div
+        style={styles.scheduledHeader}
+        onClick={() => setExpanded((e) => !e)}
+      >
+        <span style={{ display: "inline-flex", fontSize: "8px", opacity: 0.5, transition: "transform 0.15s", transform: expanded ? "rotate(90deg)" : "rotate(0deg)" }}>▶</span>
+        <span>Scheduled</span>
+        <span style={{ opacity: 0.4 }}>({jobIds.length})</span>
+      </div>
+      {expanded && (
+        <div style={styles.projectBody}>
+          {jobIds.map((jobId) => (
+            <JobItem
+              key={jobId}
+              jobId={jobId}
+              isActive={jobId === activeJobId}
+              onSelect={() => setActiveJob(jobId)}
+            />
+          ))}
+        </div>
+      )}
+    </>
+  );
+}
+
+function ClockMenuIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
+      <circle cx="8" cy="8" r="6" stroke="var(--text-secondary)" strokeWidth="1.3" />
+      <path d="M8 4.5V8L10.5 9.5" stroke="var(--text-secondary)" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function NewThreadMenuItem({ type, label, onClick, icon }: { type: ThreadType; label: string; onClick: () => void; icon?: React.ReactNode }) {
   const [hovered, setHovered] = useState(false);
   return (
     <div
@@ -344,7 +433,7 @@ function NewThreadMenuItem({ type, label, onClick }: { type: ThreadType; label: 
         backgroundColor: hovered ? "var(--bg-hover)" : "transparent",
       }}
     >
-      <ThreadIcon type={type} />
+      {icon || <ThreadIcon type={type} />}
       {label}
     </div>
   );
@@ -440,6 +529,19 @@ const styles = {
     paddingLeft: "8px",
     paddingBottom: "4px",
   },
+  scheduledHeader: {
+    display: "flex",
+    alignItems: "center",
+    gap: "5px",
+    color: "var(--text-secondary)",
+    fontSize: "var(--font-size-sm)",
+    textTransform: "uppercase" as const,
+    letterSpacing: "0.5px",
+    padding: "6px 8px 2px",
+    cursor: "pointer",
+    opacity: 0.85,
+    userSelect: "none" as const,
+  } as React.CSSProperties,
   warningIcon: {
     fontSize: "var(--font-size-sm)",
     flexShrink: 0,

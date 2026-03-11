@@ -28,6 +28,7 @@ import { THREAD_NEW_LABELS } from "../../store/types";
 import ThreadIcon from "../LeftPanel/ThreadIcons";
 import ProjectIcon from "../ProjectIcon";
 import { IconPicker } from "../IconPicker";
+import { JobDetailPanel } from "../ScheduledJobs";
 import {
   clearActivity,
   isOutputActivitySuppressed,
@@ -344,6 +345,7 @@ function applyPtyCommandEnd(thread: Thread, exitCode: number | null): void {
 export default function TerminalMultiplexer() {
   const threads = useAppStore((s) => s.threads);
   const activeThreadId = useAppStore((s) => s.activeThreadId);
+  const activeJobId = useAppStore((s) => s.activeJobId);
   const activeProjectId = useAppStore((s) => s.activeProjectId);
   const projects = useAppStore((s) => s.projects);
   const addThread = useAppStore((s) => s.addThread);
@@ -598,7 +600,10 @@ export default function TerminalMultiplexer() {
           }
         }} />
       )}
-      {!activeThreadId && (
+      {activeJobId && (
+        <JobDetailPanel jobId={activeJobId} />
+      )}
+      {!activeThreadId && !activeJobId && (
         <div
           style={{
             display: "flex",
@@ -809,6 +814,18 @@ function createTerminalInstance(
     openUrl(uri);
   }));
   terminal.open(container);
+
+  // Let key combos with 3+ modifiers pass through to macOS so global
+  // shortcuts (e.g. Ctrl+Option+Cmd+Space) aren't swallowed by xterm.
+  terminal.attachCustomKeyEventHandler((ev: KeyboardEvent) => {
+    const modCount =
+      (ev.ctrlKey ? 1 : 0) +
+      (ev.altKey ? 1 : 0) +
+      (ev.metaKey ? 1 : 0) +
+      (ev.shiftKey ? 1 : 0);
+    if (modCount >= 3) return false;
+    return true;
+  });
 
   // WebGL addon is deferred until the terminal is first made visible
   // to avoid expensive GPU context creation for background terminals on launch.

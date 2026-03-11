@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { Project, Thread, ThreadType, PersistedThread, PreviewTarget, ProjectIcon } from "./types";
+import type { Project, Thread, ThreadType, PersistedThread, PreviewTarget, ProjectIcon, ScheduledJob } from "./types";
 import { THREAD_LABELS } from "./types";
 import type { TranscriptInfo } from "./transcriptTypes";
 import type { AccentColorId, AppearanceMode } from "../lib/themes";
@@ -87,6 +87,16 @@ interface AppState {
   startRenamingThread: (threadId: string) => void;
   clearRenamingThread: () => void;
 
+  // Scheduled jobs
+  scheduledJobs: ScheduledJob[];
+  activeJobId: string | null;
+  addScheduledJob: (projectId: string, job: Omit<ScheduledJob, "id" | "createdAt">) => ScheduledJob;
+  updateScheduledJob: (jobId: string, updates: Partial<Pick<ScheduledJob, "name" | "command" | "schedule" | "type" | "enabled">>) => void;
+  removeScheduledJob: (jobId: string) => void;
+  setActiveJob: (jobId: string) => void;
+  getProjectJobs: (projectId: string) => ScheduledJob[];
+  loadScheduledJobs: (jobs: ScheduledJob[]) => void;
+
   // Persistence
   loadProjects: (projects: Project[]) => void;
   loadExpandedPaths: (expandedPaths: Record<string, string[]>) => void;
@@ -112,6 +122,8 @@ export const useAppStore = create<AppState>((set, get) => ({
   showRightPanel: true,
   renamingThreadId: null,
   sidebarOpenedForRename: false,
+  scheduledJobs: [],
+  activeJobId: null,
 
   openPreview: (path, line) => {
     set({ previewFile: { kind: "file", path, line } });
@@ -241,9 +253,16 @@ export const useAppStore = create<AppState>((set, get) => ({
         }
       }
 
+      const removedJobActive =
+        s.activeJobId &&
+        s.scheduledJobs.some(
+          (j) => j.id === s.activeJobId && j.projectId === projectId,
+        );
+
       return {
         projects: remainingProjects,
         threads: remainingThreads,
+        scheduledJobs: s.scheduledJobs.filter((j) => j.projectId !== projectId),
         expandedPaths: nextExpandedPaths,
         transcriptInfo: nextTranscriptInfo,
         activeProjectId:
@@ -251,12 +270,13 @@ export const useAppStore = create<AppState>((set, get) => ({
             ? (remainingProjects[0]?.id ?? null)
             : s.activeProjectId,
         activeThreadId: removedThreadActive ? null : s.activeThreadId,
+        activeJobId: removedJobActive ? null : s.activeJobId,
       };
     });
   },
 
   setActiveProject: (projectId) => {
-    set({ activeProjectId: projectId, activeThreadId: null });
+    set({ activeProjectId: projectId, activeThreadId: null, activeJobId: null });
   },
 
   toggleProjectExpanded: (projectId) => {
@@ -324,6 +344,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         ),
         threads: newThreads,
         activeThreadId: thread.id,
+        activeJobId: null,
         activeProjectId: projectId,
         transcriptInfo: nextTranscriptInfo,
       };
@@ -370,6 +391,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
     set({
       activeThreadId: threadId,
+      activeJobId: null,
       activeProjectId: thread.projectId,
       ...(Object.keys(transcriptUpdate).length > 0
         ? { transcriptInfo: { ...get().transcriptInfo, ...transcriptUpdate } }
@@ -546,6 +568,57 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   clearRenamingThread: () => {
     set({ renamingThreadId: null });
+  },
+
+  // Scheduled jobs actions
+
+  addScheduledJob: (projectId, jobData) => {
+    const id = crypto.randomUUID();
+    const job: ScheduledJob = {
+      ...jobData,
+      id,
+      createdAt: Date.now(),
+    };
+    set((s) => ({
+      scheduledJobs: [...s.scheduledJobs, job],
+      activeJobId: id,
+      activeThreadId: null,
+      activeProjectId: projectId,
+    }));
+    return job;
+  },
+
+  updateScheduledJob: (jobId, updates) => {
+    set((s) => ({
+      scheduledJobs: s.scheduledJobs.map((j) =>
+        j.id === jobId ? { ...j, ...updates } : j,
+      ),
+    }));
+  },
+
+  removeScheduledJob: (jobId) => {
+    set((s) => ({
+      scheduledJobs: s.scheduledJobs.filter((j) => j.id !== jobId),
+      activeJobId: s.activeJobId === jobId ? null : s.activeJobId,
+    }));
+  },
+
+  setActiveJob: (jobId) => {
+    const job = get().scheduledJobs.find((j) => j.id === jobId);
+    if (!job) return;
+    set({
+      activeJobId: jobId,
+      activeThreadId: null,
+      activeProjectId: job.projectId,
+    });
+  },
+
+  getProjectJobs: (projectId) => {
+    return get().scheduledJobs.filter((j) => j.projectId === projectId);
+  },
+
+  loadScheduledJobs: (jobs) => {
+    set({ scheduledJobs: jobs });
   },
 
   loadProjects: (projects) => {

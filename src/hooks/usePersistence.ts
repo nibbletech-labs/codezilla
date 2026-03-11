@@ -3,8 +3,9 @@ import { load } from "@tauri-apps/plugin-store";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { invoke } from "@tauri-apps/api/core";
 import { useAppStore } from "../store/appStore";
-import type { Project, PersistedThread } from "../store/types";
+import type { Project, PersistedThread, ScheduledJob } from "../store/types";
 import type { AccentColorId, AppearanceMode } from "../lib/themes";
+import { syncLaunchdEntries } from "../lib/launchdSync";
 
 const STORE_FILE = "codezilla-config.json";
 const PROJECTS_KEY = "projects";
@@ -16,6 +17,7 @@ const APPEARANCE_MODE_KEY = "appearanceMode";
 const REMEMBER_WINDOW_KEY = "rememberWindowPosition";
 const SHOW_LEFT_PANEL_KEY = "showLeftPanel";
 const SHOW_RIGHT_PANEL_KEY = "showRightPanel";
+const SCHEDULED_JOBS_KEY = "scheduledJobs";
 
 let pendingSave: ReturnType<typeof setTimeout> | null = null;
 let lastStore: Awaited<ReturnType<typeof load>> | null = null;
@@ -50,6 +52,8 @@ export function usePersistence() {
   const rememberWindowPosition = useAppStore((s) => s.rememberWindowPosition);
   const showLeftPanel = useAppStore((s) => s.showLeftPanel);
   const showRightPanel = useAppStore((s) => s.showRightPanel);
+  const scheduledJobs = useAppStore((s) => s.scheduledJobs);
+  const loadScheduledJobs = useAppStore((s) => s.loadScheduledJobs);
   const loadProjects = useAppStore((s) => s.loadProjects);
   const loadExpandedPaths = useAppStore((s) => s.loadExpandedPaths);
   const loadThreads = useAppStore((s) => s.loadThreads);
@@ -81,6 +85,15 @@ export function usePersistence() {
           loadThreads(savedThreads);
         }
         threadsLoaded.current = true;
+
+        const savedJobs = await store.get<ScheduledJob[]>(SCHEDULED_JOBS_KEY);
+        if (savedJobs && savedJobs.length > 0) {
+          loadScheduledJobs(savedJobs);
+        }
+        // Always sync launchd agents with persisted jobs
+        if (saved && saved.length > 0) {
+          syncLaunchdEntries(savedJobs ?? [], saved).catch(console.error);
+        }
 
         const savedFontSize = await store.get<number>(FONT_SIZE_KEY);
         if (savedFontSize != null) {
@@ -122,7 +135,7 @@ export function usePersistence() {
       }
       initialized.current = true;
     })();
-  }, [loadProjects, loadExpandedPaths, loadThreads, loadBaseFontSize, loadAccentColorId, loadAppearanceMode, loadRememberWindowPosition, loadPanelVisibility]);
+  }, [loadProjects, loadExpandedPaths, loadThreads, loadScheduledJobs, loadBaseFontSize, loadAccentColorId, loadAppearanceMode, loadRememberWindowPosition, loadPanelVisibility]);
 
   // Flush pending saves on window close
   useEffect(() => {
@@ -153,6 +166,7 @@ export function usePersistence() {
         await store.set(REMEMBER_WINDOW_KEY, rememberWindowPosition);
         await store.set(SHOW_LEFT_PANEL_KEY, showLeftPanel);
         await store.set(SHOW_RIGHT_PANEL_KEY, showRightPanel);
+        await store.set(SCHEDULED_JOBS_KEY, scheduledJobs);
         // Guard threads against HMR store resets wiping persisted data
         if (threads.length > 0 || threadsLoaded.current) {
           const persisted: PersistedThread[] = threads.map((t) => ({
@@ -172,7 +186,7 @@ export function usePersistence() {
         console.error("Failed to persist state:", e);
       }
     })();
-  }, [projects, expandedPaths, threads, baseFontSize, accentColorId, appearanceMode, rememberWindowPosition, showLeftPanel, showRightPanel]);
+  }, [projects, expandedPaths, threads, scheduledJobs, baseFontSize, accentColorId, appearanceMode, rememberWindowPosition, showLeftPanel, showRightPanel]);
 
   // Sync Rust menu state (separate from persistence — these only need their specific dep)
   useEffect(() => {

@@ -13,7 +13,19 @@ A macOS desktop app for multi-project management of AI-enabled development. Supp
 - **Git-aware file tree** — Real-time modified/added/deleted indicators with diff summary
 - **Intelligent terminal detection** — File paths and commit hashes in terminal output become clickable links
 
-## Prerequisites
+## Install
+
+Download the latest `.dmg` from [Releases](https://github.com/nibbletech-labs/codezilla/releases), open it, and drag Codezilla to Applications.
+
+The app is not yet code-signed, so macOS will block it on first launch. Run this once to allow it:
+
+```bash
+xattr -cr /Applications/Codezilla.app
+```
+
+Then open Codezilla normally.
+
+## Prerequisites (building from source)
 
 - **Node.js** 18+
 - **Rust** (install via [rustup](https://rustup.rs))

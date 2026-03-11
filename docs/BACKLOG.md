@@ -93,6 +93,22 @@ An audit of the Claude thread activity detection system identified three structu
 
 ---
 
+## v0.3: Scheduled Jobs
+
+Cron-backed recurring jobs per project. Create a job (Claude, Codex, or shell), pick a schedule, and Codezilla writes the crontab entry. Jobs run whether or not the app is open. Logs viewable in-app.
+
+| # | Item | Status | Ref |
+|---|------|--------|-----|
+| 0.3-1 | Data model + store: `ScheduledJob` type, store actions, persistence to `codezilla-config.json` | Pending | [spec](specs/scheduled-jobs.md) |
+| 0.3-2 | Rust cron commands: `write_cron_entry`, `remove_cron_entry` (crontab manipulation), cron command wrapper with per-run log files and structured footer | Pending | [spec](specs/scheduled-jobs.md) |
+| 0.3-3 | Rust log commands: `list_job_runs` (directory listing + footer parsing), `read_job_log` (file contents) | Pending | [spec](specs/scheduled-jobs.md) |
+| 0.3-4 | Job creation UI: "Scheduled Job" option in `+` menu, type toggle buttons, command input, composable schedule picker | Pending | [spec](specs/scheduled-jobs.md) |
+| 0.3-5 | Job list in left panel: jobs per project with clock icon, schedule summary, enable/disable + last-run-failed indicators | Pending | [spec](specs/scheduled-jobs.md) |
+| 0.3-6 | Job detail panel: header with edit/run-now, run history list (timestamp, duration, pass/fail), log viewer with "Open File" | Pending | [spec](specs/scheduled-jobs.md) |
+| 0.3-7 | Startup sync: reconcile config vs crontab on launch, prune old log files (keep last 50 per job) | Pending | [spec](specs/scheduled-jobs.md) |
+
+---
+
 ## v3: Remote & AI
 
 Remote access via iOS companion and MCP server. AI-powered session understanding and conversational control.
@@ -103,49 +119,26 @@ Remote access via iOS companion and MCP server. AI-powered session understanding
 | 3.2 | MCP server (HTTP/SSE tools, stream interpretation layer, semantic state, cross-session orchestration) | Pending | [spec](specs/mcp-server.md) |
 | 3.3 | Git operations panel (stage, commit, push without typing) | Pending | — |
 | 3.4 | Task completion notifications (push notifications on iOS) | Pending | — |
-| 3.5 | Quick project switcher (Cmd+P fuzzy finder) | Pending | — |
-| 3.6 | Bookmarked files per project | Pending | — |
+| 3.5 | Bookmarked files per project | Pending | — |
 
 ---
 
 ## v3.5: Git Worktree Workflows
 
-First-class support for running parallel Claude Code sessions in isolated git worktrees. Leverages Claude Code's native `--worktree` flag so Claude handles all git mechanics; Codezilla provides the UI structure and lifecycle management.
+First-class support for running parallel Claude Code sessions in isolated git worktrees. Leverages Claude Code's native `--worktree` flag; Codezilla provides UI structure, lifecycle management, and auto-detection of worktrees created from within its terminals.
 
-**Reference:** [agent-view comparison](agent-view-comparison.md) · conversation 2026-02-27
-
-### Design principles
-- Claude does the heavy lifting (branch creation, worktree setup) via `claude --worktree <name>`
-- Codezilla reflects reality — the left panel reacts to the filesystem, it doesn't optimistically create structure
-- Worktrees are first-class containers in the left panel, not just metadata on a thread
-- The file tree roots at the worktree directory for worktree threads, not the main repo root
-
-### Left panel hierarchy
-```
-▼ My Project
-    ▼ main
-        ● Claude — Idle · 2h ago
-        ● Shell
-        [+]
-    ▼ worktree-feature-auth          ↑3  ●
-        ● Claude — Working...
-        [+]
-    ▼ worktree-feature-payments      ↑1
-        ● Claude — Idle · 5m ago
-        [+]
-    [+ New Worktree]
-```
+**Spec:** [specs/git-worktrees.md](specs/git-worktrees.md) · **Reference:** [agent-view comparison](agent-view-comparison.md)
 
 | # | Item | Status | Ref |
 |---|------|--------|-----|
-| 3.5-1 | **Left panel worktree sections** — worktrees appear as named collapsible sections between `main` and the project-level `[+ New Worktree]` button; threads sit inside them; each section has its own `[+]` to add a thread scoped to that worktree directory | Pending | — |
-| 3.5-2 | **Worktree creation via Claude** — `[+ New Worktree]` prompts for a name (optional; blank = Claude auto-generates) then spawns `claude --worktree <name>` in the main repo directory; Claude creates the branch and worktree itself | Pending | — |
-| 3.5-3 | **fs-watcher auto-detection** — watch `.claude/worktrees/` for subdirectory creation/removal; add or remove left panel sections dynamically without user action; works whether the worktree was created by Codezilla or directly by Claude in a terminal | Pending | — |
-| 3.5-4 | **Worktree-scoped file tree** — when the active thread lives in a worktree, root the file tree at `.claude/worktrees/<name>/` instead of the main repo root; diffs show changes relative to the base branch | Pending | — |
-| 3.5-5 | **Worktree section header metadata** — show branch name, commits ahead of main (e.g. `↑3`), and dirty indicator on the section header; fetch via `git rev-list --count main...<branch>` and `git status --short` | Pending | — |
-| 3.5-6 | **Worktree actions menu** — hovering the worktree row reveals a `···` menu with: **Merge to main** (spawns a Claude thread on main pre-prompted with the branch), **Push branch** (for PR path), **Discard** (`git worktree remove` + `git branch -d`); Discard shows a confirmation if commits-ahead > 0 or dirty, silently removes if clean; dirty/commits-ahead state from 3.5-5 drives this — no tie to thread exit | Pending | — |
-| 3.5-7 | **Merge thread shortcut** — "Merge worktrees" action at the project level spawns a Claude thread on `main` pre-prompted with the list of completed worktree branches; Claude merges them locally, resolves conflicts using its understanding of each branch's intent, runs tests, reports back | Pending | — |
-| 3.5-8 | **Thread data model** — add `worktreeName: string \| null` to the `Thread` type; worktree threads use `claude --worktree <name>` as launch command (no `--session-id`); `cwd` stays as main repo root since Claude navigates into the worktree itself | Pending | — |
+| 3.5-1 | Data model + left panel grouping: `worktreeName` on Thread, worktree sections in sidebar | Pending | [spec](specs/git-worktrees.md) |
+| 3.5-2 | Worktree creation flow: `[+ New Worktree]` button, spawn with `-w` + `--session-id` | Pending | [spec](specs/git-worktrees.md) |
+| 3.5-3 | Spawn logic: include `-w` flag in launch/resume commands for worktree threads | Pending | [spec](specs/git-worktrees.md) |
+| 3.5-4 | fs-watcher auto-detection: watch `.claude/worktrees/` for directory creation/removal | Pending | [spec](specs/git-worktrees.md) |
+| 3.5-5 | Process inspection + thread association: Rust command to walk PTY child processes, match `--worktree` args, auto-assign `worktreeName` | Pending | [spec](specs/git-worktrees.md) |
+| 3.5-6 | Worktree-scoped file tree: re-root file tree based on active thread's worktree | Pending | [spec](specs/git-worktrees.md) |
+| 3.5-7 | Section header metadata: branch name, commits ahead, dirty indicator | Pending | [spec](specs/git-worktrees.md) |
+| 3.5-8 | Actions menu: push branch, discard worktree (merge actions deferred) | Pending | [spec](specs/git-worktrees.md) |
 
 ---
 

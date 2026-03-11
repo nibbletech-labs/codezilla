@@ -31,6 +31,17 @@ export interface PersistedThread {
   lastActivityAt: number;          // epoch ms, 0 = no activity recorded
 }
 
+export interface ScheduledJob {
+  id: string;
+  projectId: string;
+  name: string;
+  type: ThreadType;
+  command: string;
+  schedule: string;       // Schedule expression, e.g. "0 */6 * * *"
+  enabled: boolean;
+  createdAt: number;      // epoch ms
+}
+
 export type ProjectIcon =
   | { type: "lucide"; name: string; color: string }
   | { type: "emoji"; value: string };

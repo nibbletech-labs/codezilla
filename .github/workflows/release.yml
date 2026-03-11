@@ -4,12 +4,21 @@ on:
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
+    inputs:
+      sign:
+        description: 'Code-sign and notarize with Apple'
+        required: false
+        type: boolean
+        default: false
 
 jobs:
   build:
     runs-on: macos-latest
     permissions:
       contents: write
+    env:
+      SIGN_APP: ${{ github.event.inputs.sign == 'true' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -33,6 +42,7 @@ jobs:
         run: npm ci
 
       - name: Import Apple certificate
+        if: env.SIGN_APP == 'true'
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
@@ -50,10 +60,10 @@ jobs:
       - name: Build Tauri app
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_SIGNING_IDENTITY: ${{ env.SIGN_APP == 'true' && secrets.APPLE_SIGNING_IDENTITY || '' }}
+          APPLE_ID: ${{ env.SIGN_APP == 'true' && secrets.APPLE_ID || '' }}
+          APPLE_PASSWORD: ${{ env.SIGN_APP == 'true' && secrets.APPLE_PASSWORD || '' }}
+          APPLE_TEAM_ID: ${{ env.SIGN_APP == 'true' && secrets.APPLE_TEAM_ID || '' }}
         run: npx tauri build --target aarch64-apple-darwin --bundles app,dmg,updater
 
       - name: Read release notes

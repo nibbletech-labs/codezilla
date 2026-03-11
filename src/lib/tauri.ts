@@ -229,3 +229,48 @@ export function unregisterCodexThread(threadId: string): Promise<void> {
 export function getCodexBinding(threadId: string): Promise<CodexBindingSnapshot | null> {
   return invoke("get_codex_binding", { threadId });
 }
+
+// Scheduled Jobs (launchd)
+
+export function writeLaunchdEntry(jobId: string, schedule: string, command: string): Promise<void> {
+  return invoke("write_launchd_entry", { jobId, schedule, command });
+}
+
+export function removeLaunchdEntry(jobId: string): Promise<void> {
+  return invoke("remove_launchd_entry", { jobId });
+}
+
+export function listLaunchdEntries(): Promise<string[]> {
+  return invoke("list_launchd_entries");
+}
+
+export interface JobRun {
+  filename: string;
+  timestamp: string;
+  exit_code: number | null;
+  duration_s: number | null;
+}
+
+export function listJobRuns(jobId: string): Promise<JobRun[]> {
+  return invoke("list_job_runs", { jobId });
+}
+
+export function readJobLog(jobId: string, filename: string): Promise<string> {
+  return invoke("read_job_log", { jobId, filename });
+}
+
+export function deleteJobLogs(jobId: string): Promise<void> {
+  return invoke("delete_job_logs", { jobId });
+}
+
+export function revealLogInFinder(jobId: string, filename: string): Promise<void> {
+  return invoke("reveal_log_in_finder", { jobId, filename });
+}
+
+export function runJobNow(jobId: string, command: string): Promise<void> {
+  return invoke("run_job_now", { jobId, command });
+}
+
+export function pruneJobLogs(jobId: string, keep: number): Promise<number> {
+  return invoke("prune_job_logs", { jobId, keep });
+}
