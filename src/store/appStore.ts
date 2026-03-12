@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { Project, Thread, ThreadType, PersistedThread, PreviewTarget, ProjectIcon, ScheduledJob } from "./types";
+import type { Project, Thread, ThreadType, PersistedThread, PreviewTarget, ProjectIcon, ScheduledJob, LaunchPreset } from "./types";
 import { THREAD_LABELS } from "./types";
 import type { TranscriptInfo } from "./transcriptTypes";
 import type { AccentColorId, AppearanceMode } from "../lib/themes";
@@ -50,7 +50,7 @@ interface AppState {
   toggleProjectExpanded: (projectId: string) => void;
 
   // Thread actions
-  addThread: (projectId: string, type: ThreadType) => Thread;
+  addThread: (projectId: string, type: ThreadType, extraArgs?: string | null) => Thread;
   removeThread: (threadId: string) => void;
   setActiveThread: (threadId: string) => void;
   renameThread: (threadId: string, name: string) => void;
@@ -103,6 +103,13 @@ interface AppState {
   getProjectJobs: (projectId: string) => ScheduledJob[];
   loadScheduledJobs: (jobs: ScheduledJob[]) => void;
 
+  // Launch presets
+  launchPresets: LaunchPreset[];
+  addLaunchPreset: (preset: Omit<LaunchPreset, "id">) => LaunchPreset;
+  updateLaunchPreset: (id: string, updates: Partial<Omit<LaunchPreset, "id">>) => void;
+  removeLaunchPreset: (id: string) => void;
+  loadLaunchPresets: (presets: LaunchPreset[]) => void;
+
   // Persistence
   loadProjects: (projects: Project[]) => void;
   loadExpandedPaths: (expandedPaths: Record<string, string[]>) => void;
@@ -132,6 +139,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   skillsManagerOpen: false,
   scheduledJobs: [],
   activeJobId: null,
+  launchPresets: [],
 
   openPreview: (path, line) => {
     set({ previewFile: { kind: "file", path, line } });
@@ -303,7 +311,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     }));
   },
 
-  addThread: (projectId, type) => {
+  addThread: (projectId, type, extraArgs) => {
     let thread: Thread = null!;
     set((s) => {
       const project = s.projects.find((p) => p.id === projectId);
@@ -325,6 +333,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         exitCode: null,
         resuming: false,
         lastActivityAt: Date.now(),
+        extraArgs: extraArgs ?? null,
       };
 
       let newThreads = [...s.threads, thread];
@@ -640,6 +649,35 @@ export const useAppStore = create<AppState>((set, get) => ({
     set({ scheduledJobs: jobs });
   },
 
+  // Launch presets actions
+
+  addLaunchPreset: (presetData) => {
+    const preset: LaunchPreset = {
+      ...presetData,
+      id: crypto.randomUUID(),
+    };
+    set((s) => ({ launchPresets: [...s.launchPresets, preset] }));
+    return preset;
+  },
+
+  updateLaunchPreset: (id, updates) => {
+    set((s) => ({
+      launchPresets: s.launchPresets.map((p) =>
+        p.id === id ? { ...p, ...updates } : p,
+      ),
+    }));
+  },
+
+  removeLaunchPreset: (id) => {
+    set((s) => ({
+      launchPresets: s.launchPresets.filter((p) => p.id !== id),
+    }));
+  },
+
+  loadLaunchPresets: (presets) => {
+    set({ launchPresets: presets });
+  },
+
   loadProjects: (projects) => {
     set({
       projects,
@@ -658,6 +696,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       state: "dormant" as const,
       resuming: false,
       lastActivityAt: pt.lastActivityAt ?? 0,
+      extraArgs: pt.extraArgs ?? null,
     }));
     set({ threads });
   },

@@ -110,6 +110,7 @@ The "parallel agent cockpit" release. Git worktree support makes Codezilla compe
 | 0.4-9 | macOS notifications on thread state change: fire `NSUserNotification` when a thread transitions to `waiting_for_approval`, `error`, or `done`. Configurable per-project (on/off). Sound optional. | Pending | — |
 | 0.4-10 | Cost/token accumulation in transcript parser: extend `TranscriptInfo` with `totalCostUsd`, `totalInputTokens`, `totalOutputTokens` — extracted from `result` events the parser already handles | Pending | — |
 | 0.4-11 | Cost display: show per-thread cost in thread subtitle (e.g. "$0.42 · 12k tokens"), aggregate in status bar (e.g. "$2.80 today") | Pending | — |
+| 0.4-12 | Recommended Setup: settings panel with curated checklist of Claude Code (and eventually Codex/Gemini) QoL tweaks — settings toggles and one-click widget installs (context statusline, autocompact tuning, permission presets, etc). 8 items max, not a marketplace. Also add a "Recommended Setup" section to the User Guide | Pending | [spec](specs/recommended-setup.md) |
 
 ---
 

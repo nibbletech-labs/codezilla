@@ -1200,6 +1200,11 @@ function createTerminalInstance(
         : "codex";
   }
 
+  // Append extra CLI flags from launch preset
+  if (command && thread.extraArgs) {
+    command = `${command} ${thread.extraArgs}`;
+  }
+
   const spawnWithCommand = (cmd: string | undefined) => {
     spawnPty(
       sessionId,

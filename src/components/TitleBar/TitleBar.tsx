@@ -5,6 +5,8 @@ import { useGitDiffStat } from "../../hooks/useGitDiffStat";
 import { useGitBranch } from "../../hooks/useGitBranch";
 import { getLeftPanelWidth } from "../../lib/constants";
 import TitleBarDropdown from "./TitleBarDropdown";
+import ProjectIconComponent from "../ProjectIcon";
+import ThreadIcon from "../LeftPanel/ThreadIcons";
 
 const SIDEBAR_TRANSITION = "220ms cubic-bezier(0.22, 1, 0.36, 1)";
 
@@ -61,7 +63,6 @@ export default function TitleBar() {
     return { x: r.left, y: r.top, width: r.width, height: r.height };
   }, []);
 
-  const projectName = project?.name ?? "Codezilla";
   const leftInset = isFullscreen ? 12 : 78;
   const leftZoneWidth = leftInset + 24;
   const labelTargetLeft = showLeftPanel ? leftPanelWidth + 12 : leftZoneWidth + 16;
@@ -95,13 +96,20 @@ export default function TitleBar() {
         }}
       >
         <div style={styles.centerLabels}>
-          {thread ? (
+          {project && (
+            <span style={styles.projectChip}>
+              <ProjectIconComponent project={project} size={14} />
+              <span style={styles.projectLabel}>{project.name}</span>
+            </span>
+          )}
+          {thread && (
             <>
-              <span style={styles.threadName}>{thread.name}</span>
-              <span style={styles.projectLabel}>{projectName}</span>
+              <span style={styles.separator}>/</span>
+              <span style={styles.threadChip}>
+                <ThreadIcon type={thread.type} />
+                <span style={styles.threadName}>{thread.name}</span>
+              </span>
             </>
-          ) : (
-            <span style={styles.threadName}>{projectName}</span>
           )}
         </div>
         {thread && (
@@ -176,6 +184,7 @@ const styles: Record<string, React.CSSProperties> = {
     display: "flex",
     alignItems: "center",
     backgroundColor: "var(--bg-panel)",
+    borderBottom: "1px solid var(--border-default)",
     userSelect: "none",
     position: "relative",
     zIndex: 100,
@@ -222,18 +231,37 @@ const styles: Record<string, React.CSSProperties> = {
     paddingRight: "12px",
     flexShrink: 0,
   },
-  threadName: {
-    color: "var(--text-primary)",
-    fontSize: "calc(var(--font-size) + 1px)",
-    fontWeight: 600,
-    whiteSpace: "nowrap" as const,
+  projectChip: {
+    display: "inline-flex",
+    alignItems: "center",
+    gap: "4px",
+    minWidth: 0,
     overflow: "hidden",
-    textOverflow: "ellipsis",
   },
   projectLabel: {
     color: "var(--text-secondary)",
     fontSize: "calc(var(--font-size) + 1px)",
     fontWeight: 400,
+    whiteSpace: "nowrap" as const,
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+  },
+  separator: {
+    color: "var(--text-hint)",
+    fontSize: "calc(var(--font-size) + 1px)",
+    flexShrink: 0,
+  },
+  threadChip: {
+    display: "inline-flex",
+    alignItems: "center",
+    gap: "4px",
+    minWidth: 0,
+    overflow: "hidden",
+  },
+  threadName: {
+    color: "var(--text-primary)",
+    fontSize: "calc(var(--font-size) + 1px)",
+    fontWeight: 600,
     whiteSpace: "nowrap" as const,
     overflow: "hidden",
     textOverflow: "ellipsis",

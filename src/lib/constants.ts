@@ -37,7 +37,7 @@ export const FONT_SIZE_MAX = 22;
 export const FONT_SIZE_STEP = 2;
 
 export const PANEL_WIDTHS = {
-  left: 280,
+  left: 320,
   right: 250,
 } as const;
 

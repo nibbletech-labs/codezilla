@@ -17,6 +17,7 @@ export interface Thread {
   exitCode: number | null;
   resuming: boolean;
   lastActivityAt: number;          // epoch ms, 0 = no activity recorded
+  extraArgs: string | null;        // CLI flags from launch preset
 }
 
 // Subset persisted to codezilla-config.json
@@ -29,6 +30,15 @@ export interface PersistedThread {
   codexThreadId: string | null;
   exitCode: number | null;
   lastActivityAt: number;          // epoch ms, 0 = no activity recorded
+  extraArgs: string | null;        // CLI flags from launch preset
+}
+
+export interface LaunchPreset {
+  id: string;
+  name: string;
+  emoji: string;
+  baseType: ThreadType;
+  args: string;                    // freeform CLI flags, e.g. "--model sonnet --thinking medium"
 }
 
 export interface ScheduledJob {
