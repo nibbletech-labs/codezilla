@@ -1,17 +1,15 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect } from "react";
 import { useAppStore } from "../../store/appStore";
 import { scheduleToExpression, buildJobExecution } from "../../lib/scheduleHelpers";
 import type { ScheduleConfig } from "../../lib/scheduleHelpers";
 import type { ThreadType, ScheduledJob } from "../../store/types";
 import { writeLaunchdEntry, runJobNow } from "../../lib/tauri";
 import ThreadIcon from "../LeftPanel/ThreadIcons";
-
-const FORM_WIDTH = 360;
-const FORM_MAX_HEIGHT = 520;
+import { modalStyles, modalKeyframes } from "../../styles/modal";
+import { useModalBackdrop } from "../../hooks/useModalBackdrop";
 
 interface JobCreationFormProps {
   projectId: string;
-  anchor: { x: number; y: number };
   onClose: () => void;
   /** If provided, edit an existing job instead of creating a new one */
   editJob?: ScheduledJob;
@@ -54,12 +52,11 @@ function parseScheduleToConfig(expression: string): ScheduleConfig {
   return { mode: "interval", value: 30, unit: "minutes" };
 }
 
-export default function JobCreationForm({ projectId, anchor, onClose, editJob }: JobCreationFormProps) {
+export default function JobCreationForm({ projectId, onClose, editJob }: JobCreationFormProps) {
+  const backdropStyle = useModalBackdrop();
   const addScheduledJob = useAppStore((s) => s.addScheduledJob);
   const updateScheduledJob = useAppStore((s) => s.updateScheduledJob);
   const projects = useAppStore((s) => s.projects);
-  const formRef = useRef<HTMLDivElement>(null);
-
   const [selectedType, setSelectedType] = useState<ThreadType>(editJob?.type ?? "claude");
   const [name, setName] = useState(editJob?.name ?? "");
   const [command, setCommand] = useState(editJob?.command ?? "");
@@ -144,37 +141,22 @@ export default function JobCreationForm({ projectId, anchor, onClose, editJob }:
     onClose();
   };
 
-  const left = Math.min(anchor.x, window.innerWidth - FORM_WIDTH - 8);
-  const top = Math.min(anchor.y, window.innerHeight - FORM_MAX_HEIGHT - 8);
-
   return (
-    <>
-      {/* Backdrop */}
-      <div style={{ position: "fixed", inset: 0, zIndex: 9998 }} onClick={onClose} />
-
-      <div
-        ref={formRef}
-        style={{
-          position: "fixed",
-          left,
-          top,
-          width: FORM_WIDTH,
-          maxHeight: FORM_MAX_HEIGHT,
-          zIndex: 9999,
-          backgroundColor: "var(--bg-panel)",
-          border: "1px solid var(--border-default)",
-          borderRadius: 6,
-          boxShadow: "0 4px 16px rgba(0,0,0,0.35)",
-          padding: "16px",
-          display: "flex",
-          flexDirection: "column",
-          gap: "14px",
-          overflow: "auto",
-        }}
-      >
-        <div style={{ color: "var(--text-primary)", fontSize: "var(--font-size)", fontWeight: 600 }}>
-          {editJob ? "Edit Scheduled Job" : "New Scheduled Job"}
+    <div
+      style={backdropStyle}
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
+      <style>{modalKeyframes}</style>
+      <div style={{ ...modalStyles.modal, maxWidth: "400px" }}>
+        <div style={modalStyles.header}>
+          <span style={{ fontSize: "var(--font-size)", fontWeight: 600, color: "var(--text-primary)" }}>
+            {editJob ? "Edit Scheduled Job" : "New Scheduled Job"}
+          </span>
+          <button style={modalStyles.closeBtn} onClick={onClose}>&times;</button>
         </div>
+        <div style={{ padding: "16px", display: "flex", flexDirection: "column", gap: "14px", overflow: "auto" }}>
 
         {/* Type toggle buttons */}
         <div style={{ display: "flex", gap: "6px" }}>
@@ -337,8 +319,9 @@ export default function JobCreationForm({ projectId, anchor, onClose, editJob }:
             </button>
           )}
         </div>
+        </div>
       </div>
-    </>
+    </div>
   );
 }
 

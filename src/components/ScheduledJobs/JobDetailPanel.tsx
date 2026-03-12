@@ -174,7 +174,6 @@ export default function JobDetailPanel({ jobId }: JobDetailPanelProps) {
       {editMode && createPortal(
         <JobCreationForm
           projectId={job.projectId}
-          anchor={{ x: window.innerWidth / 2 - 180, y: window.innerHeight / 2 - 260 }}
           onClose={() => {
             setEditMode(false);
             refreshRuns();

@@ -425,7 +425,7 @@ export default function TerminalMultiplexer() {
   const [showScrollButton, setShowScrollButton] = useState(false);
   const [loadingSession, setLoadingSession] = useState<string | null>(null);
   const [iconPickerPos, setIconPickerPos] = useState<{ x: number; y: number } | null>(null);
-  const [jobFormPos, setJobFormPos] = useState<{ x: number; y: number } | null>(null);
+  const [showJobForm, setShowJobForm] = useState(false);
   const scrollCallbackRef = useRef<((atBottom: boolean) => void) | null>(null);
   scrollCallbackRef.current = (atBottom: boolean) => setShowScrollButton(!atBottom);
   const onFirstOutputRef = useRef<((sessionId: string) => void) | null>(null);
@@ -708,7 +708,7 @@ export default function TerminalMultiplexer() {
               ))}
             </div>
           )}
-          {activeProjectId && <ScheduledJobsSummary projectId={activeProjectId} getProjectJobs={getProjectJobs} setActiveJob={setActiveJob} onNewJob={(pos) => setJobFormPos(pos)} />}
+          {activeProjectId && <ScheduledJobsSummary projectId={activeProjectId} getProjectJobs={getProjectJobs} setActiveJob={setActiveJob} onNewJob={() => setShowJobForm(true)} />}
           {activeProjectId && <SkillsPluginsSummary />}
           {activeProjectId && (
             <RemoveProjectButton onClick={() => removeProject(activeProjectId)} />
@@ -731,11 +731,10 @@ export default function TerminalMultiplexer() {
         document.body,
       )}
       {/* Scheduled job creation form */}
-      {activeProjectId && jobFormPos && createPortal(
+      {activeProjectId && showJobForm && createPortal(
         <JobCreationForm
           projectId={activeProjectId}
-          anchor={jobFormPos}
-          onClose={() => setJobFormPos(null)}
+          onClose={() => setShowJobForm(false)}
         />,
         document.body,
       )}
@@ -788,7 +787,7 @@ function ScheduledJobsSummary({
   projectId: string;
   getProjectJobs: (projectId: string) => ScheduledJob[];
   setActiveJob: (jobId: string) => void;
-  onNewJob: (pos: { x: number; y: number }) => void;
+  onNewJob: () => void;
 }) {
   const jobs = getProjectJobs(projectId);
   const [hoverManage, setHoverManage] = useState(false);
@@ -828,10 +827,7 @@ function ScheduledJobsSummary({
         </div>
       )}
       <button
-        onClick={(e) => {
-          const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-          onNewJob({ x: rect.left, y: rect.bottom + 4 });
-        }}
+        onClick={onNewJob}
         onMouseEnter={() => setHoverManage(true)}
         onMouseLeave={() => setHoverManage(false)}
         style={{

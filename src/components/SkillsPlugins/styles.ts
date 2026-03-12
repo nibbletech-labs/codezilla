@@ -1,55 +1,8 @@
 import type React from "react";
+import { modalStyles } from "../../styles/modal";
 
 export const styles = {
-  backdrop: {
-    position: "fixed" as const,
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    backgroundColor: "color-mix(in srgb, var(--bg-primary) 60%, transparent)",
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    zIndex: 1000,
-    animation: "skills-backdrop-in 0.15s ease-out",
-  } as React.CSSProperties,
-  modal: {
-    width: "calc(100vw - 250px - var(--right-panel-width, 250px) - 10px)",
-    maxWidth: "800px",
-    maxHeight: "calc(100vh - 24px - 10px)",
-    backgroundColor: "var(--bg-primary)",
-    borderRadius: "8px",
-    border: "1px solid var(--border-default)",
-    display: "flex",
-    flexDirection: "column" as const,
-    overflow: "hidden",
-    boxShadow: "0 8px 32px rgba(0, 0, 0, 0.5)",
-    animation: "skills-modal-in 0.15s ease-out",
-  } as React.CSSProperties,
-  header: {
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "space-between",
-    padding: "8px 16px",
-    borderBottom: "1px solid var(--border-default)",
-    backgroundColor: "var(--bg-panel)",
-    flexShrink: 0,
-  } as React.CSSProperties,
-  closeBtn: {
-    background: "none",
-    border: "none",
-    color: "var(--text-secondary)",
-    fontSize: "18px",
-    cursor: "pointer",
-    padding: "4px 8px",
-    lineHeight: 1,
-  } as React.CSSProperties,
-  body: {
-    padding: "12px 16px",
-    overflowY: "auto" as const,
-    flex: 1,
-  } as React.CSSProperties,
+  ...modalStyles,
   fetchRow: {
     display: "flex",
     alignItems: "center",

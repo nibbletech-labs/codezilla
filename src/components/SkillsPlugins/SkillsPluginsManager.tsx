@@ -21,6 +21,8 @@ import {
 import { detectDuplicates, reconcileInstalledItems } from "../../lib/skillsSync";
 import { deriveMarketplaceName, groupRegistryItems, groupFetchedItems } from "./helpers";
 import { styles } from "./styles";
+import { modalKeyframes } from "../../styles/modal";
+import { useModalBackdrop } from "../../hooks/useModalBackdrop";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { InstalledRow } from "./InstalledRow";
 import { PluginRow } from "./PluginRow";
@@ -30,6 +32,7 @@ import { FetchGroupRow } from "./FetchGroupRow";
 import { TargetDropdown } from "./TargetDropdown";
 
 export default function SkillsPluginsManager() {
+  const backdropStyle = useModalBackdrop();
   const closeManager = useAppStore((s) => s.closeSkillsManager);
   const activeProject = useAppStore((s) => s.getActiveProject());
 
@@ -856,15 +859,12 @@ export default function SkillsPluginsManager() {
 
   return (
     <div
-      style={styles.backdrop}
+      style={backdropStyle}
       onClick={(e) => {
         if (e.target === e.currentTarget) closeManager();
       }}
     >
-      <style>{`
-        @keyframes skills-backdrop-in { from { opacity: 0; } to { opacity: 1; } }
-        @keyframes skills-modal-in { from { opacity: 0; transform: scale(0.96); } to { opacity: 1; transform: scale(1); } }
-      `}</style>
+      <style>{modalKeyframes}</style>
       <div style={styles.modal}>
         {/* Header */}
         <div style={styles.header}>
