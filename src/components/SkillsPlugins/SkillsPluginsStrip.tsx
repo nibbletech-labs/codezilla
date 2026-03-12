@@ -6,22 +6,32 @@ export default function SkillsPluginsStrip() {
   const activeProject = useAppStore((s) => s.getActiveProject());
   const openManager = useAppStore((s) => s.openSkillsManager);
   const installations = useSkillsPluginsStore((s) => s.installations);
+  const scanResults = useSkillsPluginsStore((s) => s.scanResults);
   const sources = useSkillsPluginsStore((s) => s.sources);
   const [hovered, setHovered] = useState(false);
 
+  // Managed installations
   const all = Object.values(installations);
-  const relevant = all.filter(
+  const managedRelevant = all.filter(
     (i) =>
       i.target === "Global" ||
       (i.target === "Project" && i.projectPath === activeProject?.path),
   );
 
-  if (relevant.length === 0) return null;
+  // Unmanaged items found on disk
+  const unmanagedRelevant = scanResults.filter((s) => !s.managed);
 
-  // Count by type
+  const totalCount = managedRelevant.length + unmanagedRelevant.length;
+  if (totalCount === 0) return null;
+
+  // Count by type (combine managed + unmanaged)
   const counts: Record<string, number> = {};
-  for (const item of relevant) {
+  for (const item of managedRelevant) {
     const key = item.itemType.toLowerCase() + "s";
+    counts[key] = (counts[key] ?? 0) + 1;
+  }
+  for (const item of unmanagedRelevant) {
+    const key = item.item_type.toLowerCase() + "s";
     counts[key] = (counts[key] ?? 0) + 1;
   }
 
@@ -29,7 +39,7 @@ export default function SkillsPluginsStrip() {
     .map(([type, count]) => `${count} ${type}`)
     .join(" · ");
 
-  const relevantSourceIds = new Set(relevant.map((i) => i.sourceId));
+  const relevantSourceIds = new Set(managedRelevant.map((i) => i.sourceId));
   const updateCount = Object.values(sources).filter(
     (s) => s.updateAvailable && relevantSourceIds.has(s.id),
   ).length;
@@ -53,7 +63,7 @@ export default function SkillsPluginsStrip() {
       <span>{countParts}</span>
       {updateCount > 0 && (
         <span style={{ color: "var(--accent)", marginLeft: "8px" }}>
-          ● {updateCount} update{updateCount > 1 ? "s" : ""}
+          {updateCount} update{updateCount > 1 ? "s" : ""}
         </span>
       )}
     </div>

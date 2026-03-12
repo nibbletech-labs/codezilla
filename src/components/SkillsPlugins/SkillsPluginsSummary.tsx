@@ -8,17 +8,33 @@ export default function SkillsPluginsSummary() {
   const activeProject = useAppStore((s) => s.getActiveProject());
   const openManager = useAppStore((s) => s.openSkillsManager);
   const installations = useSkillsPluginsStore((s) => s.installations);
+  const scanResults = useSkillsPluginsStore((s) => s.scanResults);
   const [hoverManage, setHoverManage] = useState(false);
 
+  // Managed installations relevant to the current context
   const all = Object.values(installations);
-  const relevant = all.filter(
+  const managedRelevant = all.filter(
     (i) =>
       i.target === "Global" ||
       (i.target === "Project" && i.projectPath === activeProject?.path),
   );
 
-  const displayed = relevant.slice(0, MAX_DISPLAY);
-  const overflow = relevant.length - MAX_DISPLAY;
+  // Unmanaged items found on disk (not tracked by registry)
+  const unmanagedRelevant = scanResults.filter(
+    (s) =>
+      !s.managed &&
+      (s.scope === "Global" ||
+        (s.scope === "Project")),
+  );
+
+  // Combine for display: managed first, then unmanaged
+  const displayItems: { name: string; type: string; key: string }[] = [
+    ...managedRelevant.map((i) => ({ name: i.itemName, type: i.itemType, key: `m-${i.id}` })),
+    ...unmanagedRelevant.map((s) => ({ name: s.name, type: s.item_type, key: `u-${s.path}` })),
+  ];
+
+  const displayed = displayItems.slice(0, MAX_DISPLAY);
+  const overflow = displayItems.length - MAX_DISPLAY;
 
   return (
     <div style={{ marginTop: "16px", textAlign: "center" }}>
@@ -34,7 +50,7 @@ export default function SkillsPluginsSummary() {
       >
         Skills & Plugins
       </div>
-      {relevant.length > 0 ? (
+      {displayItems.length > 0 ? (
         <div
           style={{
             fontSize: "var(--font-size-sm)",
@@ -42,10 +58,10 @@ export default function SkillsPluginsSummary() {
             lineHeight: 1.6,
           }}
         >
-          {displayed.map((inst, i) => (
-            <span key={inst.id}>
-              <span style={{ color: "var(--text-primary)" }}>{inst.itemName}</span>
-              {inst.itemType === "Plugin" && (
+          {displayed.map((item, i) => (
+            <span key={item.key}>
+              <span style={{ color: "var(--text-primary)" }}>{item.name}</span>
+              {item.type === "Plugin" && (
                 <span style={{ fontSize: "10px", color: "var(--text-secondary)", marginLeft: "2px" }}>
                   (plugin)
                 </span>

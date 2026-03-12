@@ -447,18 +447,23 @@ pub fn scan_installed_items(project_path: Option<String>) -> Result<Vec<ScannedI
         scan_claude_dir(&project_base, InstallTarget::Project, &mut items);
     }
 
+    // Scan installed plugins from installed_plugins.json
+    let plugins_json_path = format!("{}/.claude/plugins/installed_plugins.json", home);
+    scan_installed_plugins(&plugins_json_path, &mut items);
+
     Ok(items)
 }
 
 fn scan_claude_dir(base: &str, scope: InstallTarget, items: &mut Vec<ScannedItem>) {
-    // Skills: <base>/skills/<name>/SKILL.md
+    // Skills: <base>/skills/<name>/SKILL.md — only include dirs containing SKILL.md
     let skills_dir = format!("{}/skills", base);
     if let Ok(entries) = std::fs::read_dir(&skills_dir) {
         for entry in entries.flatten() {
-            if entry.path().is_dir() {
+            let dir = entry.path();
+            if dir.is_dir() && dir.join("SKILL.md").is_file() {
                 let name = entry.file_name().to_string_lossy().to_string();
                 items.push(ScannedItem {
-                    path: entry.path().to_string_lossy().to_string(),
+                    path: dir.to_string_lossy().to_string(),
                     item_type: ItemType::Skill,
                     name,
                     scope: scope.clone(),
@@ -507,6 +512,58 @@ fn scan_claude_dir(base: &str, scope: InstallTarget, items: &mut Vec<ScannedItem
                     managed: false,
                 });
             }
+        }
+    }
+}
+
+fn scan_installed_plugins(json_path: &str, items: &mut Vec<ScannedItem>) {
+    let content = match std::fs::read_to_string(json_path) {
+        Ok(c) => c,
+        Err(_) => return, // No installed_plugins.json — nothing to scan
+    };
+
+    let json: serde_json::Value = match serde_json::from_str(&content) {
+        Ok(v) => v,
+        Err(e) => {
+            warn!("Failed to parse installed_plugins.json: {}", e);
+            return;
+        }
+    };
+
+    let plugins = match json.get("plugins").and_then(|v| v.as_object()) {
+        Some(p) => p,
+        None => return,
+    };
+
+    for (plugin_key, installs) in plugins {
+        let installs = match installs.as_array() {
+            Some(a) => a,
+            None => continue,
+        };
+
+        // plugin_key is like "document-skills@anthropic-agent-skills"
+        let name = plugin_key.split('@').next().unwrap_or(plugin_key).to_string();
+
+        for install in installs {
+            let scope_str = install.get("scope").and_then(|v| v.as_str()).unwrap_or("user");
+            let scope = if scope_str == "project" {
+                InstallTarget::Project
+            } else {
+                InstallTarget::Global
+            };
+            let install_path = install
+                .get("installPath")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+
+            items.push(ScannedItem {
+                path: install_path,
+                item_type: ItemType::Plugin,
+                name: name.clone(),
+                scope,
+                managed: false,
+            });
         }
     }
 }

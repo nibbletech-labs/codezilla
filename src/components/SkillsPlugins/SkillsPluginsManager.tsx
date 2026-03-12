@@ -2,6 +2,7 @@ import { useState, useCallback, useEffect, useRef } from "react";
 import { useAppStore } from "../../store/appStore";
 import { useSkillsPluginsStore } from "../../store/skillsPluginsStore";
 import type { DetectedItem, Installation, InstallTarget } from "../../store/skillsPluginsTypes";
+import type { ScannedItem } from "../../store/skillsPluginsTypes";
 import {
   fetchGitRepo,
   detectInstallableItems,
@@ -9,6 +10,7 @@ import {
   toInstallation,
   removeItem,
   cleanupFetch,
+  uninstallPlugin,
 } from "../../lib/skillsTauri";
 
 export default function SkillsPluginsManager() {
@@ -225,6 +227,25 @@ export default function SkillsPluginsManager() {
       }
     },
     [removeInstallation],
+  );
+
+  const handleRemoveScanned = useCallback(
+    async (item: ScannedItem) => {
+      try {
+        if (item.item_type === "Plugin") {
+          const cliScope = item.scope === "Global" ? "user" : "project";
+          await uninstallPlugin(item.name, cliScope);
+        } else {
+          await removeItem(item.path, item.item_type);
+        }
+        // Remove from scan results
+        const store = useSkillsPluginsStore.getState();
+        store.setScanResults(store.scanResults.filter((s) => s.path !== item.path));
+      } catch (e: any) {
+        setError(`Remove failed: ${e?.toString()}`);
+      }
+    },
+    [],
   );
 
   const handleRemoveSource = useCallback(
@@ -463,19 +484,37 @@ export default function SkillsPluginsManager() {
             </div>
           )}
 
-          {/* Unmanaged items */}
-          {scanResults.length > 0 && (
+          {/* Marketplace plugins (from installed_plugins.json) */}
+          {scanResults.filter((s) => s.item_type === "Plugin").length > 0 && (
+            <div style={styles.section}>
+              <div style={styles.sectionTitle}>Marketplace Plugins</div>
+              {scanResults
+                .filter((s) => s.item_type === "Plugin")
+                .map((item, i) => (
+                  <ScannedRow
+                    key={`plugin-${i}`}
+                    item={item}
+                    label="marketplace"
+                    onRemove={() => handleRemoveScanned(item)}
+                  />
+                ))}
+            </div>
+          )}
+
+          {/* Unmanaged items (skills/agents/commands not tracked by registry) */}
+          {scanResults.filter((s) => s.item_type !== "Plugin").length > 0 && (
             <div style={styles.section}>
               <div style={styles.sectionTitle}>Unmanaged</div>
-              {scanResults.map((item, i) => (
-                <div key={i} style={styles.itemRow}>
-                  <span>{item.name}</span>
-                  <TypeBadge type={item.item_type} />
-                  <span style={{ color: "var(--text-secondary)", fontSize: "var(--font-size-sm)", marginLeft: "auto" }}>
-                    {item.scope === "Global" ? "global" : "project"} · unmanaged
-                  </span>
-                </div>
-              ))}
+              {scanResults
+                .filter((s) => s.item_type !== "Plugin")
+                .map((item, i) => (
+                  <ScannedRow
+                    key={`unmanaged-${i}`}
+                    item={item}
+                    label="unmanaged"
+                    onRemove={() => handleRemoveScanned(item)}
+                  />
+                ))}
             </div>
           )}
 
@@ -607,6 +646,41 @@ function InstalledRow({
       </span>
       <span style={{ color: "var(--text-secondary)", fontSize: "var(--font-size-sm)" }}>
         {sourceLabel}
+      </span>
+      <button
+        style={{
+          ...styles.removeBtn,
+          color: hoverRemove ? "#f44" : "var(--text-secondary)",
+          borderColor: hoverRemove ? "#f44" : "var(--border-medium)",
+        }}
+        onMouseEnter={() => setHoverRemove(true)}
+        onMouseLeave={() => setHoverRemove(false)}
+        onClick={onRemove}
+      >
+        Remove
+      </button>
+    </div>
+  );
+}
+
+function ScannedRow({
+  item,
+  label,
+  onRemove,
+}: {
+  item: ScannedItem;
+  label: string;
+  onRemove: () => void;
+}) {
+  const [hoverRemove, setHoverRemove] = useState(false);
+  return (
+    <div style={styles.itemRow}>
+      <span style={{ flex: 1 }}>
+        {item.name}
+        <TypeBadge type={item.item_type} />
+      </span>
+      <span style={{ color: "var(--text-secondary)", fontSize: "var(--font-size-sm)" }}>
+        {item.scope === "Global" ? "global" : "project"} · {label}
       </span>
       <button
         style={{
