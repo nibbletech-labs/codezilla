@@ -42,6 +42,8 @@ export interface ScannedItem {
   name: string;
   scope: InstallTarget;
   managed: boolean;
+  marketplace?: string;
+  parent_plugin_name?: string;
 }
 
 export interface FetchResult {

@@ -467,7 +467,9 @@ fn scan_claude_dir(base: &str, scope: InstallTarget, items: &mut Vec<ScannedItem
                     item_type: ItemType::Skill,
                     name,
                     scope: scope.clone(),
-                    managed: false, // Frontend will cross-reference
+                    managed: false,
+                    marketplace: None,
+                    parent_plugin_name: None,
                 });
             }
         }
@@ -489,6 +491,8 @@ fn scan_claude_dir(base: &str, scope: InstallTarget, items: &mut Vec<ScannedItem
                     name,
                     scope: scope.clone(),
                     managed: false,
+                    marketplace: None,
+                    parent_plugin_name: None,
                 });
             }
         }
@@ -510,6 +514,8 @@ fn scan_claude_dir(base: &str, scope: InstallTarget, items: &mut Vec<ScannedItem
                     name,
                     scope: scope.clone(),
                     managed: false,
+                    marketplace: None,
+                    parent_plugin_name: None,
                 });
             }
         }
@@ -519,7 +525,7 @@ fn scan_claude_dir(base: &str, scope: InstallTarget, items: &mut Vec<ScannedItem
 fn scan_installed_plugins(json_path: &str, items: &mut Vec<ScannedItem>) {
     let content = match std::fs::read_to_string(json_path) {
         Ok(c) => c,
-        Err(_) => return, // No installed_plugins.json — nothing to scan
+        Err(_) => return,
     };
 
     let json: serde_json::Value = match serde_json::from_str(&content) {
@@ -542,7 +548,9 @@ fn scan_installed_plugins(json_path: &str, items: &mut Vec<ScannedItem>) {
         };
 
         // plugin_key is like "document-skills@anthropic-agent-skills"
-        let name = plugin_key.split('@').next().unwrap_or(plugin_key).to_string();
+        let parts: Vec<&str> = plugin_key.splitn(2, '@').collect();
+        let name = parts[0].to_string();
+        let marketplace = parts.get(1).map(|s| s.to_string());
 
         for install in installs {
             let scope_str = install.get("scope").and_then(|v| v.as_str()).unwrap_or("user");
@@ -558,12 +566,135 @@ fn scan_installed_plugins(json_path: &str, items: &mut Vec<ScannedItem>) {
                 .to_string();
 
             items.push(ScannedItem {
-                path: install_path,
+                path: install_path.clone(),
                 item_type: ItemType::Plugin,
                 name: name.clone(),
-                scope,
+                scope: scope.clone(),
                 managed: false,
+                marketplace: marketplace.clone(),
+                parent_plugin_name: None,
             });
+
+            // Scan sub-items inside the plugin cache dir
+            if !install_path.is_empty() {
+                scan_plugin_subitems(&install_path, &name, &scope, &marketplace, items);
+            }
+        }
+    }
+}
+
+/// Scan a plugin's install directory for skills, agents, and commands within it.
+fn scan_plugin_subitems(
+    base: &str,
+    plugin_name: &str,
+    scope: &InstallTarget,
+    marketplace: &Option<String>,
+    items: &mut Vec<ScannedItem>,
+) {
+    let base_path = Path::new(base);
+    if !base_path.is_dir() {
+        return;
+    }
+
+    // Also check inside .claude-plugin/ subdirectory (common plugin layout)
+    let claude_plugin_dir = base_path.join(".claude-plugin");
+    let search_roots: Vec<&Path> = if claude_plugin_dir.is_dir() {
+        vec![base_path, &claude_plugin_dir]
+    } else {
+        vec![base_path]
+    };
+
+    for root in search_roots {
+        // Skills: look for */SKILL.md recursively (up to 3 levels deep)
+        scan_plugin_skills(root, root, plugin_name, scope, marketplace, items, 0);
+
+        // Agents: look for agents/*.md
+        let agents_dir = root.join("agents");
+        if let Ok(entries) = std::fs::read_dir(&agents_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_file() && path.extension().map_or(false, |e| e == "md") {
+                    let name = path
+                        .file_stem()
+                        .map(|s| s.to_string_lossy().to_string())
+                        .unwrap_or_default();
+                    items.push(ScannedItem {
+                        path: path.to_string_lossy().to_string(),
+                        item_type: ItemType::Agent,
+                        name,
+                        scope: scope.clone(),
+                        managed: false,
+                        marketplace: marketplace.clone(),
+                        parent_plugin_name: Some(plugin_name.to_string()),
+                    });
+                }
+            }
+        }
+
+        // Commands: look for commands/*.md
+        let commands_dir = root.join("commands");
+        if let Ok(entries) = std::fs::read_dir(&commands_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_file() && path.extension().map_or(false, |e| e == "md") {
+                    let name = path
+                        .file_stem()
+                        .map(|s| s.to_string_lossy().to_string())
+                        .unwrap_or_default();
+                    items.push(ScannedItem {
+                        path: path.to_string_lossy().to_string(),
+                        item_type: ItemType::Command,
+                        name,
+                        scope: scope.clone(),
+                        managed: false,
+                        marketplace: marketplace.clone(),
+                        parent_plugin_name: Some(plugin_name.to_string()),
+                    });
+                }
+            }
+        }
+    }
+}
+
+fn scan_plugin_skills(
+    dir: &Path,
+    root: &Path,
+    plugin_name: &str,
+    scope: &InstallTarget,
+    marketplace: &Option<String>,
+    items: &mut Vec<ScannedItem>,
+    depth: usize,
+) {
+    if depth > 3 {
+        return;
+    }
+    let entries = match std::fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(_) => return,
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        // Skip .git, agents, commands directories
+        let dir_name = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+        if dir_name == ".git" || dir_name == "agents" || dir_name == "commands" || dir_name == "node_modules" {
+            continue;
+        }
+        if path.join("SKILL.md").is_file() {
+            items.push(ScannedItem {
+                path: path.to_string_lossy().to_string(),
+                item_type: ItemType::Skill,
+                name: dir_name,
+                scope: scope.clone(),
+                managed: false,
+                marketplace: marketplace.clone(),
+                parent_plugin_name: Some(plugin_name.to_string()),
+            });
+        } else {
+            // Recurse into subdirectories
+            scan_plugin_skills(&path, root, plugin_name, scope, marketplace, items, depth + 1);
         }
     }
 }

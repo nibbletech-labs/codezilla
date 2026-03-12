@@ -248,6 +248,80 @@ export default function SkillsPluginsManager() {
     [],
   );
 
+  // "Link source" / Claim flow for unmanaged items
+  const [linkingItem, setLinkingItem] = useState<ScannedItem | null>(null);
+  const [linkUrl, setLinkUrl] = useState("");
+  const [linkState, setLinkState] = useState<"idle" | "fetching" | "detecting">("idle");
+
+  const handleLinkSource = useCallback((item: ScannedItem) => {
+    setLinkingItem(item);
+    setLinkUrl("");
+    setLinkState("idle");
+    setError(null);
+  }, []);
+
+  const handleLinkConfirm = useCallback(async () => {
+    if (!linkingItem || !linkUrl.trim()) return;
+    setError(null);
+    setLinkState("fetching");
+
+    try {
+      const result = await fetchGitRepo(linkUrl.trim());
+      setLinkState("detecting");
+      const detected = await detectInstallableItems(result.temp_path);
+
+      // Find matching item by name
+      const match = detected.find(
+        (d) => d.name.toLowerCase() === linkingItem.name.toLowerCase() && d.item_type === linkingItem.item_type,
+      );
+      if (!match) {
+        setError(`No ${linkingItem.item_type.toLowerCase()} named "${linkingItem.name}" found in this repository.`);
+        cleanupFetch(result.temp_path).catch(console.error);
+        setLinkState("idle");
+        return;
+      }
+
+      // Create source + installation record pointing to existing files
+      const sourceId = crypto.randomUUID();
+      addSource({
+        id: sourceId,
+        url: linkUrl.trim(),
+        lastFetchedAt: Date.now(),
+        lastCheckedAt: Date.now(),
+        latestCommitSha: result.commit_sha,
+        updateAvailable: false,
+        detectedItems: detected,
+      });
+
+      addInstallation({
+        id: crypto.randomUUID(),
+        sourceId,
+        itemRepoPath: match.repo_path,
+        itemType: match.item_type,
+        itemName: match.name,
+        itemDescription: match.description,
+        target: linkingItem.scope,
+        projectPath: linkingItem.scope === "Project" ? activeProject?.path : undefined,
+        installPath: linkingItem.path,
+        installedAt: Date.now(),
+        installedCommitSha: result.commit_sha,
+        parentPluginName: match.parent_plugin_name,
+      });
+
+      // Remove from unmanaged scan results
+      const store = useSkillsPluginsStore.getState();
+      store.setScanResults(store.scanResults.filter((s) => s.path !== linkingItem.path));
+
+      cleanupFetch(result.temp_path).catch(console.error);
+      setLinkingItem(null);
+      setLinkUrl("");
+      setLinkState("idle");
+    } catch (e: any) {
+      setError(`Link failed: ${e?.toString()}`);
+      setLinkState("idle");
+    }
+  }, [linkingItem, linkUrl, activeProject, addSource, addInstallation]);
+
   const handleRemoveSource = useCallback(
     (sourceId: string) => {
       removeSource(sourceId);
@@ -491,30 +565,64 @@ export default function SkillsPluginsManager() {
               {scanResults
                 .filter((s) => s.item_type === "Plugin")
                 .map((item, i) => (
-                  <ScannedRow
+                  <PluginRow
                     key={`plugin-${i}`}
-                    item={item}
-                    label="marketplace"
+                    plugin={item}
+                    subItems={scanResults.filter(
+                      (s) => s.parent_plugin_name === item.name && s.item_type !== "Plugin",
+                    )}
                     onRemove={() => handleRemoveScanned(item)}
                   />
                 ))}
             </div>
           )}
 
-          {/* Unmanaged items (skills/agents/commands not tracked by registry) */}
-          {scanResults.filter((s) => s.item_type !== "Plugin").length > 0 && (
+          {/* Unmanaged items (skills/agents/commands not tracked by registry, not inside a plugin) */}
+          {scanResults.filter((s) => s.item_type !== "Plugin" && !s.parent_plugin_name).length > 0 && (
             <div style={styles.section}>
               <div style={styles.sectionTitle}>Unmanaged</div>
               {scanResults
-                .filter((s) => s.item_type !== "Plugin")
+                .filter((s) => s.item_type !== "Plugin" && !s.parent_plugin_name)
                 .map((item, i) => (
                   <ScannedRow
                     key={`unmanaged-${i}`}
                     item={item}
                     label="unmanaged"
                     onRemove={() => handleRemoveScanned(item)}
+                    onLink={() => handleLinkSource(item)}
                   />
                 ))}
+              {linkingItem && (
+                <div style={{ padding: "8px 0", borderTop: "1px solid var(--border-subtle)", marginTop: "4px" }}>
+                  <div style={{ fontSize: "var(--font-size-sm)", color: "var(--text-secondary)", marginBottom: "6px" }}>
+                    Link "{linkingItem.name}" to a git source:
+                  </div>
+                  <div style={{ display: "flex", gap: "6px", alignItems: "center" }}>
+                    <input
+                      style={styles.input}
+                      value={linkUrl}
+                      onChange={(e) => setLinkUrl(e.target.value)}
+                      onKeyDown={(e) => { if (e.key === "Enter") handleLinkConfirm(); }}
+                      placeholder="https://github.com/user/repo"
+                      spellCheck={false}
+                      autoFocus
+                    />
+                    <button
+                      style={styles.actionBtn}
+                      onClick={handleLinkConfirm}
+                      disabled={linkState !== "idle" || !linkUrl.trim()}
+                    >
+                      {linkState === "fetching" ? "Cloning..." : linkState === "detecting" ? "Matching..." : "Link"}
+                    </button>
+                    <button
+                      style={styles.actionBtn}
+                      onClick={() => { setLinkingItem(null); setLinkUrl(""); }}
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
           )}
 
@@ -663,14 +771,75 @@ function InstalledRow({
   );
 }
 
+function PluginRow({
+  plugin,
+  subItems,
+  onRemove,
+}: {
+  plugin: ScannedItem;
+  subItems: ScannedItem[];
+  onRemove: () => void;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const [hoverRemove, setHoverRemove] = useState(false);
+  return (
+    <>
+      <div style={styles.itemRow}>
+        {subItems.length > 0 ? (
+          <span
+            onClick={() => setExpanded(!expanded)}
+            style={{ cursor: "pointer", marginRight: "4px", fontSize: "11px", userSelect: "none" }}
+          >
+            {expanded ? "▼" : "▶"}
+          </span>
+        ) : (
+          <span style={{ marginRight: "4px", width: "11px", display: "inline-block" }} />
+        )}
+        <span style={{ flex: 1 }}>
+          {plugin.name}
+          <TypeBadge type="Plugin" />
+        </span>
+        <span style={{ color: "var(--text-secondary)", fontSize: "var(--font-size-sm)" }}>
+          {plugin.scope === "Global" ? "global" : "project"}
+          {plugin.marketplace && <> · {plugin.marketplace}</>}
+        </span>
+        <button
+          style={{
+            ...styles.removeBtn,
+            color: hoverRemove ? "#f44" : "var(--text-secondary)",
+            borderColor: hoverRemove ? "#f44" : "var(--border-medium)",
+          }}
+          onMouseEnter={() => setHoverRemove(true)}
+          onMouseLeave={() => setHoverRemove(false)}
+          onClick={onRemove}
+        >
+          Remove
+        </button>
+      </div>
+      {expanded &&
+        subItems.map((sub, j) => (
+          <div key={j} style={{ ...styles.itemRow, paddingLeft: "24px" }}>
+            <span style={{ color: "var(--text-secondary)", marginRight: "4px" }}>├</span>
+            <span style={{ flex: 1 }}>
+              {sub.name}
+              <TypeBadge type={sub.item_type} />
+            </span>
+          </div>
+        ))}
+    </>
+  );
+}
+
 function ScannedRow({
   item,
   label,
   onRemove,
+  onLink,
 }: {
   item: ScannedItem;
   label: string;
   onRemove: () => void;
+  onLink?: () => void;
 }) {
   const [hoverRemove, setHoverRemove] = useState(false);
   return (
@@ -682,6 +851,11 @@ function ScannedRow({
       <span style={{ color: "var(--text-secondary)", fontSize: "var(--font-size-sm)" }}>
         {item.scope === "Global" ? "global" : "project"} · {label}
       </span>
+      {onLink && (
+        <button style={styles.smallBtn} onClick={onLink}>
+          Link source
+        </button>
+      )}
       <button
         style={{
           ...styles.removeBtn,

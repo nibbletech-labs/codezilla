@@ -60,6 +60,8 @@ pub struct ScannedItem {
     pub name: String,
     pub scope: InstallTarget,
     pub managed: bool,
+    pub marketplace: Option<String>,
+    pub parent_plugin_name: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
