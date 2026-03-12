@@ -104,12 +104,17 @@ export default function FilePreview({ filePath, line, onClose }: FilePreviewProp
     setImageDataUrl(null);
     setError(null);
 
+    if (!projectPath) {
+      setError("No active project");
+      return;
+    }
+
     if (category === "text") {
-      readFile(filePath, projectPath ?? undefined)
+      readFile(filePath, projectPath)
         .then(setContent)
         .catch((err) => setError(String(err)));
     } else if (category === "image") {
-      readFileBase64(filePath, projectPath ?? undefined)
+      readFileBase64(filePath, projectPath)
         .then((b64) => {
           const mime = getMimeType(filePath);
           setImageDataUrl(`data:${mime};base64,${b64}`);
@@ -348,7 +353,7 @@ export default function FilePreview({ filePath, line, onClose }: FilePreviewProp
             </span>
             <button
               style={styles.closeButton}
-              onClick={() => revealInFinder(filePath, projectPath ?? undefined)}
+              onClick={() => projectPath && revealInFinder(filePath, projectPath)}
               title="Reveal in Finder"
             >
               <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">

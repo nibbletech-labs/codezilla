@@ -45,8 +45,10 @@ pub struct FileEntry {
 }
 
 #[tauri::command]
-pub fn read_directory(path: String) -> Result<Vec<FileEntry>, String> {
+pub fn read_directory(path: String, project_root: String) -> Result<Vec<FileEntry>, String> {
     let canonical = canonicalize_path(&path)?;
+    let canonical_root = canonicalize_path(&project_root)?;
+    validate_within_root(&canonical, &canonical_root)?;
     let root = canonical.as_path();
     if !root.is_dir() {
         return Err(format!("Not a directory: {}", path));
@@ -92,8 +94,10 @@ pub fn read_directory(path: String) -> Result<Vec<FileEntry>, String> {
 /// Recursively scan all files in a directory, respecting .gitignore.
 /// Returns just the absolute paths (no directories) for building a file index.
 #[tauri::command]
-pub fn scan_all_files(path: String) -> Result<Vec<String>, String> {
+pub fn scan_all_files(path: String, project_root: String) -> Result<Vec<String>, String> {
     let canonical = canonicalize_path(&path)?;
+    let canonical_root = canonicalize_path(&project_root)?;
+    validate_within_root(&canonical, &canonical_root)?;
     let root = canonical.as_path();
     if !root.is_dir() {
         return Err(format!("Not a directory: {}", path));
@@ -122,13 +126,10 @@ pub fn path_exists(path: String) -> bool {
 const MAX_FILE_SIZE: u64 = 512 * 1024;
 
 #[tauri::command]
-pub fn read_file(path: String, project_root: Option<String>) -> Result<String, String> {
+pub fn read_file(path: String, project_root: String) -> Result<String, String> {
     let file_path = canonicalize_path(&path)?;
-
-    if let Some(ref root) = project_root {
-        let canonical_root = canonicalize_path(root)?;
-        validate_within_root(&file_path, &canonical_root)?;
-    }
+    let canonical_root = canonicalize_path(&project_root)?;
+    validate_within_root(&file_path, &canonical_root)?;
 
     if !file_path.is_file() {
         return Err(format!("Not a file: {}", path));
@@ -155,13 +156,10 @@ pub fn read_file(path: String, project_root: Option<String>) -> Result<String, S
 const MAX_IMAGE_SIZE: u64 = 50 * 1024 * 1024; // 50 MB
 
 #[tauri::command]
-pub fn read_file_base64(path: String, project_root: Option<String>) -> Result<String, String> {
+pub fn read_file_base64(path: String, project_root: String) -> Result<String, String> {
     let file_path = canonicalize_path(&path)?;
-
-    if let Some(ref root) = project_root {
-        let canonical_root = canonicalize_path(root)?;
-        validate_within_root(&file_path, &canonical_root)?;
-    }
+    let canonical_root = canonicalize_path(&project_root)?;
+    validate_within_root(&file_path, &canonical_root)?;
 
     if !file_path.is_file() {
         return Err(format!("Not a file: {}", path));
@@ -186,13 +184,10 @@ pub fn read_file_base64(path: String, project_root: Option<String>) -> Result<St
 }
 
 #[tauri::command]
-pub fn preview_file(path: String, project_root: Option<String>) -> Result<(), String> {
+pub fn preview_file(path: String, project_root: String) -> Result<(), String> {
     let file_path = canonicalize_path(&path)?;
-
-    if let Some(ref root) = project_root {
-        let canonical_root = canonicalize_path(root)?;
-        validate_within_root(&file_path, &canonical_root)?;
-    }
+    let canonical_root = canonicalize_path(&project_root)?;
+    validate_within_root(&file_path, &canonical_root)?;
 
     if !file_path.exists() {
         return Err(format!("File not found: {}", path));
@@ -211,13 +206,10 @@ pub fn preview_file(path: String, project_root: Option<String>) -> Result<(), St
 }
 
 #[tauri::command]
-pub fn reveal_in_finder(path: String, project_root: Option<String>) -> Result<(), String> {
+pub fn reveal_in_finder(path: String, project_root: String) -> Result<(), String> {
     let file_path = canonicalize_path(&path)?;
-
-    if let Some(ref root) = project_root {
-        let canonical_root = canonicalize_path(root)?;
-        validate_within_root(&file_path, &canonical_root)?;
-    }
+    let canonical_root = canonicalize_path(&project_root)?;
+    validate_within_root(&file_path, &canonical_root)?;
 
     if !file_path.exists() {
         return Err(format!("Path not found: {}", path));
@@ -233,13 +225,10 @@ pub fn reveal_in_finder(path: String, project_root: Option<String>) -> Result<()
 }
 
 #[tauri::command]
-pub fn open_in_default_app(path: String, project_root: Option<String>) -> Result<(), String> {
+pub fn open_in_default_app(path: String, project_root: String) -> Result<(), String> {
     let file_path = canonicalize_path(&path)?;
-
-    if let Some(ref root) = project_root {
-        let canonical_root = canonicalize_path(root)?;
-        validate_within_root(&file_path, &canonical_root)?;
-    }
+    let canonical_root = canonicalize_path(&project_root)?;
+    validate_within_root(&file_path, &canonical_root)?;
 
     if !file_path.exists() {
         return Err(format!("Path not found: {}", path));

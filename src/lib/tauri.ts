@@ -73,24 +73,24 @@ export interface FileEntry {
   is_dir: boolean;
 }
 
-export function readDirectory(path: string): Promise<FileEntry[]> {
-  return invoke("read_directory", { path });
+export function readDirectory(path: string, projectRoot: string): Promise<FileEntry[]> {
+  return invoke("read_directory", { path, projectRoot });
 }
 
 /** Recursively scan all files in a directory (respects .gitignore). Returns absolute paths. */
-export function scanAllFiles(path: string): Promise<string[]> {
-  return invoke("scan_all_files", { path });
+export function scanAllFiles(path: string, projectRoot: string): Promise<string[]> {
+  return invoke("scan_all_files", { path, projectRoot });
 }
 
-export function readFile(path: string, projectRoot?: string): Promise<string> {
+export function readFile(path: string, projectRoot: string): Promise<string> {
   return invoke("read_file", { path, projectRoot });
 }
 
-export function readFileBase64(path: string, projectRoot?: string): Promise<string> {
+export function readFileBase64(path: string, projectRoot: string): Promise<string> {
   return invoke("read_file_base64", { path, projectRoot });
 }
 
-export function previewFile(path: string, projectRoot?: string): Promise<void> {
+export function previewFile(path: string, projectRoot: string): Promise<void> {
   return invoke("preview_file", { path, projectRoot });
 }
 
@@ -98,16 +98,16 @@ export function pathExists(path: string): Promise<boolean> {
   return invoke("path_exists", { path });
 }
 
-export function revealInFinder(path: string, projectRoot?: string): Promise<void> {
+export function revealInFinder(path: string, projectRoot: string): Promise<void> {
   return invoke("reveal_in_finder", { path, projectRoot });
 }
 
-export function openInDefaultApp(path: string, projectRoot?: string): Promise<void> {
+export function openInDefaultApp(path: string, projectRoot: string): Promise<void> {
   return invoke("open_in_default_app", { path, projectRoot });
 }
 
-export function startWatching(path: string): Promise<void> {
-  return invoke("start_watching", { path });
+export function startWatching(path: string, projectRoot: string): Promise<void> {
+  return invoke("start_watching", { path, projectRoot });
 }
 
 export function stopWatching(): Promise<void> {
@@ -232,8 +232,20 @@ export function getCodexBinding(threadId: string): Promise<CodexBindingSnapshot 
 
 // Scheduled Jobs (launchd)
 
-export function writeLaunchdEntry(jobId: string, schedule: string, command: string): Promise<void> {
-  return invoke("write_launchd_entry", { jobId, schedule, command });
+export type ScheduledJobType = "claude" | "codex" | "shell";
+
+export interface ScheduledJobExecution {
+  type: ScheduledJobType;
+  command: string;
+  projectPath: string;
+}
+
+export function writeLaunchdEntry(
+  jobId: string,
+  schedule: string,
+  execution: ScheduledJobExecution,
+): Promise<void> {
+  return invoke("write_launchd_entry", { jobId, schedule, execution });
 }
 
 export function removeLaunchdEntry(jobId: string): Promise<void> {
@@ -267,8 +279,8 @@ export function revealLogInFinder(jobId: string, filename: string): Promise<void
   return invoke("reveal_log_in_finder", { jobId, filename });
 }
 
-export function runJobNow(jobId: string, command: string): Promise<void> {
-  return invoke("run_job_now", { jobId, command });
+export function runJobNow(jobId: string, execution: ScheduledJobExecution): Promise<void> {
+  return invoke("run_job_now", { jobId, execution });
 }
 
 export function pruneJobLogs(jobId: string, keep: number): Promise<number> {

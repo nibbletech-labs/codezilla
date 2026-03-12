@@ -100,10 +100,13 @@ impl FileWatcher {
 #[tauri::command]
 pub fn start_watching(
     path: String,
+    project_root: String,
     app_handle: AppHandle,
     state: tauri::State<'_, WatcherState>,
 ) -> Result<(), String> {
     let canonical = super::canonicalize_path(&path)?;
+    let canonical_root = super::canonicalize_path(&project_root)?;
+    super::validate_within_root(&canonical, &canonical_root)?;
     let path = canonical.to_string_lossy().to_string();
     let mut guard = state.lock().map_err(|e| format!("Lock error: {}", e))?;
 

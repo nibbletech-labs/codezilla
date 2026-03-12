@@ -1,7 +1,7 @@
 import type { ScheduledJob } from "../store/types";
 import type { Project } from "../store/types";
 import { listLaunchdEntries, writeLaunchdEntry, removeLaunchdEntry, pruneJobLogs } from "./tauri";
-import { buildJobCommand } from "./scheduleHelpers";
+import { buildJobExecution } from "./scheduleHelpers";
 
 /**
  * Reconcile Codezilla's persisted job config with launchd agents.
@@ -17,8 +17,8 @@ export async function syncLaunchdEntries(jobs: ScheduledJob[], projects: Project
     if (job.enabled && !launchdJobIds.has(job.id)) {
       const project = projects.find((p) => p.id === job.projectId);
       if (project) {
-        const command = buildJobCommand(job, project.path);
-        await writeLaunchdEntry(job.id, job.schedule, command).catch(console.error);
+        const execution = buildJobExecution(job, project.path);
+        await writeLaunchdEntry(job.id, job.schedule, execution).catch(console.error);
       }
     }
   }

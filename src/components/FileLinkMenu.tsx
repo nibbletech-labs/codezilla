@@ -48,7 +48,7 @@ export function FileLinkMenu() {
         </svg>
       ),
       action: () => {
-        openInDefaultApp(path, projectPath);
+        if (projectPath) openInDefaultApp(path, projectPath);
         closeMenu();
       },
     },
@@ -60,7 +60,7 @@ export function FileLinkMenu() {
         </svg>
       ),
       action: () => {
-        revealInFinder(path, projectPath);
+        if (projectPath) revealInFinder(path, projectPath);
         closeMenu();
       },
     },

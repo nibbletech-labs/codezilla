@@ -1,4 +1,5 @@
 import type { ScheduledJob } from "../store/types";
+import type { ScheduledJobExecution } from "./tauri";
 
 // --- Schedule config types ---
 
@@ -58,28 +59,10 @@ export function scheduleToHumanReadable(schedule: string): string {
 
 // --- Job command construction ---
 
-export function buildJobCommand(job: ScheduledJob, projectPath: string): string {
-  let innerCommand: string;
-  switch (job.type) {
-    case "claude":
-      innerCommand = `claude "${job.command.replace(/"/g, '\\"')}"`;
-      break;
-    case "codex":
-      innerCommand = `codex "${job.command.replace(/"/g, '\\"')}"`;
-      break;
-    case "shell":
-      innerCommand = job.command;
-      break;
-  }
-
-  const escapedPath = projectPath.replace(/"/g, '\\"');
-
-  return [
-    `_CZ_DIR=~/.codezilla/logs/${job.id}`,
-    `mkdir -p "$_CZ_DIR"`,
-    `_CZ_LOG="$_CZ_DIR/$(date +%Y-%m-%dT%H%M%S).log"`,
-    `_CZ_START=$(date +%s)`,
-    `(cd "${escapedPath}" && ${innerCommand}) > "$_CZ_LOG" 2>&1`,
-  ].join(" && ")
-    + `; _CZ_EC=$?; echo "" >> "$_CZ_LOG"; echo "---" >> "$_CZ_LOG"; echo "exit_code: $_CZ_EC" >> "$_CZ_LOG"; echo "duration_s: $(( $(date +%s) - _CZ_START ))" >> "$_CZ_LOG"; exit $_CZ_EC`;
+export function buildJobExecution(job: ScheduledJob, projectPath: string): ScheduledJobExecution {
+  return {
+    type: job.type,
+    command: job.command,
+    projectPath,
+  };
 }

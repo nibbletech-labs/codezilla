@@ -1,16 +1,25 @@
-## v0.1.3 — Thread Status & Activity Detection
+## v0.2.0 — Scheduled Jobs, Skills & Plugins, Launch Presets
 
-**Improvements**
-- Project drag-and-drop reordering
-- App is now signed and notarized by Apple
+The biggest release yet. Codezilla now manages recurring jobs, helps you manage your Claude Code skills and plugins, and lets you launch threads with saved configurations.
+
+**New Features**
+
+- **Scheduled Jobs** — create recurring Claude, Codex, or shell jobs per project with cron-like scheduling via macOS launchd. Jobs run whether or not the app is open. In-app run history with log viewer, run-now, enable/disable, and activity indicators in the sidebar.
+- **Skills & Plugins Manager** — detect, install, remove, and manage Claude Code skills, plugins, agents, and commands. Supports marketplace plugins, git-based sources, project and global scoping, conflict detection, SHA-256 verification, and scope migration. Right-panel summary strip shows what's active per project.
+- **Launch Presets** — save reusable CLI flag combinations (e.g. `--model sonnet --thinking medium`) and spawn threads from them via the project context menu. Create, edit, and delete presets with custom names and emoji.
+- **Clickable terminal links** — URLs in terminal output open in your default browser. File paths show a context menu with Preview, Open, Reveal in Finder, and Copy Path. Supports paths with spaces.
+- **macOS code signing & notarization** — the app is now signed with a Developer ID certificate and notarized by Apple, so Gatekeeper won't block it on first launch.
+
+**Performance**
+
+- Fixed crashes when running many threads simultaneously
+- Significantly reduced CPU and memory usage, especially with background threads
+- App launch is faster and more responsive
 
 **Fixes**
-- **Thread status accuracy**: fixed Working status getting stuck after Ctrl+C, false Working spinner during history replay on resume, and spurious Done/Idle states from progress marker timing races and stale activity signals
-- **Scroll behaviour**: fixed scroll not reaching the bottom when resuming or switching threads, and miscalibration when switching back to a thread
-- **Activity detection overhaul**: replaced raw byte scanning with rendered terminal buffer only, eliminating false positives from replayed history; improved pattern matching for Claude's thinking/timer progress lines
-- **Codex**: fixed thread stuck on Working after tool calls complete
-- **File preview**: fixed markdown link handling, memory leak, and improved syntax highlighting robustness
 
-## v0.1.2 — Auto-updater
-
-- **Auto-updater** — Codezilla now checks for new versions on launch and shows a notification in the status bar. Updates are downloaded on click.
+- Thread status indicators are more accurate — no more stuck "Working" spinners or false idle states
+- Code preview works correctly in production builds
+- macOS system files (.DS_Store, etc.) no longer clutter the file explorer
+- Badge notifications clear properly when clicking a thread
+- Terminal scroll now reliably reaches the bottom on resume and thread switch

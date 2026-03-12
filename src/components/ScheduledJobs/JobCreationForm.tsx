@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { useAppStore } from "../../store/appStore";
-import { scheduleToExpression, buildJobCommand } from "../../lib/scheduleHelpers";
+import { scheduleToExpression, buildJobExecution } from "../../lib/scheduleHelpers";
 import type { ScheduleConfig } from "../../lib/scheduleHelpers";
 import type { ThreadType, ScheduledJob } from "../../store/types";
 import { writeLaunchdEntry, runJobNow } from "../../lib/tauri";
@@ -123,8 +123,8 @@ export default function JobCreationForm({ projectId, anchor, onClose, editJob }:
         schedule,
       });
       const updatedJob = { ...editJob, name: jobName, type: selectedType, command, schedule };
-      const jobCommand = buildJobCommand(updatedJob, project.path);
-      await writeLaunchdEntry(editJob.id, schedule, jobCommand).catch(console.error);
+      const execution = buildJobExecution(updatedJob, project.path);
+      await writeLaunchdEntry(editJob.id, schedule, execution).catch(console.error);
     } else {
       const job = addScheduledJob(projectId, {
         projectId,
@@ -134,10 +134,10 @@ export default function JobCreationForm({ projectId, anchor, onClose, editJob }:
         schedule,
         enabled: true,
       });
-      const jobCommand = buildJobCommand(job, project.path);
-      await writeLaunchdEntry(job.id, schedule, jobCommand).catch(console.error);
+      const execution = buildJobExecution(job, project.path);
+      await writeLaunchdEntry(job.id, schedule, execution).catch(console.error);
       if (andRun) {
-        await runJobNow(job.id, jobCommand).catch(console.error);
+        await runJobNow(job.id, execution).catch(console.error);
       }
     }
 

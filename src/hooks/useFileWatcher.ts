@@ -22,7 +22,7 @@ export function useFileWatcher(
   useEffect(() => {
     if (!projectPath) return;
 
-    startWatching(projectPath).catch((err) =>
+    startWatching(projectPath, projectPath).catch((err) =>
       console.error("Failed to start watcher:", err),
     );
 

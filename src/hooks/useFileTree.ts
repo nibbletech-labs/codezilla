@@ -23,7 +23,7 @@ export function useFileTree(projectId: string | null, projectPath: string | null
       prevProjectPath.current = projectPath;
       setDirCache(new Map());
       setIsLoading(true);
-      readDirectory(projectPath)
+      readDirectory(projectPath, projectPath)
         .then((entries) => {
           setDirCache(new Map([[projectPath, entries]]));
         })
@@ -45,7 +45,7 @@ export function useFileTree(projectId: string | null, projectPath: string | null
 
     Promise.allSettled(
       uncached.map((dirPath) =>
-        readDirectory(dirPath).then((entries) => [dirPath, entries] as const),
+        readDirectory(dirPath, projectPath).then((entries) => [dirPath, entries] as const),
       ),
     ).then((results) => {
       setDirCache((prev) => {
@@ -67,15 +67,15 @@ export function useFileTree(projectId: string | null, projectPath: string | null
       const isExpanded = expandedPaths.has(path);
       toggleExpandedPath(projectId, path);
 
-      if (!isExpanded && !dirCache.has(path)) {
-        readDirectory(path)
+      if (!isExpanded && !dirCache.has(path) && projectPath) {
+        readDirectory(path, projectPath)
           .then((entries) => {
             setDirCache((prev) => new Map(prev).set(path, entries));
           })
           .catch((err) => console.error("Failed to read directory:", err));
       }
     },
-    [projectId, expandedPaths, toggleExpandedPath, dirCache],
+    [projectId, projectPath, expandedPaths, toggleExpandedPath, dirCache],
   );
 
   const refresh = useCallback(
@@ -84,7 +84,7 @@ export function useFileTree(projectId: string | null, projectPath: string | null
       if (!projectPath) return;
       if (dirPath !== projectPath && !expandedPaths.has(dirPath)) return;
 
-      readDirectory(dirPath)
+      readDirectory(dirPath, projectPath)
         .then((entries) => {
           setDirCache((prev) => new Map(prev).set(dirPath, entries));
         })

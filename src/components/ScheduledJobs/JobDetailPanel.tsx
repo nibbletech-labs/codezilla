@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { createPortal } from "react-dom";
 import { useAppStore } from "../../store/appStore";
-import { scheduleToHumanReadable, buildJobCommand } from "../../lib/scheduleHelpers";
+import { scheduleToHumanReadable, buildJobExecution } from "../../lib/scheduleHelpers";
 import { THREAD_LABELS } from "../../store/types";
 import {
   listJobRuns,
@@ -78,8 +78,8 @@ export default function JobDetailPanel({ jobId }: JobDetailPanelProps) {
   const typeLabel = THREAD_LABELS[job.type];
 
   const handleRunNow = async () => {
-    const jobCommand = buildJobCommand(job, project.path);
-    await runJobNow(job.id, jobCommand).catch(console.error);
+    const execution = buildJobExecution(job, project.path);
+    await runJobNow(job.id, execution).catch(console.error);
     setTimeout(refreshRuns, 1000);
   };
 
@@ -87,8 +87,8 @@ export default function JobDetailPanel({ jobId }: JobDetailPanelProps) {
     const newEnabled = !job.enabled;
     updateScheduledJob(job.id, { enabled: newEnabled });
     if (newEnabled) {
-      const jobCommand = buildJobCommand(job, project.path);
-      await writeLaunchdEntry(job.id, job.schedule, jobCommand).catch(console.error);
+      const execution = buildJobExecution(job, project.path);
+      await writeLaunchdEntry(job.id, job.schedule, execution).catch(console.error);
     } else {
       await removeLaunchdEntry(job.id).catch(console.error);
     }

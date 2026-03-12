@@ -50,6 +50,63 @@ function isValidUUID(value: string | null | undefined): value is string {
   return typeof value === "string" && UUID_RE.test(value);
 }
 
+/**
+ * Parse a raw extraArgs string into individual tokens (respecting quoted strings),
+ * then shell-escape each token to prevent shell injection via metacharacters.
+ * Each token is wrapped in single quotes with internal single quotes escaped as '\''
+ */
+function shellEscapeArgs(raw: string): string {
+  const tokens: string[] = [];
+  let current = "";
+  let inSingle = false;
+  let inDouble = false;
+  let escaped = false;
+
+  for (let i = 0; i < raw.length; i++) {
+    const ch = raw[i];
+
+    if (escaped) {
+      current += ch;
+      escaped = false;
+      continue;
+    }
+
+    if (ch === "\\" && !inSingle) {
+      escaped = true;
+      continue;
+    }
+
+    if (ch === "'" && !inDouble) {
+      inSingle = !inSingle;
+      continue;
+    }
+
+    if (ch === '"' && !inSingle) {
+      inDouble = !inDouble;
+      continue;
+    }
+
+    if (/\s/.test(ch) && !inSingle && !inDouble) {
+      if (current.length > 0) {
+        tokens.push(current);
+        current = "";
+      }
+      continue;
+    }
+
+    current += ch;
+  }
+
+  if (current.length > 0) {
+    tokens.push(current);
+  }
+
+  // Shell-escape each token: wrap in single quotes, escaping embedded single quotes
+  return tokens
+    .map((t) => "'" + t.replace(/'/g, "'\\''") + "'")
+    .join(" ");
+}
+
 // Track sessions that have received first PTY output (shared across instances)
 const sessionsWithOutput = new Set<string>();
 
@@ -1200,9 +1257,12 @@ function createTerminalInstance(
         : "codex";
   }
 
-  // Append extra CLI flags from launch preset
+  // Append extra CLI flags from launch preset (shell-escaped to prevent injection)
   if (command && thread.extraArgs) {
-    command = `${command} ${thread.extraArgs}`;
+    const escaped = shellEscapeArgs(thread.extraArgs);
+    if (escaped) {
+      command = `${command} ${escaped}`;
+    }
   }
 
   const spawnWithCommand = (cmd: string | undefined) => {

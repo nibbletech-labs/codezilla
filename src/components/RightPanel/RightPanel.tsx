@@ -51,7 +51,7 @@ export default function RightPanel() {
       setFileIndex(new Set());
       return;
     }
-    scanAllFiles(projectPath)
+    scanAllFiles(projectPath, projectPath)
       .then((files) => setFileIndex(new Set(files)))
       .catch((err) => console.error("Failed to scan files:", err));
   }, [projectPath, setFileIndex]);
@@ -63,7 +63,7 @@ export default function RightPanel() {
     const unlisten = listen<string[]>("fs-change", () => {
       if (timer) clearTimeout(timer);
       timer = setTimeout(() => {
-        scanAllFiles(projectPath)
+        scanAllFiles(projectPath, projectPath)
           .then((files) => setFileIndex(new Set(files)))
           .catch((err) => console.error("Failed to rescan files:", err));
       }, 2000);
@@ -77,11 +77,11 @@ export default function RightPanel() {
   // Open preview: native Quick Look for binary files, in-app modal for text
   const openPreview = useCallback((filePath: string) => {
     if (shouldUseNativePreview(filePath)) {
-      nativePreview(filePath);
+      if (projectPath) nativePreview(filePath, projectPath);
     } else {
       openPreviewAction(filePath);
     }
-  }, [openPreviewAction]);
+  }, [openPreviewAction, projectPath]);
 
   // Flat ordered list of all visible entries (respects expanded/collapsed state)
   const visibleEntries = useMemo(() => {
@@ -164,7 +164,7 @@ export default function RightPanel() {
         } else if (shouldUseNativePreview(entry.path)) {
           // Close in-app preview, launch native Quick Look
           closePreviewAction();
-          nativePreview(entry.path);
+          if (projectPath) nativePreview(entry.path, projectPath);
         } else {
           openPreviewAction(entry.path);
         }

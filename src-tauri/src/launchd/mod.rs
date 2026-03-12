@@ -1,5 +1,5 @@
 use log::{error, info, warn};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::process::Command;
@@ -7,6 +7,46 @@ use std::process::Command;
 // ---- Constants ----
 
 const PLIST_PREFIX: &str = "com.codezilla.job.";
+const JOB_WRAPPER: &str = r#"mkdir -p "$CODEZILLA_LOG_DIR"
+_CZ_LOG="$CODEZILLA_LOG_DIR/$(date +%Y-%m-%dT%H%M%S).log"
+_CZ_START=$(date +%s)
+case "$CODEZILLA_JOB_TYPE" in
+  claude)
+    claude "$CODEZILLA_JOB_COMMAND" > "$_CZ_LOG" 2>&1
+    ;;
+  codex)
+    codex "$CODEZILLA_JOB_COMMAND" > "$_CZ_LOG" 2>&1
+    ;;
+  shell)
+    eval "$CODEZILLA_JOB_COMMAND" > "$_CZ_LOG" 2>&1
+    ;;
+  *)
+    echo "Unknown job type: $CODEZILLA_JOB_TYPE" > "$_CZ_LOG"
+    _CZ_EC=1
+    ;;
+esac
+_CZ_EC=$?
+echo "" >> "$_CZ_LOG"
+echo "---" >> "$_CZ_LOG"
+echo "exit_code: $_CZ_EC" >> "$_CZ_LOG"
+echo "duration_s: $(( $(date +%s) - _CZ_START ))" >> "$_CZ_LOG"
+exit $_CZ_EC"#;
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ScheduledJobType {
+    Claude,
+    Codex,
+    Shell,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScheduledJobExecution {
+    pub r#type: ScheduledJobType,
+    pub command: String,
+    pub project_path: String,
+}
 
 // ---- Internal helpers ----
 
@@ -129,7 +169,39 @@ fn cron_to_launchd_schedule(cron: &str) -> Result<plist::Value, String> {
 }
 
 /// Build a complete launchd plist dictionary for a job.
-fn build_plist(job_id: &str, schedule: &str, command: &str) -> Result<plist::Dictionary, String> {
+fn log_dir_string_for_job(job_id: &str) -> Result<String, String> {
+    Ok(log_dir_for_job(job_id)?.to_string_lossy().to_string())
+}
+
+fn environment_variables(
+    job_id: &str,
+    execution: &ScheduledJobExecution,
+) -> Result<plist::Dictionary, String> {
+    let mut env = plist::Dictionary::new();
+    env.insert(
+        "CODEZILLA_JOB_TYPE".into(),
+        plist::Value::String(match execution.r#type {
+            ScheduledJobType::Claude => "claude".into(),
+            ScheduledJobType::Codex => "codex".into(),
+            ScheduledJobType::Shell => "shell".into(),
+        }),
+    );
+    env.insert(
+        "CODEZILLA_JOB_COMMAND".into(),
+        plist::Value::String(execution.command.clone()),
+    );
+    env.insert(
+        "CODEZILLA_LOG_DIR".into(),
+        plist::Value::String(log_dir_string_for_job(job_id)?),
+    );
+    Ok(env)
+}
+
+fn build_plist(
+    job_id: &str,
+    schedule: &str,
+    execution: &ScheduledJobExecution,
+) -> Result<plist::Dictionary, String> {
     let label = service_label(job_id);
 
     let schedule_dict = cron_to_launchd_schedule(schedule)?;
@@ -145,8 +217,16 @@ fn build_plist(job_id: &str, schedule: &str, command: &str) -> Result<plist::Dic
             plist::Value::String("-l".into()),
             plist::Value::String("-i".into()),
             plist::Value::String("-c".into()),
-            plist::Value::String(command.into()),
+            plist::Value::String(JOB_WRAPPER.into()),
         ]),
+    );
+    dict.insert(
+        "EnvironmentVariables".into(),
+        plist::Value::Dictionary(environment_variables(job_id, execution)?),
+    );
+    dict.insert(
+        "WorkingDirectory".into(),
+        plist::Value::String(execution.project_path.clone()),
     );
 
     // Merge schedule keys into the top-level dict
@@ -174,7 +254,7 @@ fn build_plist(job_id: &str, schedule: &str, command: &str) -> Result<plist::Dic
 pub async fn write_launchd_entry(
     job_id: String,
     schedule: String,
-    command: String,
+    execution: ScheduledJobExecution,
 ) -> Result<(), String> {
     info!("Writing launchd entry for job {}", job_id);
 
@@ -182,7 +262,7 @@ pub async fn write_launchd_entry(
     std::fs::create_dir_all(&agents_dir)
         .map_err(|e| format!("Failed to create LaunchAgents dir: {}", e))?;
 
-    let dict = build_plist(&job_id, &schedule, &command)?;
+    let dict = build_plist(&job_id, &schedule, &execution)?;
     let path = plist_path(&job_id)?;
 
     // Unload existing agent if loaded (ignore errors)
@@ -375,13 +455,33 @@ pub async fn reveal_log_in_finder(job_id: String, filename: String) -> Result<()
 }
 
 #[tauri::command]
-pub async fn run_job_now(job_id: String, command: String) -> Result<(), String> {
+pub async fn run_job_now(job_id: String, execution: ScheduledJobExecution) -> Result<(), String> {
     info!("Running job {} immediately", job_id);
 
     std::thread::spawn(move || {
-        let result = Command::new("/bin/zsh")
-            .args(["-l", "-i", "-c", &command])
-            .output();
+        let mut command = Command::new("/bin/zsh");
+        command
+            .args(["-l", "-i", "-c", JOB_WRAPPER])
+            .current_dir(&execution.project_path)
+            .env(
+                "CODEZILLA_JOB_TYPE",
+                match execution.r#type {
+                    ScheduledJobType::Claude => "claude",
+                    ScheduledJobType::Codex => "codex",
+                    ScheduledJobType::Shell => "shell",
+                },
+            )
+            .env("CODEZILLA_JOB_COMMAND", &execution.command);
+        match log_dir_string_for_job(&job_id) {
+            Ok(log_dir) => {
+                command.env("CODEZILLA_LOG_DIR", log_dir);
+            }
+            Err(e) => {
+                error!("Job {} failed to resolve log dir: {}", job_id, e);
+                return;
+            }
+        }
+        let result = command.output();
         match result {
             Ok(output) => {
                 if output.status.success() {
