@@ -18,7 +18,7 @@ jobs:
     permissions:
       contents: write
     env:
-      SIGN_APP: ${{ github.event.inputs.sign == 'true' }}
+      SIGN_APP: ${{ github.event_name == 'push' || github.event.inputs.sign == 'true' }}
     steps:
       - uses: actions/checkout@v4
 
