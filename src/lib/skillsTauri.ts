@@ -112,3 +112,26 @@ export function listInstalledPlugins(): Promise<string> {
 export function hashFile(path: string): Promise<string> {
   return invoke("hash_file", { path });
 }
+
+export function hashFileInTemp(path: string): Promise<string> {
+  return invoke("hash_file_in_temp", { path });
+}
+
+export function checkInstallPathExists(
+  itemType: string,
+  itemName: string,
+  target: string,
+  projectPath?: string,
+): Promise<{ exists: boolean; path: string }> {
+  return invoke("check_install_path_exists", { itemType, itemName, target, projectPath });
+}
+
+export function moveItem(
+  installPath: string,
+  itemType: string,
+  fromTarget: string,
+  toTarget: string,
+  projectPath?: string,
+): Promise<string> {
+  return invoke("move_item", { installPath, itemType, fromTarget, toTarget, projectPath });
+}

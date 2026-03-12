@@ -22,7 +22,6 @@ export default function SkillsPluginsStrip() {
   const unmanagedRelevant = scanResults.filter((s) => !s.managed);
 
   const totalCount = managedRelevant.length + unmanagedRelevant.length;
-  if (totalCount === 0) return null;
 
   // Count by type (combine managed + unmanaged)
   const counts: Record<string, number> = {};
@@ -60,11 +59,17 @@ export default function SkillsPluginsStrip() {
         userSelect: "none",
       }}
     >
-      <span>{countParts}</span>
-      {updateCount > 0 && (
-        <span style={{ color: "var(--accent)", marginLeft: "8px" }}>
-          {updateCount} update{updateCount > 1 ? "s" : ""}
-        </span>
+      {totalCount > 0 ? (
+        <>
+          <span>{countParts}</span>
+          {updateCount > 0 && (
+            <span style={{ color: "var(--accent)", marginLeft: "8px" }}>
+              {updateCount} update{updateCount > 1 ? "s" : ""}
+            </span>
+          )}
+        </>
+      ) : (
+        <span>No skills or plugins</span>
       )}
     </div>
   );

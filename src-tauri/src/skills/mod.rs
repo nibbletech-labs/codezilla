@@ -2,6 +2,7 @@ pub mod detect;
 pub mod types;
 
 use log::{error, info, warn};
+use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::process::Command;
 use types::{
@@ -713,6 +714,172 @@ pub fn cleanup_fetch(temp_path: String) -> Result<(), String> {
         .map_err(|e| format!("Failed to cleanup temp dir: {}", e))?;
     info!("Cleaned up temp dir: {}", temp_path);
     Ok(())
+}
+
+// ---- Path / scope helpers ----
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct PathExistsResult {
+    pub exists: bool,
+    pub path: String,
+}
+
+#[tauri::command]
+pub fn check_install_path_exists(
+    item_type: ItemType,
+    item_name: String,
+    target: InstallTarget,
+    project_path: Option<String>,
+) -> Result<PathExistsResult, String> {
+    let home = std::env::var("HOME").map_err(|_| "HOME not set".to_string())?;
+    let target_base = match target {
+        InstallTarget::Project => {
+            let pp = project_path.as_deref().ok_or("project_path required for project install")?;
+            format!("{}/.claude", pp)
+        }
+        InstallTarget::Global => format!("{}/.claude", home),
+    };
+
+    let path = match item_type {
+        ItemType::Skill => format!("{}/skills/{}", target_base, item_name),
+        ItemType::Agent => format!("{}/agents/{}.md", target_base, item_name),
+        ItemType::Command => format!("{}/commands/{}.md", target_base, item_name),
+        ItemType::Plugin => return Err("Plugins are managed by Claude CLI, not file paths".to_string()),
+    };
+
+    let exists = Path::new(&path).exists();
+    Ok(PathExistsResult { exists, path })
+}
+
+#[tauri::command]
+pub fn move_item(
+    install_path: String,
+    item_type: ItemType,
+    from_target: InstallTarget,
+    to_target: InstallTarget,
+    project_path: Option<String>,
+) -> Result<String, String> {
+    if from_target == to_target {
+        return Err("Source and destination targets are the same".to_string());
+    }
+    if item_type == ItemType::Plugin {
+        return Err("Plugins cannot be moved between scopes via file copy".to_string());
+    }
+
+    let home = std::env::var("HOME").map_err(|_| "HOME not set".to_string())?;
+    let src = Path::new(&install_path);
+    if !src.exists() {
+        return Err(format!("Source path does not exist: {}", install_path));
+    }
+
+    // Security: validate source is within a .claude/ directory and use canonical path
+    let canonical_src = validate_within_claude_dir(src)?;
+
+    // Determine the item name from the canonical path
+    let item_name = if canonical_src.is_file() {
+        // For files (agents, commands), strip the .md extension
+        canonical_src
+            .file_stem()
+            .map(|n| n.to_string_lossy().to_string())
+            .ok_or("Cannot determine item name from path")?
+    } else {
+        // For directories (skills), use the directory name
+        canonical_src
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .ok_or("Cannot determine item name from path")?
+    };
+
+    let to_base = match to_target {
+        InstallTarget::Project => {
+            let pp = project_path.as_deref().ok_or("project_path required for project target")?;
+            format!("{}/.claude", pp)
+        }
+        InstallTarget::Global => format!("{}/.claude", home),
+    };
+
+    let dest_path = match item_type {
+        ItemType::Skill => format!("{}/skills/{}", to_base, item_name),
+        ItemType::Agent => {
+            if canonical_src.is_dir() {
+                format!("{}/agents/{}", to_base, item_name)
+            } else {
+                format!("{}/agents/{}.md", to_base, item_name)
+            }
+        }
+        ItemType::Command => {
+            if canonical_src.is_dir() {
+                format!("{}/commands/{}", to_base, item_name)
+            } else {
+                format!("{}/commands/{}.md", to_base, item_name)
+            }
+        }
+        ItemType::Plugin => unreachable!(),
+    };
+
+    // Create parent dir
+    if let Some(parent) = Path::new(&dest_path).parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("Failed to create destination directory: {}", e))?;
+    }
+
+    // Copy using canonical source
+    if canonical_src.is_dir() {
+        copy_dir_contents(&canonical_src, Path::new(&dest_path))?;
+    } else {
+        std::fs::copy(&canonical_src, &dest_path)
+            .map_err(|e| format!("Failed to copy file: {}", e))?;
+    }
+
+    // Verify destination exists
+    if !Path::new(&dest_path).exists() {
+        return Err("Copy appeared to succeed but destination not found".to_string());
+    }
+
+    // Delete source using canonical path
+    if canonical_src.is_dir() {
+        std::fs::remove_dir_all(&canonical_src)
+            .map_err(|e| format!("Failed to remove source directory: {}", e))?;
+    } else {
+        std::fs::remove_file(&canonical_src)
+            .map_err(|e| format!("Failed to remove source file: {}", e))?;
+    }
+
+    info!("Moved {:?} from {:?} to {:?}: {}", item_type, from_target, to_target, dest_path);
+    Ok(dest_path)
+}
+
+#[tauri::command]
+pub fn hash_file_in_temp(path: String) -> Result<String, String> {
+    use sha2::{Digest, Sha256};
+
+    let file_path = Path::new(&path);
+    if !file_path.exists() {
+        return Err("File not found".to_string());
+    }
+
+    // Find the codezilla-skills- ancestor directory
+    let temp_root = file_path
+        .ancestors()
+        .find(|p| {
+            p.file_name()
+                .map(|n| n.to_string_lossy().starts_with("codezilla-skills-"))
+                .unwrap_or(false)
+        })
+        .ok_or_else(|| "Path is not inside a codezilla-skills- temp directory".to_string())?;
+
+    // Validate temp_root is inside the system temp dir with expected prefix
+    validate_temp_path(temp_root)?;
+
+    // Validate the file itself is within that validated temp root
+    validate_within(file_path, temp_root)?;
+
+    let content = std::fs::read(&path)
+        .map_err(|e| format!("Failed to read file for hashing: {}", e))?;
+    let mut hasher = Sha256::new();
+    hasher.update(&content);
+    let result = hasher.finalize();
+    Ok(format!("{:x}", result))
 }
 
 // ---- Plugin CLI commands ----

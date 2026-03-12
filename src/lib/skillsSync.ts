@@ -76,7 +76,43 @@ export async function reconcileInstalledItems(projectPath?: string): Promise<voi
     // Store unmanaged items for UI display
     const unmanaged = scanned.filter((s) => !s.managed);
     store.setScanResults(unmanaged);
+
+    // Duplicate detection: same itemName at both project and global scope
+    detectDuplicates(projectPath);
   } catch (e) {
     console.error("Failed to reconcile installed items:", e);
   }
+}
+
+/**
+ * Detect items installed at both project and global scope.
+ * A project-scoped copy is redundant when the same item exists globally.
+ */
+export function detectDuplicates(projectPath?: string): void {
+  const store = useSkillsPluginsStore.getState();
+  if (!projectPath) {
+    store.setDuplicates([]);
+    return;
+  }
+
+  const all = Object.values(store.installations);
+  const globalInsts = all.filter((i) => i.target === "Global");
+  const projectInsts = all.filter(
+    (i) => i.target === "Project" && i.projectPath === projectPath,
+  );
+
+  const duplicates: { projectInstId: string; globalInstId: string }[] = [];
+  for (const proj of projectInsts) {
+    const globalMatch = globalInsts.find(
+      (g) => g.itemName === proj.itemName && g.itemType === proj.itemType,
+    );
+    if (globalMatch) {
+      duplicates.push({
+        projectInstId: proj.id,
+        globalInstId: globalMatch.id,
+      });
+    }
+  }
+
+  store.setDuplicates(duplicates);
 }

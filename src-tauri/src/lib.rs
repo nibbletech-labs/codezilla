@@ -546,6 +546,9 @@ pub fn run() {
             skills::uninstall_plugin,
             skills::list_installed_plugins,
             skills::hash_file,
+            skills::check_install_path_exists,
+            skills::move_item,
+            skills::hash_file_in_temp,
             sync_remember_window_position,
             sync_appearance_menu,
             sync_accent_menu

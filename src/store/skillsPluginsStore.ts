@@ -3,12 +3,14 @@ import type {
   RegistrySource,
   Installation,
   ScannedItem,
+  DuplicateInfo,
 } from "./skillsPluginsTypes";
 
 interface SkillsPluginsState {
   sources: Record<string, RegistrySource>;
   installations: Record<string, Installation>;
   scanResults: ScannedItem[];
+  duplicates: DuplicateInfo[];
   fetchState: "idle" | "fetching" | "detecting" | "error";
   updateCheckState: "idle" | "checking" | "done";
 
@@ -23,6 +25,7 @@ interface SkillsPluginsState {
   setFetchState: (state: "idle" | "fetching" | "detecting" | "error") => void;
   setUpdateCheckState: (state: "idle" | "checking" | "done") => void;
   setScanResults: (results: ScannedItem[]) => void;
+  setDuplicates: (duplicates: DuplicateInfo[]) => void;
 
   // Helpers
   getInstallationsForProject: (projectPath: string) => Installation[];
@@ -37,6 +40,7 @@ export const useSkillsPluginsStore = create<SkillsPluginsState>((set, get) => ({
   sources: {},
   installations: {},
   scanResults: [],
+  duplicates: [],
   fetchState: "idle",
   updateCheckState: "idle",
 
@@ -101,6 +105,7 @@ export const useSkillsPluginsStore = create<SkillsPluginsState>((set, get) => ({
   setFetchState: (fetchState) => set({ fetchState }),
   setUpdateCheckState: (updateCheckState) => set({ updateCheckState }),
   setScanResults: (scanResults) => set({ scanResults }),
+  setDuplicates: (duplicates) => set({ duplicates }),
 
   getInstallationsForProject: (projectPath) => {
     return Object.values(get().installations).filter(

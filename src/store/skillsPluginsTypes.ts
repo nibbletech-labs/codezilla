@@ -57,6 +57,11 @@ export interface UpdateCheckResult {
   update_available: boolean;
 }
 
+export interface DuplicateInfo {
+  projectInstId: string;
+  globalInstId: string;
+}
+
 export interface SkillsPluginsRegistry {
   sources: Record<string, RegistrySource>;
   installations: Record<string, Installation>;
