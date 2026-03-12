@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { open } from "@tauri-apps/plugin-shell";
 import type { Installation } from "../../store/skillsPluginsTypes";
 import { styles } from "./styles";
 import { TypeBadge } from "./TypeBadge";
@@ -6,6 +7,7 @@ import { TypeBadge } from "./TypeBadge";
 export function InstalledRow({
   inst,
   sourceLabel,
+  sourceUrl,
   hasUpdate,
   isDuplicate,
   hasProject,
@@ -16,6 +18,7 @@ export function InstalledRow({
 }: {
   inst: Installation;
   sourceLabel: string;
+  sourceUrl?: string;
   hasUpdate?: boolean;
   isDuplicate: boolean;
   hasProject: boolean;
@@ -81,7 +84,18 @@ export function InstalledRow({
         )}
       </span>
       <span style={{ color: "var(--text-secondary)", fontSize: "var(--font-size-sm)" }}>
-        {sourceLabel}
+        {sourceUrl ? (
+          <span
+            style={{ cursor: "pointer", textDecoration: "none" }}
+            onMouseEnter={(e) => (e.currentTarget.style.textDecoration = "underline")}
+            onMouseLeave={(e) => (e.currentTarget.style.textDecoration = "none")}
+            onClick={() => open(sourceUrl)}
+          >
+            {sourceLabel}
+          </span>
+        ) : (
+          sourceLabel
+        )}
       </span>
       {canMove && (showMoveToProject || showMoveToGlobal) && (
         <button style={styles.smallBtn} onClick={onMove}>

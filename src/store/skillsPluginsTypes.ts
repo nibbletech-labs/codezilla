@@ -57,6 +57,13 @@ export interface UpdateCheckResult {
   update_available: boolean;
 }
 
+export interface MarketplaceInfo {
+  name: string;
+  source: string;
+  repo?: string;
+  url?: string;
+}
+
 export interface DuplicateInfo {
   projectInstId: string;
   globalInstId: string;

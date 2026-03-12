@@ -83,3 +83,11 @@ pub struct UpdateCheckResult {
     pub remote_sha: String,
     pub update_available: bool,
 }
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct MarketplaceInfo {
+    pub name: String,
+    pub source: String,
+    pub repo: Option<String>,
+    pub url: Option<String>,
+}

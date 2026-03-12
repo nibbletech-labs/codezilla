@@ -5,6 +5,7 @@ import type {
   Installation,
   ItemType,
   InstallTarget,
+  MarketplaceInfo,
   ScannedItem,
   UpdateCheckResult,
 } from "../store/skillsPluginsTypes";
@@ -134,4 +135,8 @@ export function moveItem(
   projectPath?: string,
 ): Promise<string> {
   return invoke("move_item", { installPath, itemType, fromTarget, toTarget, projectPath });
+}
+
+export function listMarketplaces(): Promise<MarketplaceInfo[]> {
+  return invoke("list_marketplaces");
 }

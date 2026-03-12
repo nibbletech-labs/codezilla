@@ -6,8 +6,8 @@ use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::process::Command;
 use types::{
-    FetchResult, InstallTarget, Installation, ItemType, ScannedItem, UpdateCheckInput,
-    UpdateCheckResult,
+    FetchResult, InstallTarget, Installation, ItemType, MarketplaceInfo, ScannedItem,
+    UpdateCheckInput, UpdateCheckResult,
 };
 
 /// Validate that a URL uses the https:// scheme (block local paths and exotic protocols).
@@ -450,7 +450,7 @@ pub fn scan_installed_items(project_path: Option<String>) -> Result<Vec<ScannedI
 
     // Scan installed plugins from installed_plugins.json
     let plugins_json_path = format!("{}/.claude/plugins/installed_plugins.json", home);
-    scan_installed_plugins(&plugins_json_path, &mut items);
+    scan_installed_plugins(&plugins_json_path, project_path.as_deref(), &mut items);
 
     Ok(items)
 }
@@ -523,7 +523,7 @@ fn scan_claude_dir(base: &str, scope: InstallTarget, items: &mut Vec<ScannedItem
     }
 }
 
-fn scan_installed_plugins(json_path: &str, items: &mut Vec<ScannedItem>) {
+fn scan_installed_plugins(json_path: &str, project_path: Option<&str>, items: &mut Vec<ScannedItem>) {
     let content = match std::fs::read_to_string(json_path) {
         Ok(c) => c,
         Err(_) => return,
@@ -560,6 +560,16 @@ fn scan_installed_plugins(json_path: &str, items: &mut Vec<ScannedItem>) {
             } else {
                 InstallTarget::Global
             };
+
+            // Skip project-scoped installs that don't match the active project
+            if scope == InstallTarget::Project {
+                let plugin_project = install.get("projectPath").and_then(|v| v.as_str());
+                match (plugin_project, project_path) {
+                    (Some(pp), Some(active)) if pp == active => {} // match — include
+                    _ => continue, // no match or no active project — skip
+                }
+            }
+
             let install_path = install
                 .get("installPath")
                 .and_then(|v| v.as_str())
@@ -1002,4 +1012,26 @@ pub fn hash_file(path: String) -> Result<String, String> {
     hasher.update(&content);
     let result = hasher.finalize();
     Ok(format!("{:x}", result))
+}
+
+#[tauri::command]
+pub fn list_marketplaces() -> Result<Vec<MarketplaceInfo>, String> {
+    let output = Command::new("claude")
+        .args(["plugin", "marketplace", "list", "--json"])
+        .output()
+        .map_err(|e| format!("Failed to run claude CLI: {}", e))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        warn!("Failed to list marketplaces: {}", stderr.trim());
+        return Ok(Vec::new());
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let parsed: Vec<MarketplaceInfo> = serde_json::from_str(&stdout).map_err(|e| {
+        warn!("Failed to parse marketplace list JSON: {}", e);
+        format!("Failed to parse marketplace list: {}", e)
+    })?;
+
+    Ok(parsed)
 }

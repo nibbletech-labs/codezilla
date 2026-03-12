@@ -16,6 +16,7 @@ import {
   moveItem as moveItemTauri,
   hashFile,
   hashFileInTemp,
+  listMarketplaces,
 } from "../../lib/skillsTauri";
 import { detectDuplicates } from "../../lib/skillsSync";
 import { deriveMarketplaceName, groupRegistryItems, groupFetchedItems } from "./helpers";
@@ -87,6 +88,24 @@ export default function SkillsPluginsManager() {
     return () => {
       if (tempPathRef.current) cleanupFetch(tempPathRef.current).catch(console.error);
     };
+  }, []);
+
+  // Marketplace name → repo URL map (loaded once on mount)
+  const [marketplaceUrls, setMarketplaceUrls] = useState<Map<string, string>>(new Map());
+  useEffect(() => {
+    listMarketplaces()
+      .then((list) => {
+        const map = new Map<string, string>();
+        for (const m of list) {
+          if (m.source === "github" && m.repo) {
+            map.set(m.name, `https://github.com/${m.repo}`);
+          } else if (m.source === "url" && m.url) {
+            map.set(m.name, m.url);
+          }
+        }
+        setMarketplaceUrls(map);
+      })
+      .catch(console.error);
   }, []);
 
   /* ── Fetch ─────────────────────────────────────────────── */
@@ -746,6 +765,20 @@ export default function SkillsPluginsManager() {
     }
   };
 
+  /** Derive a clickable URL for an installed item. */
+  const getSourceUrl = (inst: Installation): string | undefined => {
+    // Linked / fetched items: use the registry source URL
+    const source = sources[inst.sourceId];
+    if (source) return source.url;
+    // Marketplace plugins: look up the marketplace URL map
+    if (inst.marketplaceUrl) {
+      const name = deriveMarketplaceName(inst.marketplaceUrl);
+      if (name && marketplaceUrls.has(name)) return marketplaceUrls.get(name);
+      return inst.marketplaceUrl;
+    }
+    return undefined;
+  };
+
   /* ── JSX ───────────────────────────────────────────────── */
 
   return (
@@ -873,6 +906,7 @@ export default function SkillsPluginsManager() {
                   key={inst.id}
                   inst={inst}
                   sourceLabel={getSourceLabel(inst)}
+                  sourceUrl={getSourceUrl(inst)}
                   hasUpdate={sources[inst.sourceId]?.updateAvailable}
                   isDuplicate={false}
                   hasProject={!!activeProject}
@@ -893,6 +927,7 @@ export default function SkillsPluginsManager() {
                   key={inst.id}
                   inst={inst}
                   sourceLabel={getSourceLabel(inst)}
+                  sourceUrl={getSourceUrl(inst)}
                   hasUpdate={sources[inst.sourceId]?.updateAvailable}
                   isDuplicate={duplicateProjectIds.has(inst.id)}
                   hasProject={!!activeProject}
@@ -916,9 +951,13 @@ export default function SkillsPluginsManager() {
                     key={`plugin-${i}`}
                     plugin={item}
                     subItems={scanResults.filter(
-                      (s) => s.parent_plugin_name === item.name && s.item_type !== "Plugin",
+                      (s) =>
+                        s.parent_plugin_name === item.name &&
+                        s.marketplace === item.marketplace &&
+                        s.item_type !== "Plugin",
                     )}
                     onRemove={() => requestRemoveScanned(item)}
+                    repoUrl={item.marketplace ? marketplaceUrls.get(item.marketplace) : undefined}
                   />
                 ))}
             </div>

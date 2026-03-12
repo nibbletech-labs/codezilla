@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { open } from "@tauri-apps/plugin-shell";
 import type { ScannedItem } from "../../store/skillsPluginsTypes";
 import { styles } from "./styles";
 import { TypeBadge } from "./TypeBadge";
@@ -7,10 +8,12 @@ export function PluginRow({
   plugin,
   subItems,
   onRemove,
+  repoUrl,
 }: {
   plugin: ScannedItem;
   subItems: ScannedItem[];
   onRemove: () => void;
+  repoUrl?: string;
 }) {
   const [expanded, setExpanded] = useState(false);
   const [hoverRemove, setHoverRemove] = useState(false);
@@ -38,7 +41,26 @@ export function PluginRow({
         </span>
         <span style={{ color: "var(--text-secondary)", fontSize: "var(--font-size-sm)" }}>
           {plugin.scope === "Global" ? "global" : "project"}
-          {plugin.marketplace && <> · {plugin.marketplace}</>}
+          {plugin.marketplace && (
+            <>
+              {" · "}
+              {repoUrl ? (
+                <span
+                  style={{ cursor: "pointer", textDecoration: "none" }}
+                  onMouseEnter={(e) => (e.currentTarget.style.textDecoration = "underline")}
+                  onMouseLeave={(e) => (e.currentTarget.style.textDecoration = "none")}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    open(repoUrl);
+                  }}
+                >
+                  {plugin.marketplace}
+                </span>
+              ) : (
+                plugin.marketplace
+              )}
+            </>
+          )}
         </span>
         <button
           style={{
