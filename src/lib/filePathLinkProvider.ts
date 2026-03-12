@@ -13,8 +13,9 @@ interface ParsedPath {
 // Matches relative paths (src/foo.ts), dotted (./foo.ts), absolute paths (/foo/bar.ts),
 // paths with :line:col suffix, git diff prefixes (a/, b/), and quoted paths.
 // Requires at least one "/" to avoid false positives on bare words.
+// Supports spaces within directory segments (e.g. "01_Projects/Second Brain/file.md").
 const FILE_PATH_REGEX =
-  /(?:["'])?(?:[ab]\/)?(\/?(?:[\w._-]+\/)+[\w._-]+(?:\.\w+)?)(?::(\d+)(?::(\d+))?)?(?:["'])?/g;
+  /(?:["'])?(?:[ab]\/)?(\/?(?:[\w._-]+(?:[ ][\w._-]+)*\/)+[\w._-]+(?:\.\w+)?)(?::(\d+)(?::(\d+))?)?(?:["'])?/g;
 
 // Matches bare filenames like package.json, index.ts, README.md (no directory separator).
 // Negative lookbehind avoids matching filenames already part of a path.
