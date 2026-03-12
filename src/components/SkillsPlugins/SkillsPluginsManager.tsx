@@ -18,7 +18,7 @@ import {
   hashFileInTemp,
   listMarketplaces,
 } from "../../lib/skillsTauri";
-import { detectDuplicates } from "../../lib/skillsSync";
+import { detectDuplicates, reconcileInstalledItems } from "../../lib/skillsSync";
 import { deriveMarketplaceName, groupRegistryItems, groupFetchedItems } from "./helpers";
 import { styles } from "./styles";
 import { ConfirmDialog } from "./ConfirmDialog";
@@ -89,6 +89,13 @@ export default function SkillsPluginsManager() {
       if (tempPathRef.current) cleanupFetch(tempPathRef.current).catch(console.error);
     };
   }, []);
+
+  // Re-scan installed items when the active project changes so project-scoped
+  // plugins/skills are correctly filtered to the current project.
+  const activeProjectPath = activeProject?.path;
+  useEffect(() => {
+    reconcileInstalledItems(activeProjectPath).catch(console.error);
+  }, [activeProjectPath]);
 
   // Marketplace name → repo URL map (loaded once on mount)
   const [marketplaceUrls, setMarketplaceUrls] = useState<Map<string, string>>(new Map());

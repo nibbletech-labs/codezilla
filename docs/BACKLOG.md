@@ -96,17 +96,17 @@ An audit of the Claude thread activity detection system identified three structu
 
 ## v0.3: Scheduled Jobs
 
-Cron-backed recurring jobs per project. Create a job (Claude, Codex, or shell), pick a schedule, and Codezilla writes the crontab entry. Jobs run whether or not the app is open. Logs viewable in-app.
+launchd-backed recurring jobs per project. Create a job (Claude, Codex, or shell), pick a schedule, and Codezilla writes a launchd agent. Jobs run whether or not the app is open. Logs viewable in-app.
 
 | # | Item | Status | Ref |
 |---|------|--------|-----|
-| 0.3-1 | Data model + store: `ScheduledJob` type, store actions, persistence to `codezilla-config.json` | Pending | [spec](specs/scheduled-jobs.md) |
-| 0.3-2 | Rust cron commands: `write_cron_entry`, `remove_cron_entry` (crontab manipulation), cron command wrapper with per-run log files and structured footer | Pending | [spec](specs/scheduled-jobs.md) |
-| 0.3-3 | Rust log commands: `list_job_runs` (directory listing + footer parsing), `read_job_log` (file contents) | Pending | [spec](specs/scheduled-jobs.md) |
-| 0.3-4 | Job creation UI: "Scheduled Job" option in `+` menu, type toggle buttons, command input, composable schedule picker | Pending | [spec](specs/scheduled-jobs.md) |
-| 0.3-5 | Job list in left panel: jobs per project with clock icon, schedule summary, enable/disable + last-run-failed indicators | Pending | [spec](specs/scheduled-jobs.md) |
-| 0.3-6 | Job detail panel: header with edit/run-now, run history list (timestamp, duration, pass/fail), log viewer with "Open File" | Pending | [spec](specs/scheduled-jobs.md) |
-| 0.3-7 | Startup sync: reconcile config vs crontab on launch, prune old log files (keep last 50 per job) | Pending | [spec](specs/scheduled-jobs.md) |
+| 0.3-1 | Data model + store: `ScheduledJob` type, store actions, persistence to `codezilla-config.json` | **Done** | [spec](specs/scheduled-jobs.md) |
+| 0.3-2 | Rust launchd commands: `write_launchd_entry`, `remove_launchd_entry`, command wrapper with per-run log files and structured footer | **Done** | [spec](specs/scheduled-jobs.md) |
+| 0.3-3 | Rust log commands: `list_job_runs` (directory listing + footer parsing), `read_job_log` (file contents), `reveal_log_in_finder`, `delete_job_logs`, `prune_job_logs` | **Done** | [spec](specs/scheduled-jobs.md) |
+| 0.3-4 | Job creation UI: "Scheduled Job" option in `+` menu, type toggle buttons, command input, composable schedule picker (interval / daily / weekly) | **Done** | [spec](specs/scheduled-jobs.md) |
+| 0.3-5 | Job list in left panel: jobs per project with clock icon, schedule summary, enable/disable + last-run-failed + running indicators | **Done** | [spec](specs/scheduled-jobs.md) |
+| 0.3-6 | Job detail panel: header with edit/run-now/enable-disable/delete, run history list (timestamp, duration, pass/fail), expandable log viewer with "Open File" | **Done** | [spec](specs/scheduled-jobs.md) |
+| 0.3-7 | Run Now: execute job immediately outside schedule, with background thread + log capture | **Done** | [spec](specs/scheduled-jobs.md) |
 
 ---
 
@@ -172,7 +172,7 @@ A unified panel surfacing everything relevant to the active project — backlog,
 | 4.4 | Vision docs tab — strategy/roadmap docs stored via `backlog-manager vision` | Pending | — |
 | 4.5 | CLAUDE.md viewer — project instructions always one click away | Pending | — |
 | 4.6 | Status bar chip — compact `↑2 ready · 1 in progress` count in project header | Pending | — |
-| 4.7 | Skills & Plugins Manager: detect, install, and manage skills/agents/commands/plugins from git repos. Personal registry with update tracking, project and global install targets, plugin decomposition. | Pending | [spec](specs/skills-plugins-manager.md) |
+| 4.7 | Skills & Plugins Manager: detect, install, and manage skills/agents/commands/plugins from git repos and marketplace. Personal registry with update tracking, project and global install targets, plugin decomposition, marketplace links, duplicate detection, scope management, SHA-256 verification, project-scoped filtering. Deferred: MCP server install, enable/disable toggle, private repo auth, public catalog browse. Not yet built: cascade removal on scope move (P→G should offer to remove other project-scoped installs of same item). | **Done** (v1 scope) | [spec](specs/skills-plugins-manager.md) |
 | 4.8 | Optional sync to hosted backend (team/cross-device access via `backlog-manager` web app) | Pending | — |
 
 ---

@@ -62,6 +62,8 @@ export async function reconcileInstalledItems(projectPath?: string): Promise<voi
     // Remove stale installation records (files gone)
     for (const inst of installations) {
       if (inst.itemType === "Plugin") continue;
+      // Skip installs scoped to a different project — they weren't scanned
+      if (inst.target === "Project" && inst.projectPath !== projectPath) continue;
 
       // Check if this installation's path was found in the scan
       const found = scanned.some(
