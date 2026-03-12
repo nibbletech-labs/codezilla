@@ -35,7 +35,7 @@
   },
   "plugins": {
     "updater": {
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDBDMDRCOTBEQkI0NDFBOUUKUldTZUdrUzdEYmtFRE5SdE1PQnFPaDgzc2ZGY2lQRTlCZCtFSWw4dWkrTGxhSDlQVHR5YXVFVW4K",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDQ4QTY3OTkyMTkwQ0MxRjAKUldUd3dRd1prbm1tU0lBRlQ4cngybWJlbjNBV0xXc3hqZGlZNnY4eW90akh0c0h2UXg1Q0hncnAK",
       "endpoints": [
         "https://github.com/nibbletech-labs/codezilla/releases/latest/download/latest.json"
       ]

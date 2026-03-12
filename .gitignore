@@ -14,4 +14,5 @@ docs/
 scripts/
 tests/
 CLAUDE.md
+.claude/
 src-tauri/gen/schemas/
