@@ -2,15 +2,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useAppStore } from "../../store/appStore";
 import { pickDirectory } from "../../lib/tauri";
-import type { ThreadType, LaunchPreset, Project } from "../../store/types";
+import type { ThreadType, Project } from "../../store/types";
 import { THREAD_NEW_LABELS } from "../../store/types";
 import ThreadItem from "./ThreadItem";
 import ThreadIcon from "./ThreadIcons";
 import JobItem from "./JobItem";
 import ProjectIcon from "../ProjectIcon";
 import { IconPicker } from "../IconPicker";
-import { JobCreationForm } from "../ScheduledJobs";
-import PresetForm from "../LaunchPresets/PresetForm";
 import {
   DndContext,
   closestCenter,
@@ -47,11 +45,7 @@ export default function LeftPanel() {
   const setActiveJob = useAppStore((s) => s.setActiveJob);
   const [iconPickerProjectId, setIconPickerProjectId] = useState<string | null>(null);
   const [iconPickerPos, setIconPickerPos] = useState<{ x: number; y: number } | null>(null);
-  const [jobFormProjectId, setJobFormProjectId] = useState<string | null>(null);
-  const [jobFormPos, setJobFormPos] = useState<{ x: number; y: number } | null>(null);
   const launchPresets = useAppStore((s) => s.launchPresets);
-  const [presetFormPos, setPresetFormPos] = useState<{ x: number; y: number } | null>(null);
-  const [editingPreset, setEditingPreset] = useState<LaunchPreset | null>(null);
   const [ageTick, setAgeTick] = useState(0);
 
   useEffect(() => {
@@ -192,18 +186,6 @@ export default function LeftPanel() {
               onClick={() => handleSpawnThread(type)}
             />
           ))}
-          <div style={{ height: 1, margin: "4px 0", background: "var(--border-subtle, var(--border-default))" }} />
-          <NewThreadMenuItem
-            type="shell"
-            label="Scheduled Job"
-            onClick={() => {
-              setJobFormProjectId(menuProjectId);
-              setJobFormPos(menuPos);
-              setMenuProjectId(null);
-              setMenuPos(null);
-            }}
-            icon={<ClockMenuIcon />}
-          />
           {launchPresets.length > 0 && (
             <div style={{ height: 1, margin: "4px 0", background: "var(--border-subtle, var(--border-default))" }} />
           )}
@@ -212,54 +194,9 @@ export default function LeftPanel() {
               key={preset.id}
               preset={preset}
               onClick={() => handleSpawnThread(preset.baseType, preset.args)}
-              onContextMenu={(e) => {
-                e.preventDefault();
-                setEditingPreset(preset);
-                setPresetFormPos(menuPos);
-                setMenuProjectId(null);
-                setMenuPos(null);
-              }}
             />
           ))}
-          <div style={{ height: 1, margin: "4px 0", background: "var(--border-subtle, var(--border-default))" }} />
-          <NewThreadMenuItem
-            type="claude"
-            label="New Preset..."
-            onClick={() => {
-              setEditingPreset(null);
-              setPresetFormPos(menuPos);
-              setMenuProjectId(null);
-              setMenuPos(null);
-            }}
-            icon={<PlusMenuIcon />}
-          />
         </div>,
-        document.body,
-      )}
-
-      {/* Scheduled job creation form */}
-      {jobFormProjectId && jobFormPos && createPortal(
-        <JobCreationForm
-          projectId={jobFormProjectId}
-          anchor={jobFormPos}
-          onClose={() => {
-            setJobFormProjectId(null);
-            setJobFormPos(null);
-          }}
-        />,
-        document.body,
-      )}
-
-      {/* Preset creation/edit form */}
-      {presetFormPos && createPortal(
-        <PresetForm
-          anchor={presetFormPos}
-          editPreset={editingPreset ?? undefined}
-          onClose={() => {
-            setPresetFormPos(null);
-            setEditingPreset(null);
-          }}
-        />,
         document.body,
       )}
 
@@ -458,21 +395,11 @@ function ScheduledSection({ jobIds, activeJobId, setActiveJob }: { jobIds: strin
   );
 }
 
-function ClockMenuIcon() {
-  return (
-    <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
-      <circle cx="8" cy="8" r="6" stroke="var(--text-secondary)" strokeWidth="1.3" />
-      <path d="M8 4.5V8L10.5 9.5" stroke="var(--text-secondary)" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
-    </svg>
-  );
-}
-
-function PresetMenuItem({ preset, onClick, onContextMenu }: { preset: LaunchPreset; onClick: () => void; onContextMenu: (e: React.MouseEvent) => void }) {
+function PresetMenuItem({ preset, onClick }: { preset: { emoji: string; name: string; args: string }; onClick: () => void }) {
   const [hovered, setHovered] = useState(false);
   return (
     <div
       onClick={onClick}
-      onContextMenu={onContextMenu}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
       title={preset.args}
@@ -484,15 +411,6 @@ function PresetMenuItem({ preset, onClick, onContextMenu }: { preset: LaunchPres
       <span style={{ fontSize: "14px", width: "14px", textAlign: "center" }}>{preset.emoji}</span>
       {preset.name}
     </div>
-  );
-}
-
-function PlusMenuIcon() {
-  return (
-    <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
-      <circle cx="8" cy="8" r="6" stroke="var(--text-secondary)" strokeWidth="1.3" />
-      <path d="M8 5V11M5 8H11" stroke="var(--text-secondary)" strokeWidth="1.3" strokeLinecap="round" />
-    </svg>
   );
 }
 

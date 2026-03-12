@@ -23,13 +23,14 @@ import {
 } from "../../lib/constants";
 import { getTerminalTheme, DARK_PALETTE, LIGHT_PALETTE } from "../../lib/themes";
 import { useAppStore } from "../../store/appStore";
-import type { Thread, ThreadType } from "../../store/types";
+import type { Thread, ThreadType, ScheduledJob } from "../../store/types";
 import { THREAD_NEW_LABELS } from "../../store/types";
 import ThreadIcon from "../LeftPanel/ThreadIcons";
 import ProjectIcon from "../ProjectIcon";
 import { IconPicker } from "../IconPicker";
-import { JobDetailPanel } from "../ScheduledJobs";
+import { JobDetailPanel, JobCreationForm } from "../ScheduledJobs";
 import { SkillsPluginsSummary, SkillsPluginsManager } from "../SkillsPlugins";
+import PresetsManager from "../LaunchPresets/PresetsManager";
 import {
   clearActivity,
   isOutputActivitySuppressed,
@@ -410,6 +411,9 @@ export default function TerminalMultiplexer() {
   const removeProject = useAppStore((s) => s.removeProject);
   const setProjectIcon = useAppStore((s) => s.setProjectIcon);
   const skillsManagerOpen = useAppStore((s) => s.skillsManagerOpen);
+  const presetsManagerOpen = useAppStore((s) => s.presetsManagerOpen);
+  const getProjectJobs = useAppStore((s) => s.getProjectJobs);
+  const setActiveJob = useAppStore((s) => s.setActiveJob);
   const markThreadExited = useAppStore((s) => s.markThreadExited);
   const resumeThread = useAppStore((s) => s.resumeThread);
   const activeProject = projects.find((p) => p.id === activeProjectId);
@@ -421,6 +425,7 @@ export default function TerminalMultiplexer() {
   const [showScrollButton, setShowScrollButton] = useState(false);
   const [loadingSession, setLoadingSession] = useState<string | null>(null);
   const [iconPickerPos, setIconPickerPos] = useState<{ x: number; y: number } | null>(null);
+  const [jobFormPos, setJobFormPos] = useState<{ x: number; y: number } | null>(null);
   const scrollCallbackRef = useRef<((atBottom: boolean) => void) | null>(null);
   scrollCallbackRef.current = (atBottom: boolean) => setShowScrollButton(!atBottom);
   const onFirstOutputRef = useRef<((sessionId: string) => void) | null>(null);
@@ -703,6 +708,7 @@ export default function TerminalMultiplexer() {
               ))}
             </div>
           )}
+          {activeProjectId && <ScheduledJobsSummary projectId={activeProjectId} getProjectJobs={getProjectJobs} setActiveJob={setActiveJob} onNewJob={(pos) => setJobFormPos(pos)} />}
           {activeProjectId && <SkillsPluginsSummary />}
           {activeProjectId && (
             <RemoveProjectButton onClick={() => removeProject(activeProjectId)} />
@@ -724,9 +730,23 @@ export default function TerminalMultiplexer() {
         />,
         document.body,
       )}
+      {/* Scheduled job creation form */}
+      {activeProjectId && jobFormPos && createPortal(
+        <JobCreationForm
+          projectId={activeProjectId}
+          anchor={jobFormPos}
+          onClose={() => setJobFormPos(null)}
+        />,
+        document.body,
+      )}
       {/* Skills & Plugins Manager overlay */}
       {skillsManagerOpen && createPortal(
         <SkillsPluginsManager />,
+        document.body,
+      )}
+      {/* Launch Presets Manager overlay */}
+      {presetsManagerOpen && createPortal(
+        <PresetsManager />,
         document.body,
       )}
     </div>
@@ -755,6 +775,78 @@ function LoadingOverlay({ threadType }: { threadType: ThreadType }) {
       <span style={{ color: "var(--text-secondary)", fontSize: "var(--font-size)", fontFamily: "var(--font-family)" }}>
         Starting {label}<span style={{ display: "inline-block", width: "1.5em", textAlign: "left" }}>{dots}</span>
       </span>
+    </div>
+  );
+}
+
+function ScheduledJobsSummary({
+  projectId,
+  getProjectJobs,
+  setActiveJob,
+  onNewJob,
+}: {
+  projectId: string;
+  getProjectJobs: (projectId: string) => ScheduledJob[];
+  setActiveJob: (jobId: string) => void;
+  onNewJob: (pos: { x: number; y: number }) => void;
+}) {
+  const jobs = getProjectJobs(projectId);
+  const [hoverManage, setHoverManage] = useState(false);
+
+  return (
+    <div style={{ marginTop: "16px", textAlign: "center" }}>
+      <div style={{
+        fontSize: "var(--font-size-sm)",
+        fontWeight: 600,
+        textTransform: "uppercase",
+        color: "var(--text-secondary)",
+        letterSpacing: "0.5px",
+        marginBottom: "6px",
+      }}>
+        Scheduled Jobs
+      </div>
+      {jobs.length > 0 ? (
+        <div style={{ fontSize: "var(--font-size-sm)", color: "var(--text-secondary)", lineHeight: 1.6 }}>
+          {jobs.slice(0, 5).map((job, i) => (
+            <span key={job.id}>
+              <span
+                style={{ color: "var(--text-primary)", cursor: "pointer" }}
+                onClick={() => setActiveJob(job.id)}
+              >
+                {job.name}
+              </span>
+              {i < Math.min(jobs.length, 5) - 1 && " \u00B7 "}
+            </span>
+          ))}
+          {jobs.length > 5 && (
+            <span style={{ color: "var(--text-secondary)" }}> + {jobs.length - 5} more</span>
+          )}
+        </div>
+      ) : (
+        <div style={{ fontSize: "var(--font-size-sm)", color: "var(--text-secondary)" }}>
+          No scheduled jobs
+        </div>
+      )}
+      <button
+        onClick={(e) => {
+          const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+          onNewJob({ x: rect.left, y: rect.bottom + 4 });
+        }}
+        onMouseEnter={() => setHoverManage(true)}
+        onMouseLeave={() => setHoverManage(false)}
+        style={{
+          marginTop: "8px",
+          background: hoverManage ? "var(--accent-selection)" : "transparent",
+          border: "1px solid var(--border-medium)",
+          color: "var(--text-secondary)",
+          fontSize: "var(--font-size-sm)",
+          padding: "4px 14px",
+          borderRadius: "4px",
+          cursor: "pointer",
+        }}
+      >
+        New Job
+      </button>
     </div>
   );
 }

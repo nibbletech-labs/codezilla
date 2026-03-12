@@ -49,7 +49,7 @@ export default function SkillsPluginsSummary() {
     const overflow = items.length - displayed.length;
     return (
       <div style={{ marginBottom: "4px" }}>
-        <span style={{ fontSize: "10px", color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.5px" }}>
+        <span style={{ fontSize: "var(--font-size-sm)", color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.5px" }}>
           {label}:
         </span>{" "}
         <span style={{ fontSize: "var(--font-size-sm)", color: "var(--text-secondary)" }}>
@@ -76,7 +76,7 @@ export default function SkillsPluginsSummary() {
     <div style={{ marginTop: "16px", textAlign: "center" }}>
       <div
         style={{
-          fontSize: "11px",
+          fontSize: "var(--font-size-sm)",
           fontWeight: 600,
           textTransform: "uppercase",
           color: "var(--text-secondary)",

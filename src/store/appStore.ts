@@ -28,6 +28,7 @@ interface AppState {
   renamingThreadId: string | null;
   sidebarOpenedForRename: boolean;
   skillsManagerOpen: boolean;
+  presetsManagerOpen: boolean;
 
   // Preview / selection actions
   openPreview: (path: string, line?: number) => void;
@@ -92,6 +93,8 @@ interface AppState {
   clearRenamingThread: () => void;
   openSkillsManager: () => void;
   closeSkillsManager: () => void;
+  openPresetsManager: () => void;
+  closePresetsManager: () => void;
 
   // Scheduled jobs
   scheduledJobs: ScheduledJob[];
@@ -137,6 +140,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   renamingThreadId: null,
   sidebarOpenedForRename: false,
   skillsManagerOpen: false,
+  presetsManagerOpen: false,
   scheduledJobs: [],
   activeJobId: null,
   launchPresets: [],
@@ -597,6 +601,8 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   openSkillsManager: () => set({ skillsManagerOpen: true }),
   closeSkillsManager: () => set({ skillsManagerOpen: false }),
+  openPresetsManager: () => set({ presetsManagerOpen: true }),
+  closePresetsManager: () => set({ presetsManagerOpen: false }),
 
   // Scheduled jobs actions
 

@@ -322,6 +322,9 @@ pub fn run() {
                 let remove_thread = MenuItemBuilder::with_id("remove-thread", "Remove Thread")
                     .accelerator("CmdOrCtrl+Alt+Delete")
                     .build(app)?;
+                let launch_presets = MenuItemBuilder::with_id("launch-presets", "Launch Presets\u{2026}")
+                    .accelerator("CmdOrCtrl+Alt+P")
+                    .build(app)?;
 
                 let app_submenu = Submenu::with_items(
                     app,
@@ -332,6 +335,8 @@ pub fn run() {
                         &new_claude,
                         &new_codex,
                         &new_shell,
+                        &PredefinedMenuItem::separator(app)?,
+                        &launch_presets,
                         &PredefinedMenuItem::separator(app)?,
                         &remove_thread,
                         &PredefinedMenuItem::separator(app)?,

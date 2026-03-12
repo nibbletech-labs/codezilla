@@ -181,6 +181,7 @@ Deprioritised or deferred items. Revisit based on user demand.
 | — | Hosted backend sync (team/cross-device access) | Premature — need user base first |
 | — | Multi-pane terminals (iTerm2-style splits) | Pinned thread pane (0.6-1) addresses 80% of the need. Full splits add complexity without matching Codezilla's cockpit philosophy |
 | — | Full-text search across files (Cmd+Shift+F) | AI threads handle this; revisit later |
+| — | Recently modified files in file sidebar | Show a "Recent" section at the top of the file tree listing files changed in the last N minutes (via fs events or polling). Quick access to files agents just touched without hunting through the tree |
 | — | Move/reattach project | Moving a project directory today breaks Claude session logs, scheduled jobs, and skill installation records. Real pain point but complex fix — revisit when users report it |
 | — | Conversation forking (branch a session to try different approach) | Agent Deck, KanbanCode have this. Evaluate demand after worktrees ship — worktrees may reduce the need since each worktree is effectively a fork |
 | — | Docker sandboxing | Codezilla is a cockpit, not an orchestrator — let users choose their own sandboxing |

@@ -57,6 +57,40 @@ export function FetchGroupRow({
     );
   }
 
+  const subItemIndices = group.subItems.map(({ idx }) => idx);
+  const pluginChecked = group.pluginIdx !== undefined && selectedItems.has(group.pluginIdx);
+  const allSubsChecked = subItemIndices.length > 0 && subItemIndices.every((i) => selectedItems.has(i));
+
+  // Selecting plugin = deselect all sub-items (whole plugin install via CLI)
+  const togglePlugin = () => {
+    setSelectedItems((prev) => {
+      const next = new Set(prev);
+      if (pluginChecked) {
+        next.delete(group.pluginIdx!);
+      } else {
+        next.add(group.pluginIdx!);
+        // Deselect all sub-items — mutually exclusive
+        for (const i of subItemIndices) next.delete(i);
+      }
+      return next;
+    });
+  };
+
+  // Selecting a sub-item = deselect plugin (individual item install via file copy)
+  const toggleSubItem = (idx: number) => {
+    setSelectedItems((prev) => {
+      const next = new Set(prev);
+      if (next.has(idx)) {
+        next.delete(idx);
+      } else {
+        next.add(idx);
+        // Deselect the plugin — mutually exclusive
+        if (group.pluginIdx !== undefined) next.delete(group.pluginIdx);
+      }
+      return next;
+    });
+  };
+
   // Plugin with sub-items
   return (
     <>
@@ -88,11 +122,16 @@ export function FetchGroupRow({
           >
             <input
               type="checkbox"
-              checked={selectedItems.has(group.pluginIdx)}
-              onChange={() => toggleItem(group.pluginIdx!)}
+              checked={pluginChecked}
+              onChange={togglePlugin}
             />
             <span>{group.plugin.name}</span>
             <TypeBadge type="Plugin" />
+            {allSubsChecked && !pluginChecked && (
+              <span style={{ color: "var(--text-secondary)", fontSize: "var(--font-size-xs, 11px)" }}>
+                (all items selected individually)
+              </span>
+            )}
           </label>
         )}
         {group.plugin.description && (
@@ -111,13 +150,15 @@ export function FetchGroupRow({
                 alignItems: "center",
                 gap: "8px",
                 flex: 1,
-                cursor: "pointer",
+                cursor: pluginChecked ? "default" : "pointer",
+                opacity: pluginChecked ? 0.5 : 1,
               }}
             >
               <input
                 type="checkbox"
-                checked={selectedItems.has(idx)}
-                onChange={() => toggleItem(idx)}
+                checked={pluginChecked || selectedItems.has(idx)}
+                disabled={pluginChecked}
+                onChange={() => toggleSubItem(idx)}
               />
               <span>{item.name}</span>
               <TypeBadge type={item.item_type} />

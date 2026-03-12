@@ -44,6 +44,9 @@ export function useMenuEvents() {
           }
           break;
         }
+        case "launch-presets":
+          state.openPresetsManager();
+          break;
         case "remove-thread": {
           if (state.activeThreadId) {
             state.removeThread(state.activeThreadId);
