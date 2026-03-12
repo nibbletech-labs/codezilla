@@ -62,6 +62,7 @@ pub struct ScannedItem {
     pub managed: bool,
     pub marketplace: Option<String>,
     pub parent_plugin_name: Option<String>,
+    pub project_path: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]

@@ -378,6 +378,13 @@ fn copy_dir_contents(src: &Path, dst: &Path) -> Result<(), String> {
             continue;
         }
 
+        // Skip symlinks to prevent traversal outside the source directory
+        if let Ok(meta) = std::fs::symlink_metadata(&src_path) {
+            if meta.file_type().is_symlink() {
+                continue;
+            }
+        }
+
         if src_path.is_dir() {
             copy_dir_contents(&src_path, &dst_path)?;
         } else {
@@ -440,12 +447,12 @@ pub fn scan_installed_items(project_path: Option<String>) -> Result<Vec<ScannedI
 
     // Scan global .claude/
     let global_base = format!("{}/.claude", home);
-    scan_claude_dir(&global_base, InstallTarget::Global, &mut items);
+    scan_claude_dir(&global_base, InstallTarget::Global, None, &mut items);
 
     // Scan project .claude/
     if let Some(pp) = &project_path {
         let project_base = format!("{}/.claude", pp);
-        scan_claude_dir(&project_base, InstallTarget::Project, &mut items);
+        scan_claude_dir(&project_base, InstallTarget::Project, Some(pp), &mut items);
     }
 
     // Scan installed plugins from installed_plugins.json
@@ -455,7 +462,7 @@ pub fn scan_installed_items(project_path: Option<String>) -> Result<Vec<ScannedI
     Ok(items)
 }
 
-fn scan_claude_dir(base: &str, scope: InstallTarget, items: &mut Vec<ScannedItem>) {
+fn scan_claude_dir(base: &str, scope: InstallTarget, project_path: Option<&str>, items: &mut Vec<ScannedItem>) {
     // Skills: <base>/skills/<name>/SKILL.md — only include dirs containing SKILL.md
     let skills_dir = format!("{}/skills", base);
     if let Ok(entries) = std::fs::read_dir(&skills_dir) {
@@ -471,6 +478,7 @@ fn scan_claude_dir(base: &str, scope: InstallTarget, items: &mut Vec<ScannedItem
                     managed: false,
                     marketplace: None,
                     parent_plugin_name: None,
+                    project_path: project_path.map(|s| s.to_string()),
                 });
             }
         }
@@ -494,6 +502,7 @@ fn scan_claude_dir(base: &str, scope: InstallTarget, items: &mut Vec<ScannedItem
                     managed: false,
                     marketplace: None,
                     parent_plugin_name: None,
+                    project_path: project_path.map(|s| s.to_string()),
                 });
             }
         }
@@ -517,6 +526,7 @@ fn scan_claude_dir(base: &str, scope: InstallTarget, items: &mut Vec<ScannedItem
                     managed: false,
                     marketplace: None,
                     parent_plugin_name: None,
+                    project_path: project_path.map(|s| s.to_string()),
                 });
             }
         }
@@ -576,6 +586,12 @@ fn scan_installed_plugins(json_path: &str, project_path: Option<&str>, items: &m
                 .unwrap_or("")
                 .to_string();
 
+            let item_project_path = if scope == InstallTarget::Project {
+                project_path.map(|s| s.to_string())
+            } else {
+                None
+            };
+
             items.push(ScannedItem {
                 path: install_path.clone(),
                 item_type: ItemType::Plugin,
@@ -584,11 +600,12 @@ fn scan_installed_plugins(json_path: &str, project_path: Option<&str>, items: &m
                 managed: false,
                 marketplace: marketplace.clone(),
                 parent_plugin_name: None,
+                project_path: item_project_path.clone(),
             });
 
             // Scan sub-items inside the plugin cache dir
             if !install_path.is_empty() {
-                scan_plugin_subitems(&install_path, &name, &scope, &marketplace, items);
+                scan_plugin_subitems(&install_path, &name, &scope, &marketplace, &item_project_path, items);
             }
         }
     }
@@ -600,6 +617,7 @@ fn scan_plugin_subitems(
     plugin_name: &str,
     scope: &InstallTarget,
     marketplace: &Option<String>,
+    project_path: &Option<String>,
     items: &mut Vec<ScannedItem>,
 ) {
     let base_path = Path::new(base);
@@ -617,7 +635,7 @@ fn scan_plugin_subitems(
 
     for root in search_roots {
         // Skills: look for */SKILL.md recursively (up to 3 levels deep)
-        scan_plugin_skills(root, root, plugin_name, scope, marketplace, items, 0);
+        scan_plugin_skills(root, root, plugin_name, scope, marketplace, project_path, items, 0);
 
         // Agents: look for agents/*.md
         let agents_dir = root.join("agents");
@@ -637,6 +655,7 @@ fn scan_plugin_subitems(
                         managed: false,
                         marketplace: marketplace.clone(),
                         parent_plugin_name: Some(plugin_name.to_string()),
+                        project_path: project_path.clone(),
                     });
                 }
             }
@@ -660,6 +679,7 @@ fn scan_plugin_subitems(
                         managed: false,
                         marketplace: marketplace.clone(),
                         parent_plugin_name: Some(plugin_name.to_string()),
+                        project_path: project_path.clone(),
                     });
                 }
             }
@@ -673,6 +693,7 @@ fn scan_plugin_skills(
     plugin_name: &str,
     scope: &InstallTarget,
     marketplace: &Option<String>,
+    project_path: &Option<String>,
     items: &mut Vec<ScannedItem>,
     depth: usize,
 ) {
@@ -702,10 +723,11 @@ fn scan_plugin_skills(
                 managed: false,
                 marketplace: marketplace.clone(),
                 parent_plugin_name: Some(plugin_name.to_string()),
+                project_path: project_path.clone(),
             });
         } else {
             // Recurse into subdirectories
-            scan_plugin_skills(&path, root, plugin_name, scope, marketplace, items, depth + 1);
+            scan_plugin_skills(&path, root, plugin_name, scope, marketplace, project_path, items, depth + 1);
         }
     }
 }
@@ -752,8 +774,16 @@ pub fn check_install_path_exists(
 
     let path = match item_type {
         ItemType::Skill => format!("{}/skills/{}", target_base, item_name),
-        ItemType::Agent => format!("{}/agents/{}.md", target_base, item_name),
-        ItemType::Command => format!("{}/commands/{}.md", target_base, item_name),
+        ItemType::Agent => {
+            let file_path = format!("{}/agents/{}.md", target_base, item_name);
+            let dir_path = format!("{}/agents/{}", target_base, item_name);
+            if Path::new(&dir_path).is_dir() { dir_path } else { file_path }
+        }
+        ItemType::Command => {
+            let file_path = format!("{}/commands/{}.md", target_base, item_name);
+            let dir_path = format!("{}/commands/{}", target_base, item_name);
+            if Path::new(&dir_path).is_dir() { dir_path } else { file_path }
+        }
         ItemType::Plugin => return Err("Plugins are managed by Claude CLI, not file paths".to_string()),
     };
 
@@ -978,21 +1008,6 @@ pub fn uninstall_plugin(name: String, scope: String) -> Result<(), String> {
 
     info!("Uninstalled plugin {} with scope {}", name, scope);
     Ok(())
-}
-
-#[tauri::command]
-pub fn list_installed_plugins() -> Result<String, String> {
-    let output = Command::new("claude")
-        .args(["plugin", "list", "--json"])
-        .output()
-        .map_err(|e| format!("Failed to run claude CLI: {}", e))?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("Failed to list plugins: {}", stderr.trim()));
-    }
-
-    Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
 
 #[tauri::command]

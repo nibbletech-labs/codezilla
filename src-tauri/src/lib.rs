@@ -544,7 +544,6 @@ pub fn run() {
             skills::register_marketplace,
             skills::install_plugin,
             skills::uninstall_plugin,
-            skills::list_installed_plugins,
             skills::hash_file,
             skills::list_marketplaces,
             skills::check_install_path_exists,

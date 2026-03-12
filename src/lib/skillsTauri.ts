@@ -106,10 +106,6 @@ export function uninstallPlugin(name: string, scope: string): Promise<void> {
   return invoke("uninstall_plugin", { name, scope });
 }
 
-export function listInstalledPlugins(): Promise<string> {
-  return invoke("list_installed_plugins");
-}
-
 export function hashFile(path: string): Promise<string> {
   return invoke("hash_file", { path });
 }

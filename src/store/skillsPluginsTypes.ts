@@ -44,6 +44,7 @@ export interface ScannedItem {
   managed: boolean;
   marketplace?: string;
   parent_plugin_name?: string;
+  project_path?: string;
 }
 
 export interface FetchResult {

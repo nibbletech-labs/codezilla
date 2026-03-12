@@ -24,7 +24,7 @@ export default function SkillsPluginsSummary() {
     (s) =>
       !s.managed &&
       (s.scope === "Global" ||
-        (s.scope === "Project")),
+        (s.scope === "Project" && s.project_path === activeProject?.path)),
   );
 
   // Combine for display: managed first, then unmanaged

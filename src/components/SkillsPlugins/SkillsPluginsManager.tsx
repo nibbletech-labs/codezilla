@@ -56,6 +56,7 @@ export default function SkillsPluginsManager() {
   const [confirmDialog, setConfirmDialog] = useState<{
     message: string;
     onConfirm: () => void;
+    onCancel?: () => void;
     confirmLabel?: string;
   } | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -125,6 +126,11 @@ export default function SkillsPluginsManager() {
     setFetchState("fetching");
 
     try {
+      // Clean up previous temp dir before overwriting the reference
+      if (tempPath) {
+        cleanupFetch(tempPath).catch(console.error);
+      }
+
       const result = await fetchGitRepo(url.trim());
       setTempPath(result.temp_path);
       setCommitSha(result.commit_sha);
@@ -138,7 +144,7 @@ export default function SkillsPluginsManager() {
       setError(e?.toString() ?? "Fetch failed");
       setFetchState("error");
     }
-  }, [url, setFetchState]);
+  }, [url, tempPath, setFetchState]);
 
   /* ── Add to Registry (P7: only selected items) ─────────── */
 
@@ -428,7 +434,8 @@ export default function SkillsPluginsManager() {
     try {
       if (item.item_type === "Plugin") {
         const cliScope = item.scope === "Global" ? "user" : "project";
-        await uninstallPlugin(item.name, cliScope);
+        const pluginRef = item.marketplace ? `${item.name}@${item.marketplace}` : item.name;
+        await uninstallPlugin(pluginRef, cliScope);
       } else {
         await removeItem(item.path, item.item_type);
       }
@@ -556,6 +563,9 @@ export default function SkillsPluginsManager() {
             onConfirm: () => {
               setConfirmDialog(null);
               doLink();
+            },
+            onCancel: () => {
+              cleanupFetch(result.temp_path).catch(console.error);
             },
           });
         }
@@ -1113,7 +1123,10 @@ export default function SkillsPluginsManager() {
           message={confirmDialog.message}
           confirmLabel={confirmDialog.confirmLabel}
           onConfirm={confirmDialog.onConfirm}
-          onCancel={() => setConfirmDialog(null)}
+          onCancel={() => {
+            confirmDialog.onCancel?.();
+            setConfirmDialog(null);
+          }}
         />
       )}
     </div>
