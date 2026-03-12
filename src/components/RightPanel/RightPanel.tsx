@@ -10,6 +10,7 @@ import FileTreeNode from "./FileTreeNode";
 import FilterInput from "./FilterInput";
 import FilePreview, { shouldUseNativePreview } from "../FilePreview/FilePreview";
 import CommitPreview from "../FilePreview/CommitPreview";
+import { SkillsPluginsStrip } from "../SkillsPlugins";
 import type { FileEntry } from "../../lib/tauri";
 import { previewFile as nativePreview, scanAllFiles, revealInFinder, openInDefaultApp } from "../../lib/tauri";
 
@@ -294,6 +295,7 @@ export default function RightPanel() {
         <div style={styles.empty}>No project selected</div>
       ) : (
         <>
+          <SkillsPluginsStrip />
           <FilterInput value={filterText} onChange={setFilterText} onKeyDown={filterText ? handleFilterKeyDown : undefined} />
 
           <div ref={treeRef} style={styles.tree} tabIndex={0}>

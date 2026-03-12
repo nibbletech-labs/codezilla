@@ -9,9 +9,11 @@ A macOS desktop app for multi-project management of AI-enabled development. Supp
 - **Multi-project, multi-thread** — Manage multiple projects, each with their own Claude Code, Codex, and shell sessions
 - **Session resumption** — Conversations persist across restarts; Claude Code and Codex sessions resume automatically
 - **Thread status at a glance** — See which threads are running, saved, or exited across all your projects
+- **Skills & Plugins Manager** — Discover, install, and manage Claude Code skills, agents, commands, and plugins from git repos with a built-in registry and update tracking
+- **Scheduled jobs** — Create recurring tasks with launchd integration and a polished management UI
 - **File preview** — Browse project files with syntax highlighting, Quick Look preview, and git diff view
 - **Git-aware file tree** — Real-time modified/added/deleted indicators with diff summary
-- **Intelligent terminal detection** — File paths and commit hashes in terminal output become clickable links
+- **Intelligent terminal detection** — File paths, URLs, and commit hashes in terminal output become clickable links
 
 ## Install
 

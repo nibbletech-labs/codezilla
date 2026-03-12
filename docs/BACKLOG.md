@@ -48,6 +48,7 @@ Session persistence, process lifecycle management, transcript awareness. Codezil
 |---|------|-------|
 | — | Multi-pane terminals (iTerm2-style splits) | Multiple threads already cover this |
 | — | Full-text search across files (Cmd+Shift+F) | AI threads handle this; revisit later |
+| — | Move/reattach project: Codezilla-managed directory move that updates all internal paths (config, installations, scheduled jobs, transcript bindings). Also "reattach" for projects that were moved externally. | Moving a project directory today breaks Claude session logs, scheduled jobs, and skill installation records |
 | 2.10 | Deterministic Codex transcript binding (backend binder, atomic claim, phased rollout replacing newest-file heuristic) | **Done** | [spec](specs/codex-deterministic-binding.md) |
 
 ---
@@ -171,7 +172,7 @@ A unified panel surfacing everything relevant to the active project — backlog,
 | 4.4 | Vision docs tab — strategy/roadmap docs stored via `backlog-manager vision` | Pending | — |
 | 4.5 | CLAUDE.md viewer — project instructions always one click away | Pending | — |
 | 4.6 | Status bar chip — compact `↑2 ready · 1 in progress` count in project header | Pending | — |
-| 4.7 | Config & agent visibility: surface MCP servers (global + project, Claude Code + Codex), installed skills/plugins, custom agents — read-only, backed by `src-tauri/src/config/mod.rs` | Pending | [research](specs/config-mcp-agents-research.md) |
+| 4.7 | Skills & Plugins Manager: detect, install, and manage skills/agents/commands/plugins from git repos. Personal registry with update tracking, project and global install targets, plugin decomposition. | Pending | [spec](specs/skills-plugins-manager.md) |
 | 4.8 | Optional sync to hosted backend (team/cross-device access via `backlog-manager` web app) | Pending | — |
 
 ---

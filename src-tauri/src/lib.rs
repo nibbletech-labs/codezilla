@@ -3,6 +3,7 @@ mod launchd;
 mod fs;
 mod git;
 mod pty;
+mod skills;
 mod transcript;
 
 use log::{error, info};
@@ -284,6 +285,7 @@ pub fn run() {
         })
         .setup(move |app| {
             info!("Codezilla starting up");
+            skills::cleanup_temp_dirs();
             #[cfg(target_os = "macos")]
             {
                 use tauri::menu::{CheckMenuItem, Menu, MenuItemBuilder, PredefinedMenuItem, Submenu};
@@ -532,6 +534,18 @@ pub fn run() {
             launchd::reveal_log_in_finder,
             launchd::run_job_now,
             launchd::prune_job_logs,
+            skills::fetch_git_repo,
+            skills::detect::detect_installable_items,
+            skills::check_for_updates,
+            skills::install_item,
+            skills::remove_item,
+            skills::scan_installed_items,
+            skills::cleanup_fetch,
+            skills::register_marketplace,
+            skills::install_plugin,
+            skills::uninstall_plugin,
+            skills::list_installed_plugins,
+            skills::hash_file,
             sync_remember_window_position,
             sync_appearance_menu,
             sync_accent_menu

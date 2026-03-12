@@ -26,6 +26,7 @@ interface AppState {
   showRightPanel: boolean;
   renamingThreadId: string | null;
   sidebarOpenedForRename: boolean;
+  skillsManagerOpen: boolean;
 
   // Preview / selection actions
   openPreview: (path: string, line?: number) => void;
@@ -86,6 +87,8 @@ interface AppState {
   loadPanelVisibility: (left: boolean, right: boolean) => void;
   startRenamingThread: (threadId: string) => void;
   clearRenamingThread: () => void;
+  openSkillsManager: () => void;
+  closeSkillsManager: () => void;
 
   // Scheduled jobs
   scheduledJobs: ScheduledJob[];
@@ -122,6 +125,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   showRightPanel: true,
   renamingThreadId: null,
   sidebarOpenedForRename: false,
+  skillsManagerOpen: false,
   scheduledJobs: [],
   activeJobId: null,
 
@@ -569,6 +573,9 @@ export const useAppStore = create<AppState>((set, get) => ({
   clearRenamingThread: () => {
     set({ renamingThreadId: null });
   },
+
+  openSkillsManager: () => set({ skillsManagerOpen: true }),
+  closeSkillsManager: () => set({ skillsManagerOpen: false }),
 
   // Scheduled jobs actions
 

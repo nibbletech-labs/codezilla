@@ -29,6 +29,7 @@ import ThreadIcon from "../LeftPanel/ThreadIcons";
 import ProjectIcon from "../ProjectIcon";
 import { IconPicker } from "../IconPicker";
 import { JobDetailPanel } from "../ScheduledJobs";
+import { SkillsPluginsSummary, SkillsPluginsManager } from "../SkillsPlugins";
 import {
   clearActivity,
   isOutputActivitySuppressed,
@@ -351,6 +352,7 @@ export default function TerminalMultiplexer() {
   const addThread = useAppStore((s) => s.addThread);
   const removeProject = useAppStore((s) => s.removeProject);
   const setProjectIcon = useAppStore((s) => s.setProjectIcon);
+  const skillsManagerOpen = useAppStore((s) => s.skillsManagerOpen);
   const markThreadExited = useAppStore((s) => s.markThreadExited);
   const resumeThread = useAppStore((s) => s.resumeThread);
   const activeProject = projects.find((p) => p.id === activeProjectId);
@@ -644,6 +646,7 @@ export default function TerminalMultiplexer() {
               ))}
             </div>
           )}
+          {activeProjectId && <SkillsPluginsSummary />}
           {activeProjectId && (
             <RemoveProjectButton onClick={() => removeProject(activeProjectId)} />
           )}
@@ -662,6 +665,11 @@ export default function TerminalMultiplexer() {
           }}
           onClose={() => setIconPickerPos(null)}
         />,
+        document.body,
+      )}
+      {/* Skills & Plugins Manager overlay */}
+      {skillsManagerOpen && createPortal(
+        <SkillsPluginsManager />,
         document.body,
       )}
     </div>
