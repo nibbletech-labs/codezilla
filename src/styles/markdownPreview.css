@@ -137,7 +137,6 @@
   border-collapse: collapse;
   border-spacing: 0;
   width: 100%;
-  display: block;
   overflow-x: auto;
 }
 
@@ -146,6 +145,9 @@
   border: 1px solid var(--border-default);
   padding: 6px 13px;
   text-align: left;
+  word-wrap: break-word;
+  overflow-wrap: break-word;
+  max-width: 400px;
 }
 
 .file-preview-markdown .md-rendered th {
