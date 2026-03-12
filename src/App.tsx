@@ -6,6 +6,7 @@ import TitleBar from "./components/TitleBar/TitleBar";
 import StatusBar from "./components/StatusBar/StatusBar";
 import PanelErrorBoundary from "./components/ErrorBoundary";
 import { FilePickerPopup } from "./components/FilePickerPopup";
+import { FileLinkMenu } from "./components/FileLinkMenu";
 import { usePersistence } from "./hooks/usePersistence";
 import { useCloseProtection } from "./hooks/useCloseProtection";
 import { useProjectHealthCheck } from "./hooks/useProjectHealthCheck";
@@ -175,6 +176,7 @@ function App() {
         <StatusBar />
       </div>
       <FilePickerPopup />
+      <FileLinkMenu />
     </div>
   );
 }

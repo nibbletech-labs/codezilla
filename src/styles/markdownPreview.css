@@ -4,9 +4,8 @@
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
   font-size: 15px;
   line-height: 1.65;
-  max-width: 78ch;
-  margin: 0 auto;
-  padding: 28px 32px 42px;
+  max-width: 100%;
+  padding: 28px 24px 42px;
   word-wrap: break-word;
   overflow-wrap: break-word;
 }

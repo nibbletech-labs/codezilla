@@ -882,6 +882,9 @@ function createTerminalInstance(
         onMultipleMatches: (candidates, position, line, col) => {
           useAppStore.getState().showFilePicker(candidates, position, line, col);
         },
+        onShowMenu: (path, position, line, col) => {
+          useAppStore.getState().showFileLinkMenu(path, position, line, col);
+        },
       },
     );
     terminal.registerLinkProvider(linkProvider);

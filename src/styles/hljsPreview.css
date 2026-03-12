@@ -1,3 +1,26 @@
+/* Line numbers via CSS counters — must be in an external CSS file, not an
+   inline <style> tag, because Tauri's CSP nonce blocks inline stylesheets. */
+.shiki-wrap pre {
+  white-space: pre-wrap !important;
+  word-break: break-word !important;
+  overflow-x: hidden !important;
+}
+
+.shiki-wrap .shiki code {
+  counter-reset: line;
+}
+
+.shiki-wrap .shiki .line::before {
+  counter-increment: line;
+  content: counter(line);
+  display: inline-block;
+  width: 3em;
+  text-align: right;
+  margin-right: 1em;
+  color: var(--text-hint);
+  user-select: none;
+}
+
 .shiki-wrap .hljs,
 .file-preview-markdown .md-rendered .hljs {
   display: block;

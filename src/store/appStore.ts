@@ -17,6 +17,7 @@ interface AppState {
   selectedFilePath: string | null;
   fileIndex: Set<string>;
   filePicker: { candidates: string[]; position: { x: number; y: number }; line?: number; col?: number } | null;
+  fileLinkMenu: { path: string; position: { x: number; y: number }; line?: number; col?: number } | null;
   transcriptInfo: Record<string, TranscriptInfo>;
   baseFontSize: number;
   accentColorId: AccentColorId;
@@ -36,6 +37,8 @@ interface AppState {
   setFileIndex: (index: Set<string>) => void;
   showFilePicker: (candidates: string[], position: { x: number; y: number }, line?: number, col?: number) => void;
   closeFilePicker: () => void;
+  showFileLinkMenu: (path: string, position: { x: number; y: number }, line?: number, col?: number) => void;
+  closeFileLinkMenu: () => void;
   updateTranscriptInfo: (threadId: string, info: TranscriptInfo) => void;
   clearTranscriptInfo: (threadId: string) => void;
 
@@ -116,6 +119,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   selectedFilePath: null,
   fileIndex: new Set<string>(),
   filePicker: null,
+  fileLinkMenu: null,
   transcriptInfo: {},
   baseFontSize: 14,
   accentColorId: "green",
@@ -179,6 +183,14 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   closeFilePicker: () => {
     set({ filePicker: null });
+  },
+
+  showFileLinkMenu: (path, position, line, col) => {
+    set({ fileLinkMenu: { path, position, line, col } });
+  },
+
+  closeFileLinkMenu: () => {
+    set({ fileLinkMenu: null });
   },
 
   updateTranscriptInfo: (threadId, info) => {

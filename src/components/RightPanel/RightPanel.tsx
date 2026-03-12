@@ -10,9 +10,8 @@ import FileTreeNode from "./FileTreeNode";
 import FilterInput from "./FilterInput";
 import FilePreview, { shouldUseNativePreview } from "../FilePreview/FilePreview";
 import CommitPreview from "../FilePreview/CommitPreview";
-import { SkillsPluginsStrip } from "../SkillsPlugins";
 import type { FileEntry } from "../../lib/tauri";
-import { previewFile as nativePreview, scanAllFiles, revealInFinder, openInDefaultApp } from "../../lib/tauri";
+import { previewFile as nativePreview, scanAllFiles } from "../../lib/tauri";
 
 export default function RightPanel() {
   const activeProject = useAppStore((s) => s.getActiveProject());
@@ -36,8 +35,7 @@ export default function RightPanel() {
   const closePreviewAction = useAppStore((s) => s.closePreview);
   const setFileIndex = useAppStore((s) => s.setFileIndex);
 
-  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; path: string } | null>(null);
-  const contextMenuRef = useRef<HTMLDivElement>(null);
+  const showFileLinkMenu = useAppStore((s) => s.showFileLinkMenu);
 
   const treeRef = useRef<HTMLDivElement>(null);
 
@@ -125,21 +123,9 @@ export default function RightPanel() {
     return () => window.removeEventListener("mousedown", handleGlobalClick);
   }, []);
 
-  // Close context menu on outside click
-  useEffect(() => {
-    if (!contextMenu) return;
-    const handleClick = (e: MouseEvent) => {
-      if (contextMenuRef.current && !contextMenuRef.current.contains(e.target as Node)) {
-        setContextMenu(null);
-      }
-    };
-    document.addEventListener("mousedown", handleClick);
-    return () => document.removeEventListener("mousedown", handleClick);
-  }, [contextMenu]);
-
   const handleFileContextMenu = useCallback((path: string, x: number, y: number) => {
-    setContextMenu({ x, y, path });
-  }, []);
+    showFileLinkMenu(path, { x, y });
+  }, [showFileLinkMenu]);
 
   // Keyboard handler: Space toggles preview, arrows navigate
   useEffect(() => {
@@ -295,7 +281,6 @@ export default function RightPanel() {
         <div style={styles.empty}>No project selected</div>
       ) : (
         <>
-          <SkillsPluginsStrip />
           <FilterInput value={filterText} onChange={setFilterText} onKeyDown={filterText ? handleFilterKeyDown : undefined} />
 
           <div ref={treeRef} style={styles.tree} tabIndex={0}>
@@ -364,94 +349,6 @@ export default function RightPanel() {
           document.body,
         )}
 
-      {contextMenu &&
-        createPortal(
-          <div
-            ref={contextMenuRef}
-            style={{
-              position: "fixed",
-              left: contextMenu.x,
-              top: contextMenu.y,
-              zIndex: 1000,
-              backgroundColor: "var(--bg-panel)",
-              border: "1px solid var(--border-default)",
-              borderRadius: "6px",
-              padding: "4px 0",
-              boxShadow: "0 4px 12px rgba(0,0,0,0.3)",
-              minWidth: "160px",
-            }}
-          >
-            <div
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: "8px",
-                padding: "6px 12px",
-                fontSize: "var(--font-size)",
-                color: "var(--text-primary)",
-                cursor: "pointer",
-              }}
-              onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = "var(--bg-hover)")}
-              onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = "transparent")}
-              onClick={() => {
-                openInDefaultApp(contextMenu.path, projectPath ?? undefined);
-                setContextMenu(null);
-              }}
-            >
-              <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
-                <path d="M8.636 3.5a.5.5 0 0 0-.5-.5H1.5A1.5 1.5 0 0 0 0 4.5v10A1.5 1.5 0 0 0 1.5 16h10a1.5 1.5 0 0 0 1.5-1.5V7.864a.5.5 0 0 0-1 0V14.5a.5.5 0 0 1-.5.5h-10a.5.5 0 0 1-.5-.5v-10a.5.5 0 0 1 .5-.5h6.636a.5.5 0 0 0 .5-.5z" />
-                <path d="M16 .5a.5.5 0 0 0-.5-.5h-5a.5.5 0 0 0 0 1h3.793L6.146 9.146a.5.5 0 1 0 .708.708L15 1.707V5.5a.5.5 0 0 0 1 0v-5z" />
-              </svg>
-              Open
-            </div>
-            <div
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: "8px",
-                padding: "6px 12px",
-                fontSize: "var(--font-size)",
-                color: "var(--text-primary)",
-                cursor: "pointer",
-              }}
-              onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = "var(--bg-hover)")}
-              onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = "transparent")}
-              onClick={() => {
-                revealInFinder(contextMenu.path, projectPath ?? undefined);
-                setContextMenu(null);
-              }}
-            >
-              <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
-                <path d="M1.5 2A1.5 1.5 0 0 0 0 3.5v9A1.5 1.5 0 0 0 1.5 14h13a1.5 1.5 0 0 0 1.5-1.5V5.5A1.5 1.5 0 0 0 14.5 4H8.21l-1.6-1.6A1.5 1.5 0 0 0 5.55 2H1.5z" />
-              </svg>
-              Reveal in Finder
-            </div>
-            <div
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: "8px",
-                padding: "6px 12px",
-                fontSize: "var(--font-size)",
-                color: "var(--text-primary)",
-                cursor: "pointer",
-              }}
-              onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = "var(--bg-hover)")}
-              onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = "transparent")}
-              onClick={() => {
-                navigator.clipboard.writeText(contextMenu.path);
-                setContextMenu(null);
-              }}
-            >
-              <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
-                <path d="M0 6.75C0 5.784.784 5 1.75 5h1.5a.75.75 0 0 1 0 1.5h-1.5a.25.25 0 0 0-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 0 0 .25-.25v-1.5a.75.75 0 0 1 1.5 0v1.5A1.75 1.75 0 0 1 9.25 16h-7.5A1.75 1.75 0 0 1 0 14.25v-7.5z" />
-                <path d="M5 1.75C5 .784 5.784 0 6.75 0h7.5C15.216 0 16 .784 16 1.75v7.5A1.75 1.75 0 0 1 14.25 11h-7.5A1.75 1.75 0 0 1 5 9.25v-7.5zm1.75-.25a.25.25 0 0 0-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 0 0 .25-.25v-7.5a.25.25 0 0 0-.25-.25h-7.5z" />
-              </svg>
-              Copy Path
-            </div>
-          </div>,
-          document.body,
-        )}
     </div>
   );
 }

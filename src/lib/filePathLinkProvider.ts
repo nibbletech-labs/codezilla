@@ -118,6 +118,7 @@ export function createFilePathLinkProviderForTerminal(
     onSelect: (resolvedPath: string) => void;
     onPreview: (resolvedPath: string, line?: number, col?: number) => void;
     onMultipleMatches: (candidates: string[], position: { x: number; y: number }, line?: number, col?: number) => void;
+    onShowMenu: (resolvedPath: string, position: { x: number; y: number }, line?: number, col?: number) => void;
   },
 ): ILinkProvider {
   return {
@@ -164,12 +165,12 @@ export function createFilePathLinkProviderForTerminal(
             // Multiple matches — show picker regardless of modifier
             callbacks.onMultipleMatches(p.candidates, { x: event.clientX, y: event.clientY }, p.line, p.col);
           } else if (withModifier) {
-            // Cmd+click: highlight in tree + open preview
+            // Cmd+click: highlight in tree + open preview directly
             callbacks.onSelect(p.resolved);
             callbacks.onPreview(p.resolved, p.line, p.col);
           } else {
-            // Plain click: highlight in file tree only
-            callbacks.onSelect(p.resolved);
+            // Plain click: show context menu
+            callbacks.onShowMenu(p.resolved, { x: event.clientX, y: event.clientY }, p.line, p.col);
           }
         },
       }));

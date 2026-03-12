@@ -2,12 +2,10 @@ import { useEffect, useState, useCallback, useRef } from "react";
 import { open as openUrl } from "@tauri-apps/plugin-shell";
 import { readFile, readFileBase64, getFileDiffStat, revealInFinder } from "../../lib/tauri";
 import { sanitizeHtml } from "../../lib/sanitize";
-import { useShiki } from "../../hooks/useShiki";
 import { isMarkdownFile, renderMarkdown } from "../../lib/markdownRenderer";
 import { highlightWithHljs } from "../../lib/hljs";
 import { useAppStore } from "../../store/appStore";
 import { useGitStatus } from "../../hooks/useGitStatus";
-import { useResolvedAppearance } from "../../hooks/useResolvedAppearance";
 import DiffView from "./DiffView";
 
 interface FilePreviewProps {
@@ -70,8 +68,6 @@ export default function FilePreview({ filePath, line, onClose }: FilePreviewProp
   const isMarkdown = isMarkdownFile(filePath);
   const [viewMode, setViewMode] = useState<ViewMode>(isMarkdown ? "rendered" : "file");
   const [diffLayout, setDiffLayout] = useState<DiffLayout>("unified");
-  const highlighter = useShiki();
-  const resolvedAppearance = useResolvedAppearance();
   const bodyRef = useRef<HTMLDivElement>(null);
 
   const fileName = filePath.split("/").pop() ?? filePath;
@@ -215,31 +211,19 @@ export default function FilePreview({ filePath, line, onClose }: FilePreviewProp
   }, []);
 
   const lang = getLangFromPath(filePath);
-  const shikiTheme = resolvedAppearance === "dark" ? "vitesse-dark" : "vitesse-light";
 
+  // Use hljs for code highlighting — Shiki uses inline style="" attributes
+  // which are blocked by Tauri's CSP (nonce-based policy overrides unsafe-inline).
+  // hljs uses CSS classes instead, which work with external stylesheets.
   let highlightedHtml: string | null = null;
   if (content && lang) {
-    if (highlighter) {
-      try {
-        highlightedHtml = highlighter.codeToHtml(content, {
-          lang,
-          theme: shikiTheme,
-        });
-      } catch {
-        // Fall back below.
-      }
-    }
-
-    // Fallback when Shiki is unavailable in the current runtime.
-    if (!highlightedHtml) {
-      const fallback = highlightWithHljs(content, lang);
-      if (fallback) highlightedHtml = sanitizeHtml(fallback);
-    }
+    const fallback = highlightWithHljs(content, lang);
+    if (fallback) highlightedHtml = sanitizeHtml(fallback);
   }
 
   let renderedMarkdownHtml: string | null = null;
   if (isMarkdown && content && viewMode === "rendered") {
-    renderedMarkdownHtml = renderMarkdown(content, highlighter, shikiTheme);
+    renderedMarkdownHtml = renderMarkdown(content);
   }
 
   const isLoading =
@@ -280,7 +264,6 @@ export default function FilePreview({ filePath, line, onClose }: FilePreviewProp
     if (highlightedHtml) {
       return (
         <div style={styles.code}>
-          <style>{LINE_NUMBER_CSS}</style>
           <div
             className="shiki-wrap"
             dangerouslySetInnerHTML={{ __html: highlightedHtml }}
@@ -425,20 +408,6 @@ function getLangFromPath(filePath: string): string | null {
   return ext ? map[ext] ?? null : null;
 }
 
-const LINE_NUMBER_CSS = `
-  .shiki-wrap pre { white-space: pre-wrap !important; word-break: break-word !important; overflow-x: hidden !important; }
-  .shiki code { counter-reset: line; }
-  .shiki .line::before {
-    counter-increment: line;
-    content: counter(line);
-    display: inline-block;
-    width: 3em;
-    text-align: right;
-    margin-right: 1em;
-    color: var(--text-hint);
-    user-select: none;
-  }
-`;
 
 const styles = {
   backdrop: {

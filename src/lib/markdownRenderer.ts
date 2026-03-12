@@ -1,5 +1,4 @@
 import { marked } from "marked";
-import type { Highlighter } from "shiki";
 import { sanitizeHtml } from "./sanitize";
 import { highlightWithHljs } from "./hljs";
 
@@ -8,22 +7,13 @@ export function isMarkdownFile(filePath: string): boolean {
   return ext === "md" || ext === "mdx" || ext === "markdown";
 }
 
-export function renderMarkdown(
-  content: string,
-  highlighter: Highlighter | null,
-  theme: string,
-): string {
+// Shiki is not used here because its output relies on inline style=""
+// attributes which are blocked by Tauri's CSP nonce policy. hljs uses
+// CSS classes instead, which work with external stylesheets.
+export function renderMarkdown(content: string): string {
   const renderer = new marked.Renderer();
 
   renderer.code = ({ text, lang }: { text: string; lang?: string }) => {
-    if (highlighter && lang) {
-      try {
-        return highlighter.codeToHtml(text, { lang, theme });
-      } catch {
-        // Fall back below.
-      }
-    }
-
     if (lang) {
       const fallback = highlightWithHljs(text, lang);
       if (fallback) return fallback;
