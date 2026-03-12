@@ -39,6 +39,10 @@ fn validate_temp_path(path: &Path) -> Result<std::path::PathBuf, String> {
     if !canonical.starts_with(&canonical_temp) {
         return Err("Path is not inside temp directory".to_string());
     }
+    // L3: Verify path is a direct child of temp dir (no nested traversal)
+    if canonical.parent() != Some(canonical_temp.as_path()) {
+        return Err("Path is not a direct child of the temp directory".to_string());
+    }
     let dir_name = canonical
         .file_name()
         .map(|n| n.to_string_lossy().to_string())
@@ -173,37 +177,77 @@ pub fn check_for_updates(
             continue;
         }
 
-        let output = Command::new("git")
+        // M3: Use spawn + poll with 10s timeout to prevent hangs
+        let child = Command::new("git")
             .args(["ls-remote", &source.url, "HEAD"])
-            .output();
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn();
 
-        match output {
-            Ok(o) if o.status.success() => {
-                let stdout = String::from_utf8_lossy(&o.stdout);
-                let remote_sha = stdout
-                    .split_whitespace()
-                    .next()
-                    .unwrap_or("")
-                    .to_string();
-                let update_available = !remote_sha.is_empty() && remote_sha != source.current_sha;
-                results.push(UpdateCheckResult {
-                    source_id: source.source_id.clone(),
-                    remote_sha,
-                    update_available,
-                });
-            }
-            Ok(o) => {
-                let stderr = String::from_utf8_lossy(&o.stderr);
-                warn!(
-                    "ls-remote failed for {}: {}",
-                    source.url,
-                    stderr.trim()
-                );
-                results.push(UpdateCheckResult {
-                    source_id: source.source_id.clone(),
-                    remote_sha: String::new(),
-                    update_available: false,
-                });
+        match child {
+            Ok(mut child) => {
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+                let status = loop {
+                    match child.try_wait() {
+                        Ok(Some(status)) => break Some(status),
+                        Ok(None) => {
+                            if std::time::Instant::now() >= deadline {
+                                warn!("ls-remote timed out for {}", source.url);
+                                let _ = child.kill();
+                                let _ = child.wait();
+                                break None;
+                            }
+                            std::thread::sleep(std::time::Duration::from_millis(50));
+                        }
+                        Err(e) => {
+                            warn!("Error waiting for ls-remote for {}: {}", source.url, e);
+                            break None;
+                        }
+                    }
+                };
+
+                match status {
+                    Some(s) if s.success() => {
+                        let stdout = child.stdout.take().map(|mut s| {
+                            let mut buf = String::new();
+                            std::io::Read::read_to_string(&mut s, &mut buf).ok();
+                            buf
+                        }).unwrap_or_default();
+                        let remote_sha = stdout
+                            .split_whitespace()
+                            .next()
+                            .unwrap_or("")
+                            .to_string();
+                        let update_available = !remote_sha.is_empty() && remote_sha != source.current_sha;
+                        results.push(UpdateCheckResult {
+                            source_id: source.source_id.clone(),
+                            remote_sha,
+                            update_available,
+                        });
+                    }
+                    Some(_) => {
+                        let stderr = child.stderr.take().map(|mut s| {
+                            let mut buf = String::new();
+                            std::io::Read::read_to_string(&mut s, &mut buf).ok();
+                            buf
+                        }).unwrap_or_default();
+                        warn!("ls-remote failed for {}: {}", source.url, stderr.trim());
+                        results.push(UpdateCheckResult {
+                            source_id: source.source_id.clone(),
+                            remote_sha: String::new(),
+                            update_available: false,
+                        });
+                    }
+                    None => {
+                        // Timeout or wait error — treat as no update
+                        results.push(UpdateCheckResult {
+                            source_id: source.source_id.clone(),
+                            remote_sha: String::new(),
+                            update_available: false,
+                        });
+                    }
+                }
             }
             Err(e) => {
                 warn!("Failed to run ls-remote for {}: {}", source.url, e);
@@ -304,36 +348,49 @@ pub fn install_item(
     std::fs::create_dir_all(&install_path)
         .map_err(|e| format!("Failed to create install directory: {}", e))?;
 
-    // Copy files and determine final install path
-    let final_install_path = match item_type {
-        ItemType::Skill => {
-            copy_dir_contents(&source_path, Path::new(&install_path))?;
-            install_path.clone()
-        }
-        ItemType::Agent | ItemType::Command => {
-            if source_path.is_file() {
-                let filename = source_path
-                    .file_name()
-                    .ok_or("Invalid source path")?
-                    .to_string_lossy()
-                    .to_string();
-                let dest = Path::new(&install_path).join(&filename);
-                std::fs::copy(&source_path, &dest)
-                    .map_err(|e| format!("Failed to copy file: {}", e))?;
-                format!("{}/{}", install_path, filename)
-            } else if source_path.is_dir() {
-                copy_dir_contents(&source_path, Path::new(&install_path))?;
-                install_path.clone()
-            } else {
-                install_path.clone()
+    // H3: Use validated_source (not raw source_path) for all file operations
+    // H4: Wrap copy in closure for rollback on failure + guaranteed temp cleanup
+    let copy_result: Result<String, String> = (|| {
+        match item_type {
+            ItemType::Skill => {
+                copy_dir_contents(&validated_source, Path::new(&install_path))?;
+                Ok(install_path.clone())
             }
+            ItemType::Agent | ItemType::Command => {
+                if validated_source.is_file() {
+                    let filename = validated_source
+                        .file_name()
+                        .ok_or("Invalid source path")?
+                        .to_string_lossy()
+                        .to_string();
+                    let dest = Path::new(&install_path).join(&filename);
+                    std::fs::copy(&validated_source, &dest)
+                        .map_err(|e| format!("Failed to copy file: {}", e))?;
+                    Ok(format!("{}/{}", install_path, filename))
+                } else if validated_source.is_dir() {
+                    copy_dir_contents(&validated_source, Path::new(&install_path))?;
+                    Ok(install_path.clone())
+                } else {
+                    Ok(install_path.clone())
+                }
+            }
+            ItemType::Plugin => unreachable!(),
         }
-        ItemType::Plugin => unreachable!(),
-    };
+    })();
 
+    // H4: Always clean up temp dir, regardless of copy success/failure
     if should_cleanup {
         let _ = std::fs::remove_dir_all(&work_dir);
     }
+
+    // H4: On copy failure, roll back partially-created destination before propagating
+    let final_install_path = match copy_result {
+        Ok(path) => path,
+        Err(e) => {
+            let _ = std::fs::remove_dir_all(&install_path);
+            return Err(e);
+        }
+    };
 
     info!("Installed {} '{}' to {}", format!("{:?}", item_type), item_name, final_install_path);
 
@@ -565,7 +622,7 @@ fn scan_installed_plugins(json_path: &str, project_path: Option<&str>, items: &m
 
         for install in installs {
             let scope_str = install.get("scope").and_then(|v| v.as_str()).unwrap_or("user");
-            let scope = if scope_str == "project" {
+            let scope = if scope_str.eq_ignore_ascii_case("project") {
                 InstallTarget::Project
             } else {
                 InstallTarget::Global
@@ -876,13 +933,23 @@ pub fn move_item(
         return Err("Copy appeared to succeed but destination not found".to_string());
     }
 
-    // Delete source using canonical path
-    if canonical_src.is_dir() {
+    // M4: Delete source using canonical path — rollback destination on failure
+    let remove_result = if canonical_src.is_dir() {
         std::fs::remove_dir_all(&canonical_src)
-            .map_err(|e| format!("Failed to remove source directory: {}", e))?;
     } else {
         std::fs::remove_file(&canonical_src)
-            .map_err(|e| format!("Failed to remove source file: {}", e))?;
+    };
+    if let Err(e) = remove_result {
+        // Attempt to remove the destination copy before returning the error
+        if Path::new(&dest_path).is_dir() {
+            let _ = std::fs::remove_dir_all(&dest_path);
+        } else {
+            let _ = std::fs::remove_file(&dest_path);
+        }
+        return Err(format!(
+            "Move rolled back: failed to remove source ({}), destination copy removed",
+            e
+        ));
     }
 
     info!("Moved {:?} from {:?} to {:?}: {}", item_type, from_target, to_target, dest_path);
@@ -924,12 +991,35 @@ pub fn hash_file_in_temp(path: String) -> Result<String, String> {
 
 // ---- Plugin CLI commands ----
 
+/// Build a `Command` for the `claude` CLI with an augmented PATH that includes
+/// common install locations (e.g. ~/.local/bin) which may not be in PATH when
+/// the app is launched from Finder / Dock rather than a shell.
+fn claude_command() -> Command {
+    let mut cmd = Command::new("claude");
+    let home = std::env::var("HOME").unwrap_or_default();
+    let extra_paths = [
+        format!("{}/.local/bin", home),
+        format!("{}/.claude/local/bin", home),
+        "/usr/local/bin".to_string(),
+        "/opt/homebrew/bin".to_string(),
+    ];
+    let current_path = std::env::var("PATH").unwrap_or_default();
+    let new_path = extra_paths
+        .iter()
+        .chain(std::iter::once(&current_path))
+        .map(|s| s.as_str())
+        .collect::<Vec<_>>()
+        .join(":");
+    cmd.env("PATH", new_path);
+    cmd
+}
+
 #[tauri::command]
 pub fn register_marketplace(url: String) -> Result<(), String> {
     validate_url(&url)?;
 
     // Check if already registered
-    let list_output = Command::new("claude")
+    let list_output = claude_command()
         .args(["plugin", "marketplace", "list", "--json"])
         .output();
 
@@ -956,7 +1046,7 @@ pub fn register_marketplace(url: String) -> Result<(), String> {
         }
     }
 
-    let output = Command::new("claude")
+    let output = claude_command()
         .args(["plugin", "marketplace", "add", &url])
         .output()
         .map_err(|e| format!("Failed to run claude CLI: {}", e))?;
@@ -977,7 +1067,7 @@ pub fn install_plugin(name: String, marketplace: String, scope: String) -> Resul
     validate_scope(&scope)?;
 
     let plugin_ref = format!("{}@{}", name, marketplace);
-    let output = Command::new("claude")
+    let output = claude_command()
         .args(["plugin", "install", &plugin_ref, "--scope", &scope])
         .output()
         .map_err(|e| format!("Failed to run claude CLI: {}", e))?;
@@ -996,7 +1086,7 @@ pub fn uninstall_plugin(name: String, scope: String) -> Result<(), String> {
     validate_plugin_name(&name)?;
     validate_scope(&scope)?;
 
-    let output = Command::new("claude")
+    let output = claude_command()
         .args(["plugin", "uninstall", &name, "--scope", &scope])
         .output()
         .map_err(|e| format!("Failed to run claude CLI: {}", e))?;
@@ -1031,7 +1121,7 @@ pub fn hash_file(path: String) -> Result<String, String> {
 
 #[tauri::command]
 pub fn list_marketplaces() -> Result<Vec<MarketplaceInfo>, String> {
-    let output = Command::new("claude")
+    let output = claude_command()
         .args(["plugin", "marketplace", "list", "--json"])
         .output()
         .map_err(|e| format!("Failed to run claude CLI: {}", e))?;

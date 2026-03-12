@@ -296,10 +296,8 @@ pub fn detect_installable_items(repo_path: String) -> Result<Vec<DetectedItem>, 
                 Some(n) => n,
                 None => continue, // Agents require name frontmatter
             };
-            let description = match get_frontmatter_value(&fm, "description") {
-                Some(d) => d,
-                None => continue, // Agents require description frontmatter
-            };
+            // M2: Make description optional (matches command detection pattern)
+            let description = get_frontmatter_value(&fm, "description").unwrap_or_default();
 
             let parent_plugin = plugin_dirs
                 .iter()

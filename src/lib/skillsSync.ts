@@ -1,6 +1,11 @@
 import { useSkillsPluginsStore } from "../store/skillsPluginsStore";
 import { checkForUpdates, scanInstalledItems } from "./skillsTauri";
 
+// M5: Normalize paths by stripping trailing slashes for consistent comparison
+function stripTrailingSlash(p: string): string {
+  return p.length > 1 && p.endsWith("/") ? p.slice(0, -1) : p;
+}
+
 let hasCheckedThisSession = false;
 
 /**
@@ -51,11 +56,13 @@ export async function reconcileInstalledItems(projectPath?: string): Promise<voi
     const scanned = await scanInstalledItems(projectPath);
     const installations = Object.values(store.installations);
 
-    // Mark scanned items as managed if they match an installation
+    // M5: Mark scanned items as managed if they match an installation (normalize paths)
     for (const item of scanned) {
-      const match = installations.find(
-        (inst) => inst.installPath === item.path || item.path.startsWith(inst.installPath + "/"),
-      );
+      const itemPath = stripTrailingSlash(item.path);
+      const match = installations.find((inst) => {
+        const instPath = stripTrailingSlash(inst.installPath);
+        return instPath === itemPath || itemPath.startsWith(instPath + "/");
+      });
       item.managed = !!match;
     }
 
@@ -65,10 +72,12 @@ export async function reconcileInstalledItems(projectPath?: string): Promise<voi
       // Skip installs scoped to a different project — they weren't scanned
       if (inst.target === "Project" && inst.projectPath !== projectPath) continue;
 
-      // Check if this installation's path was found in the scan
-      const found = scanned.some(
-        (s) => s.path === inst.installPath || s.path.startsWith(inst.installPath + "/"),
-      );
+      // M5: Check if this installation's path was found in the scan (normalize paths)
+      const instPath = stripTrailingSlash(inst.installPath);
+      const found = scanned.some((s) => {
+        const sPath = stripTrailingSlash(s.path);
+        return sPath === instPath || sPath.startsWith(instPath + "/");
+      });
       if (!found) {
         console.warn(`Stale installation record removed: ${inst.itemName} at ${inst.installPath}`);
         store.removeInstallation(inst.id);
@@ -105,8 +114,9 @@ export function detectDuplicates(projectPath?: string): void {
 
   const duplicates: { projectInstId: string; globalInstId: string }[] = [];
   for (const proj of projectInsts) {
+    // M6: Only flag duplicates from the same source to avoid false positives
     const globalMatch = globalInsts.find(
-      (g) => g.itemName === proj.itemName && g.itemType === proj.itemType,
+      (g) => g.itemName === proj.itemName && g.itemType === proj.itemType && g.sourceId === proj.sourceId,
     );
     if (globalMatch) {
       duplicates.push({

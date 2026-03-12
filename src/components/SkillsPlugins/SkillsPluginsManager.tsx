@@ -61,6 +61,8 @@ export default function SkillsPluginsManager() {
   } | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const tempPathRef = useRef<string | null>(null);
+  // H1: Generation counter to guard against race conditions in handleFetch
+  const fetchGenRef = useRef(0);
 
   useEffect(() => {
     inputRef.current?.focus();
@@ -118,29 +120,47 @@ export default function SkillsPluginsManager() {
 
   /* ── Fetch ─────────────────────────────────────────────── */
 
+  // H1: Race condition guard — increment generation on each fetch, bail if stale
   const handleFetch = useCallback(async () => {
     if (!url.trim()) return;
+    const gen = ++fetchGenRef.current;
+    const prevTempPath = tempPath;
     setError(null);
     setFetchedItems([]);
     setSelectedItems(new Set());
     setFetchState("fetching");
 
     try {
-      // Clean up previous temp dir before overwriting the reference
-      if (tempPath) {
-        cleanupFetch(tempPath).catch(console.error);
+      const result = await fetchGitRepo(url.trim());
+
+      // If a newer fetch was started, clean up this result and bail
+      if (fetchGenRef.current !== gen) {
+        cleanupFetch(result.temp_path).catch(console.error);
+        return;
       }
 
-      const result = await fetchGitRepo(url.trim());
+      // Clean up the previous temp dir only after the new fetch succeeds
+      if (prevTempPath) {
+        cleanupFetch(prevTempPath).catch(console.error);
+      }
+
       setTempPath(result.temp_path);
       setCommitSha(result.commit_sha);
       setFetchState("detecting");
 
       const items = await detectInstallableItems(result.temp_path);
+
+      // Check generation again after detection
+      if (fetchGenRef.current !== gen) {
+        cleanupFetch(result.temp_path).catch(console.error);
+        return;
+      }
+
       setFetchedItems(items);
       setSelectedItems(new Set(items.map((_, i) => i)));
       setFetchState("idle");
     } catch (e: any) {
+      if (fetchGenRef.current !== gen) return;
       setError(e?.toString() ?? "Fetch failed");
       setFetchState("error");
     }
@@ -248,7 +268,16 @@ export default function SkillsPluginsManager() {
             errors.push(`marketplace registration: ${e?.toString()}`);
           }
         }
-        const marketplace = deriveMarketplaceName(url.trim());
+        // M1: Look up marketplace name from CLI instead of guessing from URL
+        let marketplace = deriveMarketplaceName(url.trim());
+        try {
+          const mktList = await listMarketplaces();
+          const match = mktList.find((m) =>
+            (m.source === "url" && m.url === url.trim()) ||
+            (m.source === "github" && m.repo && url.trim() === `https://github.com/${m.repo}`)
+          );
+          if (match) marketplace = match.name;
+        } catch { /* fall back to derived name */ }
         const cliScope = target === "Global" ? "user" : "project";
         for (const item of plugins) {
           try {
@@ -295,6 +324,15 @@ export default function SkillsPluginsManager() {
             setConfirmDialog(null);
             doInstall();
           },
+          // H2: Clean up temp dir and reset state if user cancels
+          onCancel: () => {
+            if (tempPath) {
+              cleanupFetch(tempPath).catch(console.error);
+              setTempPath(null);
+            }
+            setFetchedItems([]);
+            setSelectedItems(new Set());
+          },
         });
       } else {
         doInstall();
@@ -314,7 +352,16 @@ export default function SkillsPluginsManager() {
       if (item.item_type === "Plugin") {
         try {
           await registerMarketplace(source.url);
-          const marketplace = deriveMarketplaceName(source.url);
+          // M1: Look up marketplace name from CLI instead of guessing from URL
+          let marketplace = deriveMarketplaceName(source.url);
+          try {
+            const mktList = await listMarketplaces();
+            const match = mktList.find((m) =>
+              (m.source === "url" && m.url === source.url) ||
+              (m.source === "github" && m.repo && source.url === `https://github.com/${m.repo}`)
+            );
+            if (match) marketplace = match.name;
+          } catch { /* fall back to derived name */ }
           const cliScope = target === "Global" ? "user" : "project";
           await installPlugin(item.name, marketplace, cliScope);
           addInstallation({
@@ -601,7 +648,16 @@ export default function SkillsPluginsManager() {
           // Plugin update: re-register marketplace and reinstall via CLI
           const marketplaceUrl = inst.marketplaceUrl || source.url;
           await registerMarketplace(marketplaceUrl);
-          const marketplace = deriveMarketplaceName(marketplaceUrl);
+          // M1: Look up marketplace name from CLI instead of guessing from URL
+          let marketplace = deriveMarketplaceName(marketplaceUrl);
+          try {
+            const mktList = await listMarketplaces();
+            const match = mktList.find((m) =>
+              (m.source === "url" && m.url === marketplaceUrl) ||
+              (m.source === "github" && m.repo && marketplaceUrl === `https://github.com/${m.repo}`)
+            );
+            if (match) marketplace = match.name;
+          } catch { /* fall back to derived name */ }
           const cliScope = inst.target === "Global" ? "user" : "project";
           await uninstallPlugin(inst.itemName, cliScope);
           await installPlugin(inst.itemName, marketplace, cliScope);
