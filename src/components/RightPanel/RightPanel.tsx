@@ -302,8 +302,13 @@ export default function RightPanel() {
                       onClick={() => {
                         setFilterSelectedIdx(idx);
                         setSelectedFile(entry.path);
+                        openPreview(entry.path);
                       }}
-                      onDoubleClick={() => openPreview(entry.path)}
+                      onContextMenu={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        handleFileContextMenu(entry.path, e.clientX, e.clientY);
+                      }}
                     >
                       <span style={styles.filterName}>{entry.name}</span>
                       <span style={styles.filterPath}>{entry.relativePath}</span>
