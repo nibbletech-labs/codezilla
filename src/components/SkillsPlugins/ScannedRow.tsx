@@ -2,6 +2,7 @@ import { useState } from "react";
 import type { ScannedItem } from "../../store/skillsPluginsTypes";
 import { styles } from "./styles";
 import { TypeBadge } from "./TypeBadge";
+import { ScopeIcon } from "./ScopeIcon";
 
 export function ScannedRow({
   item,
@@ -18,11 +19,12 @@ export function ScannedRow({
   return (
     <div style={styles.itemRow}>
       <span style={{ flex: 1 }}>
+        <ScopeIcon scope={item.scope} />
         {item.name}
         <TypeBadge type={item.item_type} />
       </span>
       <span style={{ color: "var(--text-secondary)", fontSize: "var(--font-size-sm)" }}>
-        {item.scope === "Global" ? "global" : "project"} · {label}
+        {label}
       </span>
       {onLink && (
         <button style={styles.smallBtn} onClick={onLink}>

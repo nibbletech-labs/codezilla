@@ -3,6 +3,7 @@ import { open } from "@tauri-apps/plugin-shell";
 import type { ScannedItem } from "../../store/skillsPluginsTypes";
 import { styles } from "./styles";
 import { TypeBadge } from "./TypeBadge";
+import { ScopeIcon } from "./ScopeIcon";
 
 export function PluginRow({
   plugin,
@@ -36,14 +37,13 @@ export function PluginRow({
           <span style={{ marginRight: "4px", width: "11px", display: "inline-block" }} />
         )}
         <span style={{ flex: 1 }}>
+          <ScopeIcon scope={plugin.scope} />
           {plugin.name}
           <TypeBadge type="Plugin" />
         </span>
         <span style={{ color: "var(--text-secondary)", fontSize: "var(--font-size-sm)" }}>
-          {plugin.scope === "Global" ? "global" : "project"}
           {plugin.marketplace && (
             <>
-              {" · "}
               {repoUrl ? (
                 <span
                   style={{ cursor: "pointer", textDecoration: "none" }}

@@ -51,10 +51,8 @@ function WorkingSpinner() {
 }
 
 function BadgeDot({ badge, isWorking }: { badge: ThreadBadge; isWorking: boolean }) {
-  if (isWorking) {
-    return <WorkingSpinner />;
-  }
-
+  // Badge dots take priority over the working spinner — a badge is a more
+  // specific signal (e.g. "done", "needs input") than generic "working".
   if (badge && BADGE_COLORS[badge]) {
     return (
       <span
@@ -69,6 +67,11 @@ function BadgeDot({ badge, isWorking }: { badge: ThreadBadge; isWorking: boolean
       />
     );
   }
+
+  if (isWorking) {
+    return <WorkingSpinner />;
+  }
+
   // Invisible placeholder to prevent jitter
   return (
     <span
@@ -110,16 +113,23 @@ export default function ThreadItem({ threadId, isActive, ageTick, onSelect }: Th
         ? "needs_input"
         : null
   );
+  // Derive the effective badge, but respect dismissal: if the user already
+  // clicked this thread (badgeDismissedAt is set), don't fall back to
+  // idleReason — the badge was intentionally cleared.
+  const badgeDismissed = info?.badgeDismissedAt != null;
   const effectiveBadge: ThreadBadge = (
     badge
-    ?? (info?.idleReason === "waiting_for_approval"
-      ? "needs_approval"
-      : info?.idleReason === "waiting_for_input"
-        ? "needs_input"
-        : subtitleNeedsBadge)
+    ?? (badgeDismissed
+      ? null
+      : (info?.idleReason === "waiting_for_approval"
+        ? "needs_approval"
+        : info?.idleReason === "waiting_for_input"
+          ? "needs_input"
+          : subtitleNeedsBadge))
   );
   const isWorking = thread ? isThreadLikelyWorking(thread, info) : false;
-  const showActivityAge = !isWorking && !effectiveBadge;
+  // If we have a badge to show, prefer it over the working spinner or age
+  const showActivityAge = !effectiveBadge && !isWorking;
 
   if (!thread) return null;
 

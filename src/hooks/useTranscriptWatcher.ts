@@ -557,10 +557,14 @@ export function useTranscriptWatcher() {
           continue;
         }
 
-        // Clear stale/invalid done badges immediately (for example badges that
-        // were assigned while the thread wasn't actually in completion state).
+        // Clear stale/invalid done badges, but give a grace period so the
+        // badge isn't cleared while PTY output is still settling after
+        // completion (e.g. prompt rendering, escape sequences).
+        const DONE_BADGE_GRACE_MS = 5000;
+        const badgeAge = info.badgeSince ? now - info.badgeSince : Infinity;
         if (
           info.badge === "done"
+          && badgeAge > DONE_BADGE_GRACE_MS
           && (
             info.semanticPhase !== "waiting"
             || info.idleReason !== "none"

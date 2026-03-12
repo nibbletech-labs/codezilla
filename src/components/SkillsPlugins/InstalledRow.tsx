@@ -3,6 +3,7 @@ import { open } from "@tauri-apps/plugin-shell";
 import type { Installation } from "../../store/skillsPluginsTypes";
 import { styles } from "./styles";
 import { TypeBadge } from "./TypeBadge";
+import { ScopeIcon } from "./ScopeIcon";
 
 export function InstalledRow({
   inst,
@@ -36,6 +37,7 @@ export function InstalledRow({
   return (
     <div style={styles.itemRow}>
       <span style={{ flex: 1 }}>
+        <ScopeIcon scope={inst.target} />
         {inst.itemName}
         <TypeBadge type={inst.itemType} />
         {hasUpdate && (
