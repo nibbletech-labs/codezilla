@@ -82,6 +82,16 @@ export function scanAllFiles(path: string, projectRoot: string): Promise<string[
   return invoke("scan_all_files", { path, projectRoot });
 }
 
+export interface RecentFileEntry {
+  name: string;
+  path: string;
+  mtime_ms: number;
+}
+
+export function getRecentFiles(path: string, projectRoot: string, limit: number): Promise<RecentFileEntry[]> {
+  return invoke("get_recent_files", { path, projectRoot, limit });
+}
+
 export function readFile(path: string, projectRoot: string): Promise<string> {
   return invoke("read_file", { path, projectRoot });
 }
@@ -135,6 +145,16 @@ export function getGitBranch(path: string): Promise<string> {
 
 export function getGitStatus(path: string): Promise<GitStatusEntry[]> {
   return invoke("get_git_status", { path });
+}
+
+export interface FileDiffStat {
+  path: string;
+  added: number;
+  removed: number;
+}
+
+export function getAllFileDiffStats(path: string): Promise<FileDiffStat[]> {
+  return invoke("get_all_file_diff_stats", { path });
 }
 
 export function getGitDiffStat(path: string): Promise<[number, number]> {

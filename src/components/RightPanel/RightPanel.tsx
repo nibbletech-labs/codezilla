@@ -6,12 +6,17 @@ import { useAppStore } from "../../store/appStore";
 import { useFileTree } from "../../hooks/useFileTree";
 import { useFileWatcher } from "../../hooks/useFileWatcher";
 import { useGitStatus } from "../../hooks/useGitStatus";
+import { useRecentFiles } from "../../hooks/useRecentFiles";
+import { useAllFileDiffStats } from "../../hooks/useAllFileDiffStats";
+import { timeAgo } from "../../lib/timeAgo";
 import FileTreeNode from "./FileTreeNode";
 import FilterInput from "./FilterInput";
 import FilePreview, { shouldUseNativePreview } from "../FilePreview/FilePreview";
 import CommitPreview from "../FilePreview/CommitPreview";
 import type { FileEntry } from "../../lib/tauri";
 import { previewFile as nativePreview, scanAllFiles } from "../../lib/tauri";
+
+type ViewMode = "all" | "recent" | "changes";
 
 export default function RightPanel() {
   const activeProject = useAppStore((s) => s.getActiveProject());
@@ -24,8 +29,21 @@ export default function RightPanel() {
   useFileWatcher(projectPath, expandedPaths, refresh);
   const gitStatus = useGitStatus(projectPath);
 
+  const [viewMode, setViewMode] = useState<ViewMode>("all");
+  const recentFiles = useRecentFiles(projectPath, viewMode === "recent");
+  const fileDiffStats = useAllFileDiffStats(projectPath, viewMode === "changes");
+
+  // Tick counter for updating relative times
+  const [, setAgeTick] = useState(0);
+  useEffect(() => {
+    if (viewMode !== "recent") return;
+    const id = setInterval(() => setAgeTick((t) => t + 1), 60_000);
+    return () => clearInterval(id);
+  }, [viewMode]);
+
   const [filterText, setFilterText] = useState("");
   const [filterSelectedIdx, setFilterSelectedIdx] = useState(0);
+  const [hoveredPath, setHoveredPath] = useState<string | null>(null);
 
   // Use store for selectedFile and previewFile
   const selectedFile = useAppStore((s) => s.selectedFilePath);
@@ -234,6 +252,22 @@ export default function RightPanel() {
     return fuse.search(filterText).map((r) => r.item);
   }, [filterText, allLoadedEntries]);
 
+  // Filtered recent files (supports search within the view)
+  const filteredRecentFiles = useMemo(() => {
+    if (!filterText) return recentFiles;
+    const lower = filterText.toLowerCase();
+    return recentFiles.filter(
+      (f) => f.name.toLowerCase().includes(lower) || f.path.toLowerCase().includes(lower),
+    );
+  }, [recentFiles, filterText]);
+
+  // Filtered diff stats (supports search within the view)
+  const filteredDiffStats = useMemo(() => {
+    if (!filterText) return fileDiffStats;
+    const lower = filterText.toLowerCase();
+    return fileDiffStats.filter((f) => f.path.toLowerCase().includes(lower));
+  }, [fileDiffStats, filterText]);
+
   // Reset filter selection when results change
   useEffect(() => {
     setFilterSelectedIdx(0);
@@ -281,57 +315,164 @@ export default function RightPanel() {
         <div style={styles.empty}>No project selected</div>
       ) : (
         <>
+          <div style={styles.viewModeBar}>
+            {(["all", "recent", "changes"] as ViewMode[]).map((mode) => (
+              <button
+                key={mode}
+                onClick={() => setViewMode(mode)}
+                style={{
+                  ...styles.viewModeBtn,
+                  ...(viewMode === mode ? styles.viewModeBtnActive : {}),
+                }}
+              >
+                {mode === "all" ? "All" : mode === "recent" ? "Recent" : "Changes"}
+              </button>
+            ))}
+          </div>
           <FilterInput value={filterText} onChange={setFilterText} onKeyDown={filterText ? handleFilterKeyDown : undefined} />
 
           <div ref={treeRef} style={styles.tree} tabIndex={0}>
-            {isLoading && rootEntries.length === 0 ? (
-              <div style={styles.empty}>Loading...</div>
-            ) : filterText ? (
-              filteredEntries.length === 0 ? (
-                <div style={styles.empty}>No matches</div>
+            {viewMode === "all" ? (
+              isLoading && rootEntries.length === 0 ? (
+                <div style={styles.empty}>Loading...</div>
+              ) : filterText ? (
+                filteredEntries.length === 0 ? (
+                  <div style={styles.empty}>No matches</div>
+                ) : (
+                  <div ref={filterListRef}>
+                    {filteredEntries.map((entry, idx) => (
+                      <div
+                        key={entry.path}
+                        data-filter-selected={idx === filterSelectedIdx}
+                        style={{
+                          ...styles.filterResult,
+                          backgroundColor: idx === filterSelectedIdx
+                            ? "var(--accent-selection)"
+                            : hoveredPath === entry.path
+                              ? "var(--bg-hover)"
+                              : "transparent",
+                        }}
+                        onMouseEnter={() => setHoveredPath(entry.path)}
+                        onMouseLeave={() => setHoveredPath(null)}
+                        onClick={() => {
+                          setFilterSelectedIdx(idx);
+                          setSelectedFile(entry.path);
+                          openPreview(entry.path);
+                        }}
+                        onContextMenu={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          handleFileContextMenu(entry.path, e.clientX, e.clientY);
+                        }}
+                      >
+                        <span style={styles.filterName}>{entry.name}</span>
+                        <span style={styles.filterPath}>{entry.relativePath}</span>
+                      </div>
+                    ))}
+                  </div>
+                )
               ) : (
-                <div ref={filterListRef}>
-                  {filteredEntries.map((entry, idx) => (
+                rootEntries.map((entry) => (
+                  <FileTreeNode
+                    key={entry.path}
+                    entry={entry}
+                    depth={0}
+                    expandedPaths={expandedPaths}
+                    dirCache={dirCache}
+                    toggleExpand={toggleExpand}
+                    gitStatus={gitStatus}
+                    onFileSelect={setSelectedFile}
+                    onFileDoubleClick={openPreview}
+                    selectedPath={selectedFile}
+                    onContextMenu={handleFileContextMenu}
+                  />
+                ))
+              )
+            ) : viewMode === "recent" ? (
+              filteredRecentFiles.length === 0 ? (
+                <div style={styles.empty}>No recent files</div>
+              ) : (
+                filteredRecentFiles.map((file) => {
+                  const relPath = projectPath && file.path.startsWith(projectPath)
+                    ? file.path.slice(projectPath.length + 1)
+                    : file.path;
+                  return (
                     <div
-                      key={entry.path}
-                      data-filter-selected={idx === filterSelectedIdx}
+                      key={file.path}
                       style={{
-                        ...styles.filterResult,
-                        backgroundColor: idx === filterSelectedIdx ? "var(--accent-selection)" : "transparent",
+                        ...styles.flatRow,
+                        backgroundColor: selectedFile === file.path
+                          ? "var(--accent-selection)"
+                          : hoveredPath === file.path
+                            ? "var(--bg-hover)"
+                            : "transparent",
                       }}
+                      onMouseEnter={() => setHoveredPath(file.path)}
+                      onMouseLeave={() => setHoveredPath(null)}
                       onClick={() => {
-                        setFilterSelectedIdx(idx);
-                        setSelectedFile(entry.path);
-                        openPreview(entry.path);
+                        setSelectedFile(file.path);
+                        openPreview(file.path);
                       }}
                       onContextMenu={(e) => {
                         e.preventDefault();
                         e.stopPropagation();
-                        handleFileContextMenu(entry.path, e.clientX, e.clientY);
+                        handleFileContextMenu(file.path, e.clientX, e.clientY);
                       }}
                     >
-                      <span style={styles.filterName}>{entry.name}</span>
-                      <span style={styles.filterPath}>{entry.relativePath}</span>
+                      <div style={styles.flatRowLeft}>
+                        <span style={styles.filterName}>{file.name}</span>
+                        <span style={styles.filterPath}>{relPath}</span>
+                      </div>
+                      <span style={styles.ageLabel}>{timeAgo(file.mtime_ms)}</span>
                     </div>
-                  ))}
-                </div>
+                  );
+                })
               )
             ) : (
-              rootEntries.map((entry) => (
-                <FileTreeNode
-                  key={entry.path}
-                  entry={entry}
-                  depth={0}
-                  expandedPaths={expandedPaths}
-                  dirCache={dirCache}
-                  toggleExpand={toggleExpand}
-                  gitStatus={gitStatus}
-                  onFileSelect={setSelectedFile}
-                  onFileDoubleClick={openPreview}
-                  selectedPath={selectedFile}
-                  onContextMenu={handleFileContextMenu}
-                />
-              ))
+              filteredDiffStats.length === 0 ? (
+                <div style={styles.empty}>No uncommitted changes</div>
+              ) : (
+                filteredDiffStats.map((file) => {
+                  const name = file.path.split("/").pop() ?? file.path;
+                  return (
+                    <div
+                      key={file.path}
+                      style={{
+                        ...styles.flatRow,
+                        backgroundColor:
+                          projectPath && selectedFile === projectPath + "/" + file.path
+                            ? "var(--accent-selection)"
+                            : hoveredPath === file.path
+                              ? "var(--bg-hover)"
+                              : "transparent",
+                      }}
+                      onMouseEnter={() => setHoveredPath(file.path)}
+                      onMouseLeave={() => setHoveredPath(null)}
+                      onClick={() => {
+                        const absPath = projectPath ? projectPath + "/" + file.path : file.path;
+                        setSelectedFile(absPath);
+                        openPreview(absPath);
+                      }}
+                      onContextMenu={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        const absPath = projectPath ? projectPath + "/" + file.path : file.path;
+                        handleFileContextMenu(absPath, e.clientX, e.clientY);
+                      }}
+                    >
+                      <div style={styles.flatRowLeft}>
+                        <span style={styles.filterName}>{name}</span>
+                        <span style={styles.filterPath}>{file.path}</span>
+                      </div>
+                      <span style={styles.diffStats}>
+                        {file.added > 0 && <span style={styles.diffAdded}>+{file.added}</span>}
+                        {file.added > 0 && file.removed > 0 && <span style={styles.diffSep}>{" "}</span>}
+                        {file.removed > 0 && <span style={styles.diffRemoved}>-{file.removed}</span>}
+                      </span>
+                    </div>
+                  );
+                })
+              )
             )}
           </div>
         </>
@@ -395,5 +536,64 @@ const styles = {
     overflow: "hidden",
     textOverflow: "ellipsis",
     whiteSpace: "nowrap" as const,
+  },
+  viewModeBar: {
+    display: "flex",
+    gap: "1px",
+    padding: "6px 8px 0",
+  },
+  viewModeBtn: {
+    flex: 1,
+    background: "transparent",
+    border: "1px solid var(--border-default)",
+    color: "var(--text-secondary)",
+    fontSize: "var(--font-size-sm)",
+    padding: "3px 0",
+    cursor: "pointer",
+    borderRadius: "2px",
+    transition: "background 0.1s, color 0.1s",
+  } as React.CSSProperties,
+  viewModeBtnActive: {
+    background: "var(--accent-selection)",
+    color: "var(--text-primary)",
+    borderColor: "var(--accent)",
+  },
+  flatRow: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    padding: "3px 12px",
+    cursor: "pointer",
+    gap: "8px",
+  },
+  flatRowLeft: {
+    display: "flex",
+    flexDirection: "column" as const,
+    overflow: "hidden",
+    minWidth: 0,
+  },
+  ageLabel: {
+    color: "var(--text-secondary)",
+    fontSize: "var(--font-size-sm)",
+    fontFamily: "var(--font-mono, monospace)",
+    flexShrink: 0,
+    userSelect: "none" as const,
+  },
+  diffStats: {
+    flexShrink: 0,
+    fontSize: "var(--font-size-sm)",
+    fontFamily: "var(--font-mono, monospace)",
+    userSelect: "none" as const,
+    display: "flex",
+    gap: "2px",
+  },
+  diffAdded: {
+    color: "#73c991",
+  },
+  diffRemoved: {
+    color: "#c74e39",
+  },
+  diffSep: {
+    color: "var(--text-secondary)",
   },
 };

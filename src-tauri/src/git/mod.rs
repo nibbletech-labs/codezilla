@@ -2,7 +2,7 @@ pub mod types;
 
 use log::error;
 use std::process::Command;
-use types::{CommitFileStat, CommitInfo, GitFileStatus, GitStatusEntry};
+use types::{CommitFileStat, CommitInfo, FileDiffStat, GitFileStatus, GitStatusEntry};
 
 fn parse_status(xy: &str) -> Option<GitFileStatus> {
     let bytes = xy.as_bytes();
@@ -207,6 +207,75 @@ pub fn get_git_diff(repo_path: String, file_path: String) -> Result<String, Stri
     }
 
     Ok(String::new())
+}
+
+/// Returns per-file diff stats (added/removed lines) for all uncommitted changes.
+/// Includes both tracked (diff HEAD) and untracked files (counted via wc -l equivalent).
+#[tauri::command]
+pub fn get_all_file_diff_stats(path: String) -> Result<Vec<FileDiffStat>, String> {
+    let canonical = crate::fs::canonicalize_path(&path)?;
+    let repo_path = canonical.as_path();
+    if !repo_path.is_dir() {
+        return Err(format!("Not a directory: {}", path));
+    }
+
+    let mut stats: Vec<FileDiffStat> = Vec::new();
+
+    // Get diff stats for tracked files
+    let output = Command::new("git")
+        .args(["diff", "--numstat", "HEAD"])
+        .current_dir(repo_path)
+        .output()
+        .map_err(|e| format!("Failed to run git: {}", e))?;
+
+    if output.status.success() {
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        for line in stdout.lines() {
+            let parts: Vec<&str> = line.split('\t').collect();
+            if parts.len() >= 3 {
+                let added = parts[0].parse::<u32>().unwrap_or(0);
+                let removed = parts[1].parse::<u32>().unwrap_or(0);
+                stats.push(FileDiffStat {
+                    path: parts[2].to_string(),
+                    added,
+                    removed,
+                });
+            }
+        }
+    }
+
+    // Get untracked files and count their lines
+    let status_output = Command::new("git")
+        .args(["status", "--porcelain=v1", "-uall"])
+        .current_dir(repo_path)
+        .output()
+        .map_err(|e| format!("Failed to run git: {}", e))?;
+
+    if status_output.status.success() {
+        let stdout = String::from_utf8_lossy(&status_output.stdout);
+        for line in stdout.lines() {
+            if line.starts_with("??") && line.len() > 3 {
+                let file_path = &line[3..];
+                // Count lines in untracked file
+                let full_path = repo_path.join(file_path);
+                if full_path.is_file() {
+                    let line_count = std::fs::read_to_string(&full_path)
+                        .map(|c| c.lines().count() as u32)
+                        .unwrap_or(0);
+                    stats.push(FileDiffStat {
+                        path: file_path.to_string(),
+                        added: line_count,
+                        removed: 0,
+                    });
+                }
+            }
+        }
+    }
+
+    // Sort by total changes descending
+    stats.sort_by(|a, b| (b.added + b.removed).cmp(&(a.added + a.removed)));
+
+    Ok(stats)
 }
 
 fn validate_commit_ref(commit_ref: &str) -> Result<(), String> {

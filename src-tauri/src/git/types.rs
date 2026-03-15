@@ -18,6 +18,13 @@ pub struct GitStatusEntry {
 }
 
 #[derive(Serialize, Clone, Debug)]
+pub struct FileDiffStat {
+    pub path: String,
+    pub added: u32,
+    pub removed: u32,
+}
+
+#[derive(Serialize, Clone, Debug)]
 pub struct CommitFileStat {
     pub file: String,
     pub additions: u32,

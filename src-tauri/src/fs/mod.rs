@@ -91,6 +91,59 @@ pub fn read_directory(path: String, project_root: String) -> Result<Vec<FileEntr
     Ok(entries)
 }
 
+/// File entry with modification time for the "Recently Updated" view.
+#[derive(Serialize, Clone)]
+pub struct RecentFileEntry {
+    pub name: String,
+    pub path: String,
+    pub mtime_ms: u64,
+}
+
+/// Recursively scan all files and return them sorted by modification time (newest first).
+/// Respects .gitignore. Limited to `limit` entries.
+#[tauri::command]
+pub fn get_recent_files(path: String, project_root: String, limit: usize) -> Result<Vec<RecentFileEntry>, String> {
+    let canonical = canonicalize_path(&path)?;
+    let canonical_root = canonicalize_path(&project_root)?;
+    validate_within_root(&canonical, &canonical_root)?;
+    let root = canonical.as_path();
+    if !root.is_dir() {
+        return Err(format!("Not a directory: {}", path));
+    }
+
+    let mut entries: Vec<RecentFileEntry> = WalkBuilder::new(root)
+        .hidden(false)
+        .filter_entry(|entry| {
+            let name = entry.file_name();
+            name != ".git" && !is_os_hidden(name)
+        })
+        .build()
+        .filter_map(|result| result.ok())
+        .filter(|entry| entry.path().is_file())
+        .filter_map(|entry| {
+            let p = entry.path();
+            let mtime_ms = p
+                .metadata()
+                .ok()?
+                .modified()
+                .ok()?
+                .duration_since(std::time::UNIX_EPOCH)
+                .ok()?
+                .as_millis() as u64;
+            Some(RecentFileEntry {
+                name: p.file_name()?.to_string_lossy().to_string(),
+                path: p.to_string_lossy().to_string(),
+                mtime_ms,
+            })
+        })
+        .collect();
+
+    entries.sort_by(|a, b| b.mtime_ms.cmp(&a.mtime_ms));
+    entries.truncate(limit);
+
+    Ok(entries)
+}
+
 /// Recursively scan all files in a directory, respecting .gitignore.
 /// Returns just the absolute paths (no directories) for building a file index.
 #[tauri::command]
