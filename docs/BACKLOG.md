@@ -10,9 +10,9 @@
 
 ---
 
-## v1: Desktop App (Core)
+## v0.0.x: Desktop App (Core)
 
-The foundation. A terminal-first app where directories are first-class citizens, with file browsing and git status.
+The foundation. A terminal-first app where directories are first-class citizens, with file browsing and git status. Pre-release development.
 
 | # | Item | Status | Ref |
 |---|------|--------|-----|
@@ -30,7 +30,7 @@ The foundation. A terminal-first app where directories are first-class citizens,
 
 ---
 
-## v2: Session Intelligence
+## v0.1.0: Session Intelligence
 
 Session persistence, process lifecycle management, transcript awareness. Codezilla understands what's happening in its terminals, not just that they exist.
 
@@ -59,9 +59,11 @@ Small release to test the auto-updater pipeline and ship quick wins.
 
 ---
 
-## v0.2: Session Intelligence II + Release Hardening
+## v0.2.0
 
-Smarter session awareness, improved thread lifecycle, and ship-readiness.
+Smarter session awareness, improved thread lifecycle, ship-readiness, scheduled jobs, skills & plugins manager, and launch presets.
+
+### Session Intelligence II + Release Hardening
 
 | # | Item | Status | Ref |
 |---|------|--------|-----|
@@ -73,9 +75,7 @@ Smarter session awareness, improved thread lifecycle, and ship-readiness.
 | 0.2-7 | Open in default app: "Open" action on file tree context menu (uses macOS `open`) | **Done** | — |
 | 0.2-8 | Link detection: detect URLs in terminal output and open them in the default browser on click | **Done** | — |
 
----
-
-## v0.3: Scheduled Jobs
+### Scheduled Jobs
 
 launchd-backed recurring jobs per project. Create a job (Claude, Codex, or shell), pick a schedule, and Codezilla writes a launchd agent. Jobs run whether or not the app is open. Logs viewable in-app.
 
@@ -91,7 +91,17 @@ launchd-backed recurring jobs per project. Create a job (Claude, Codex, or shell
 
 ---
 
-## v0.4: Worktrees + Awareness
+## v0.2.1: File Panel Views
+
+| # | Item | Status | Ref |
+|---|------|--------|-----|
+| 0.2.1-1 | File panel view modes: three-button switcher (All / Recent / Changes) above the search bar. Recent shows a flat list sorted by modification time with relative timestamps. Changes shows uncommitted files sorted by total line edits with +/- stats in green/red. Both views are searchable and have consistent hover states with the file tree. | **Done** | — |
+| 0.2.1-2 | Terminal search (Cmd+F): find text in the active terminal using xterm.js search addon, with match highlighting and next/previous navigation | Pending | — |
+| 0.2.1-3 | File filter shortcut (Cmd+Opt+F): keyboard shortcut to focus the file filter input in the right panel | Pending | — |
+
+---
+
+## v0.3: Worktrees + Awareness
 
 The "parallel agent cockpit" release. Git worktree support makes Codezilla competitive with orchestrators (Superset, Agent Deck, CCManager all have this). Notifications and cost tracking complete the cockpit — you know what your agents are doing, what they need, and what they're costing you.
 
@@ -99,46 +109,46 @@ The "parallel agent cockpit" release. Git worktree support makes Codezilla compe
 
 | # | Item | Status | Ref |
 |---|------|--------|-----|
-| 0.4-1 | Data model + left panel grouping: `worktreeName` on Thread, worktree sections in sidebar | Pending | [spec](specs/git-worktrees.md) |
-| 0.4-2 | Worktree creation flow: `[+ New Worktree]` button, spawn with `-w` + `--session-id` | Pending | [spec](specs/git-worktrees.md) |
-| 0.4-3 | Spawn logic: include `-w` flag in launch/resume commands for worktree threads | Pending | [spec](specs/git-worktrees.md) |
-| 0.4-4 | fs-watcher auto-detection: watch `.claude/worktrees/` for directory creation/removal | Pending | [spec](specs/git-worktrees.md) |
-| 0.4-5 | Process inspection + thread association: Rust command to walk PTY child processes, match `--worktree` args, auto-assign `worktreeName` | Pending | [spec](specs/git-worktrees.md) |
-| 0.4-6 | Worktree-scoped file tree: re-root file tree based on active thread's worktree | Pending | [spec](specs/git-worktrees.md) |
-| 0.4-7 | Section header metadata: branch name, commits ahead, dirty indicator | Pending | [spec](specs/git-worktrees.md) |
-| 0.4-8 | Actions menu: push branch, discard worktree (merge actions deferred) | Pending | [spec](specs/git-worktrees.md) |
-| 0.4-9 | macOS notifications on thread state change: fire `NSUserNotification` when a thread transitions to `waiting_for_approval`, `error`, or `done`. Configurable per-project (on/off). Sound optional. | Pending | — |
-| 0.4-10 | Cost/token accumulation in transcript parser: extend `TranscriptInfo` with `totalCostUsd`, `totalInputTokens`, `totalOutputTokens` — extracted from `result` events the parser already handles | Pending | — |
-| 0.4-11 | Cost display: show per-thread cost in thread subtitle (e.g. "$0.42 · 12k tokens"), aggregate in status bar (e.g. "$2.80 today") | Pending | — |
-| 0.4-12 | Recommended Setup: settings panel with curated checklist of Claude Code (and eventually Codex/Gemini) QoL tweaks — settings toggles and one-click widget installs (context statusline, autocompact tuning, permission presets, etc). 8 items max, not a marketplace. Also add a "Recommended Setup" section to the User Guide | Pending | [spec](specs/recommended-setup.md) |
+| 0.3-1 | Data model + left panel grouping: `worktreeName` on Thread, worktree sections in sidebar | Pending | [spec](specs/git-worktrees.md) |
+| 0.3-2 | Worktree creation flow: `[+ New Worktree]` button, spawn with `-w` + `--session-id` | Pending | [spec](specs/git-worktrees.md) |
+| 0.3-3 | Spawn logic: include `-w` flag in launch/resume commands for worktree threads | Pending | [spec](specs/git-worktrees.md) |
+| 0.3-4 | fs-watcher auto-detection: watch `.claude/worktrees/` for directory creation/removal | Pending | [spec](specs/git-worktrees.md) |
+| 0.3-5 | Process inspection + thread association: Rust command to walk PTY child processes, match `--worktree` args, auto-assign `worktreeName` | Pending | [spec](specs/git-worktrees.md) |
+| 0.3-6 | Worktree-scoped file tree: re-root file tree based on active thread's worktree | Pending | [spec](specs/git-worktrees.md) |
+| 0.3-7 | Section header metadata: branch name, commits ahead, dirty indicator | Pending | [spec](specs/git-worktrees.md) |
+| 0.3-8 | Actions menu: push branch, discard worktree (merge actions deferred) | Pending | [spec](specs/git-worktrees.md) |
+| 0.3-9 | macOS notifications on thread state change: fire `NSUserNotification` when a thread transitions to `waiting_for_approval`, `error`, or `done`. Configurable per-project (on/off). Sound optional. | Pending | — |
+| 0.3-10 | Cost/token accumulation in transcript parser: extend `TranscriptInfo` with `totalCostUsd`, `totalInputTokens`, `totalOutputTokens` — extracted from `result` events the parser already handles | Pending | — |
+| 0.3-11 | Cost display: show per-thread cost in thread subtitle (e.g. "$0.42 · 12k tokens"), aggregate in status bar (e.g. "$2.80 today") | Pending | — |
+| 0.3-12 | Recommended Setup: settings panel with curated checklist of Claude Code (and eventually Codex/Gemini) QoL tweaks — settings toggles and one-click widget installs (context statusline, autocompact tuning, permission presets, etc). 8 items max, not a marketplace. Also add a "Recommended Setup" section to the User Guide | Pending | [spec](specs/recommended-setup.md) |
 
 ---
 
-## v0.5: MCP + Visibility
+## v0.4: MCP + Visibility
 
 MCP server for testing and programmatic access. Usability improvements. Broader agent support.
 
 | # | Item | Status | Ref |
 |---|------|--------|-----|
-| 0.5-1 | MCP server (read-only): expose Codezilla state as MCP tools — `list_projects`, `list_threads`, `get_thread_status`, `get_transcript_info`, `get_cost_data`. Enables AI-driven e2e testing of transcript intelligence and status management. HTTP/SSE transport, runs on localhost | Pending | — |
-| 0.5-2 | MCP-driven e2e test suite: use MCP server to programmatically verify status transitions (working → idle → done), badge accuracy, false-positive detection. Addresses flaky status management (TD-1, TD-2, TD-3) by making the status model testable | Pending | — |
-| 0.5-3 | Open in Editor: "Open in [configured editor]" button on file tree context menu and Quick Look header. User configures editor in preferences. Implementation: `open -a "<editor>" <path>` | Pending | — |
-| 0.5-4 | Full-text search across session transcripts: index JSONL transcript data, search by content across all sessions. Find "which session was working on the auth bug?" | Pending | — |
-| 0.5-5 | Gemini CLI as 4th thread type: launch `gemini` CLI in PTY, basic session management. Transcript parsing adapter deferred — status detection via PTY activity initially. Skills & Plugins Manager labelled "Claude Code Skills & Plugins" in UI — Gemini threads get session management but no skills integration initially | Pending | — |
-| 0.5-6 | CLAUDE.md viewer: project instructions always one click away, rendered markdown | Pending | — |
-| 0.5-7 | Skills & Plugins Manager (v2): MCP server install (different config format + env var handling), enable/disable toggle for plugins, cascade removal on scope move (P→G should offer to remove redundant project installs), browse/search public catalog | Pending | [spec](specs/skills-plugins-manager.md) |
+| 0.4-1 | MCP server (read-only): expose Codezilla state as MCP tools — `list_projects`, `list_threads`, `get_thread_status`, `get_transcript_info`, `get_cost_data`. Enables AI-driven e2e testing of transcript intelligence and status management. HTTP/SSE transport, runs on localhost | Pending | — |
+| 0.4-2 | MCP-driven e2e test suite: use MCP server to programmatically verify status transitions (working → idle → done), badge accuracy, false-positive detection. Addresses flaky status management (TD-1, TD-2, TD-3) by making the status model testable | Pending | — |
+| 0.4-3 | Open in Editor: "Open in [configured editor]" button on file tree context menu and Quick Look header. User configures editor in preferences. Implementation: `open -a "<editor>" <path>` | Pending | — |
+| 0.4-4 | Full-text search across session transcripts: index JSONL transcript data, search by content across all sessions. Find "which session was working on the auth bug?" | Pending | — |
+| 0.4-5 | Gemini CLI as 4th thread type: launch `gemini` CLI in PTY, basic session management. Transcript parsing adapter deferred — status detection via PTY activity initially. Skills & Plugins Manager labelled "Claude Code Skills & Plugins" in UI — Gemini threads get session management but no skills integration initially | Pending | — |
+| 0.4-6 | CLAUDE.md viewer: project instructions always one click away, rendered markdown | Pending | — |
+| 0.4-7 | Skills & Plugins Manager (v2): MCP server install (different config format + env var handling), enable/disable toggle for plugins, cascade removal on scope move (P→G should offer to remove redundant project installs), browse/search public catalog | Pending | [spec](specs/skills-plugins-manager.md) |
 
 ---
 
-## v0.6: Polish + QoL
+## v0.5: Polish + QoL
 
 | # | Item | Status | Ref |
 |---|------|--------|-----|
-| 0.6-1 | MCP server (write tools): extend MCP server with `create_thread`, `write_to_terminal`, `select_project` tools. Enables AI agents to orchestrate Codezilla programmatically. Gated behind explicit user opt-in | Pending | — |
-| 0.6-2 | Pinned thread pane: pin one thread visible in a small pane while working in another — lightweight alternative to full terminal splits. Addresses "glance at agent progress" need without grid complexity | Pending | — |
-| 0.6-3 | Notification customisation: optional Pushover or ntfy.sh integration for mobile notifications (know when agents need you while away from desk). Replaces iOS companion app scope | Pending | — |
-| 0.6-4 | Gemini CLI transcript adapter: parse Gemini session data for semantic status badges (extends 0.5-5 from PTY-only to full transcript intelligence) | Pending | — |
-| 0.6-5 | Multi-agent skills investigation: research and design how skills/instructions work across agent types. Potential approaches: (a) alias/symlink CLAUDE.md → AGENTS.md / codex-instructions.md so project instructions propagate to all agents automatically, (b) abstract skill installation to detect agent type and install to the right location per agent, (c) accept separate management per agent for plugins (Claude plugins are Claude-only) but unify skills (markdown instruction files). Scope TBC — may result in a spec or may conclude current Claude-first approach is correct | Pending | — |
+| 0.5-1 | MCP server (write tools): extend MCP server with `create_thread`, `write_to_terminal`, `select_project` tools. Enables AI agents to orchestrate Codezilla programmatically. Gated behind explicit user opt-in | Pending | — |
+| 0.5-2 | Pinned thread pane: pin one thread visible in a small pane while working in another — lightweight alternative to full terminal splits. Addresses "glance at agent progress" need without grid complexity | Pending | — |
+| 0.5-3 | Notification customisation: optional Pushover or ntfy.sh integration for mobile notifications (know when agents need you while away from desk). Replaces iOS companion app scope | Pending | — |
+| 0.5-4 | Gemini CLI transcript adapter: parse Gemini session data for semantic status badges (extends 0.4-5 from PTY-only to full transcript intelligence) | Pending | — |
+| 0.5-5 | Multi-agent skills investigation: research and design how skills/instructions work across agent types. Potential approaches: (a) alias/symlink CLAUDE.md → AGENTS.md / codex-instructions.md so project instructions propagate to all agents automatically, (b) abstract skill installation to detect agent type and install to the right location per agent, (c) accept separate management per agent for plugins (Claude plugins are Claude-only) but unify skills (markdown instruction files). Scope TBC — may result in a spec or may conclude current Claude-first approach is correct | Pending | — |
 
 ---
 
@@ -181,7 +191,7 @@ Deprioritised or deferred items. Revisit based on user demand.
 | — | Hosted backend sync (team/cross-device access) | Premature — need user base first |
 | — | Multi-pane terminals (iTerm2-style splits) | Pinned thread pane (0.6-1) addresses 80% of the need. Full splits add complexity without matching Codezilla's cockpit philosophy |
 | — | Full-text search across files (Cmd+Shift+F) | AI threads handle this; revisit later |
-| — | Recently modified files in file sidebar | Show a "Recent" section at the top of the file tree listing files changed in the last N minutes (via fs events or polling). Quick access to files agents just touched without hunting through the tree |
+| — | ~~Recently modified files in file sidebar~~ | **Done** — shipped as file panel view modes in v0.2.1 |
 | — | Move/reattach project | Moving a project directory today breaks Claude session logs, scheduled jobs, and skill installation records. Real pain point but complex fix — revisit when users report it |
 | — | Conversation forking (branch a session to try different approach) | Agent Deck, KanbanCode have this. Evaluate demand after worktrees ship — worktrees may reduce the need since each worktree is effectively a fork |
 | — | Docker sandboxing | Codezilla is a cockpit, not an orchestrator — let users choose their own sandboxing |
