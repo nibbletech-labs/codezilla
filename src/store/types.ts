@@ -77,3 +77,9 @@ export const THREAD_NEW_LABELS: Record<ThreadType, string> = {
   codex: "Codex",
   shell: "Terminal",
 };
+
+export interface BetaFeatures {
+  codexThreads: boolean;
+  skillsPlugins: boolean;
+  scheduledJobs: boolean;
+}

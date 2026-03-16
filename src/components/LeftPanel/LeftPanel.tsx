@@ -46,6 +46,7 @@ export default function LeftPanel() {
   const [iconPickerProjectId, setIconPickerProjectId] = useState<string | null>(null);
   const [iconPickerPos, setIconPickerPos] = useState<{ x: number; y: number } | null>(null);
   const launchPresets = useAppStore((s) => s.launchPresets);
+  const betaFeatures = useAppStore((s) => s.betaFeatures);
   const [ageTick, setAgeTick] = useState(0);
 
   useEffect(() => {
@@ -155,6 +156,7 @@ export default function LeftPanel() {
                 activeThreadId={activeThreadId}
                 activeJobId={activeJobId}
                 baseFontSize={baseFontSize}
+                betaFeatures={betaFeatures}
                 setActiveProject={setActiveProject}
                 setActiveThread={setActiveThread}
                 setActiveJob={setActiveJob}
@@ -178,7 +180,7 @@ export default function LeftPanel() {
             top: menuPos.y,
           }}
         >
-          {THREAD_TYPES.map((type) => (
+          {THREAD_TYPES.filter((type) => type !== "codex" || betaFeatures.codexThreads).map((type) => (
             <NewThreadMenuItem
               key={type}
               type={type}
@@ -228,6 +230,7 @@ interface SortableProjectItemProps {
   activeThreadId: string | null;
   activeJobId: string | null;
   baseFontSize: number;
+  betaFeatures: { codexThreads: boolean; skillsPlugins: boolean; scheduledJobs: boolean };
   setActiveProject: (id: string) => void;
   setActiveThread: (id: string) => void;
   setActiveJob: (id: string) => void;
@@ -243,6 +246,7 @@ function SortableProjectItem({
   activeThreadId,
   activeJobId,
   baseFontSize,
+  betaFeatures,
   setActiveProject,
   setActiveThread,
   setActiveJob,
@@ -346,7 +350,7 @@ function SortableProjectItem({
         </button>
       </div>
 
-      {jobIds.length > 0 && (
+      {betaFeatures.scheduledJobs && jobIds.length > 0 && (
         <ScheduledSection jobIds={jobIds} activeJobId={activeJobId} setActiveJob={setActiveJob} />
       )}
       {threadIds.length > 0 && (

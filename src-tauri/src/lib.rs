@@ -322,6 +322,8 @@ pub fn run() {
                 let remove_thread = MenuItemBuilder::with_id("remove-thread", "Remove Thread")
                     .accelerator("CmdOrCtrl+Alt+Delete")
                     .build(app)?;
+                let beta_features = MenuItemBuilder::with_id("beta-features", "Beta Features\u{2026}")
+                    .build(app)?;
                 let launch_presets = MenuItemBuilder::with_id("launch-presets", "Launch Presets\u{2026}")
                     .accelerator("CmdOrCtrl+Alt+P")
                     .build(app)?;
@@ -336,6 +338,7 @@ pub fn run() {
                         &new_codex,
                         &new_shell,
                         &PredefinedMenuItem::separator(app)?,
+                        &beta_features,
                         &launch_presets,
                         &PredefinedMenuItem::separator(app)?,
                         &remove_thread,

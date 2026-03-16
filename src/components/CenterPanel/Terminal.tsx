@@ -31,6 +31,7 @@ import { IconPicker } from "../IconPicker";
 import { JobDetailPanel, JobCreationForm } from "../ScheduledJobs";
 import { SkillsPluginsSummary, SkillsPluginsManager } from "../SkillsPlugins";
 import PresetsManager from "../LaunchPresets/PresetsManager";
+import BetaFeaturesManager from "../BetaFeaturesManager";
 import {
   clearActivity,
   isOutputActivitySuppressed,
@@ -148,6 +149,8 @@ interface TerminalInstance {
   fitAddon: FitAddon;
   container: HTMLDivElement;
   isAtBottom: boolean;
+  /** User intentionally scrolled up — suppresses auto-scroll until they return to the bottom. */
+  userScrolledUp: boolean;
   visible: boolean;
   /** Drain any buffered output (call when making terminal visible). */
   flushPendingOutput: () => void;
@@ -412,6 +415,8 @@ export default function TerminalMultiplexer() {
   const setProjectIcon = useAppStore((s) => s.setProjectIcon);
   const skillsManagerOpen = useAppStore((s) => s.skillsManagerOpen);
   const presetsManagerOpen = useAppStore((s) => s.presetsManagerOpen);
+  const betaFeatures = useAppStore((s) => s.betaFeatures);
+  const betaFeaturesOpen = useAppStore((s) => s.betaFeaturesOpen);
   const getProjectJobs = useAppStore((s) => s.getProjectJobs);
   const setActiveJob = useAppStore((s) => s.setActiveJob);
   const markThreadExited = useAppStore((s) => s.markThreadExited);
@@ -563,6 +568,7 @@ export default function TerminalMultiplexer() {
               return;
             }
             capturedInstance.fitAddon.fit();
+            capturedInstance.userScrolledUp = false;
             capturedInstance.terminal.scrollToBottom();
             setShowScrollButton(false);
             const rows = capturedInstance.terminal.rows;
@@ -658,13 +664,14 @@ export default function TerminalMultiplexer() {
           if (active?.sessionId) {
             const instance = instancesRef.current.get(active.sessionId);
             if (instance) {
+              instance.userScrolledUp = false;
               instance.terminal.scrollToBottom();
               setShowScrollButton(false);
             }
           }
         }} />
       )}
-      {activeJobId && (
+      {betaFeatures.scheduledJobs && activeJobId && (
         <JobDetailPanel jobId={activeJobId} />
       )}
       {!activeThreadId && !activeJobId && (
@@ -698,7 +705,7 @@ export default function TerminalMultiplexer() {
           </div>
           {activeProjectId && (
             <div style={{ display: "flex", gap: "8px" }}>
-              {THREAD_TYPES.map((type) => (
+              {THREAD_TYPES.filter((type) => type !== "codex" || betaFeatures.codexThreads).map((type) => (
                 <EmptyStateButton
                   key={type}
                   type={type}
@@ -708,8 +715,8 @@ export default function TerminalMultiplexer() {
               ))}
             </div>
           )}
-          {activeProjectId && <ScheduledJobsSummary projectId={activeProjectId} getProjectJobs={getProjectJobs} setActiveJob={setActiveJob} onNewJob={() => setShowJobForm(true)} />}
-          {activeProjectId && <SkillsPluginsSummary />}
+          {betaFeatures.scheduledJobs && activeProjectId && <ScheduledJobsSummary projectId={activeProjectId} getProjectJobs={getProjectJobs} setActiveJob={setActiveJob} onNewJob={() => setShowJobForm(true)} />}
+          {betaFeatures.skillsPlugins && activeProjectId && <SkillsPluginsSummary />}
           {activeProjectId && (
             <RemoveProjectButton onClick={() => removeProject(activeProjectId)} />
           )}
@@ -731,7 +738,7 @@ export default function TerminalMultiplexer() {
         document.body,
       )}
       {/* Scheduled job creation form */}
-      {activeProjectId && showJobForm && createPortal(
+      {betaFeatures.scheduledJobs && activeProjectId && showJobForm && createPortal(
         <JobCreationForm
           projectId={activeProjectId}
           onClose={() => setShowJobForm(false)}
@@ -739,13 +746,18 @@ export default function TerminalMultiplexer() {
         document.body,
       )}
       {/* Skills & Plugins Manager overlay */}
-      {skillsManagerOpen && createPortal(
+      {betaFeatures.skillsPlugins && skillsManagerOpen && createPortal(
         <SkillsPluginsManager />,
         document.body,
       )}
       {/* Launch Presets Manager overlay */}
       {presetsManagerOpen && createPortal(
         <PresetsManager />,
+        document.body,
+      )}
+      {/* Beta Features Manager overlay */}
+      {betaFeaturesOpen && createPortal(
+        <BetaFeaturesManager />,
         document.body,
       )}
     </div>
@@ -986,7 +998,7 @@ function createTerminalInstance(
   // Fit happens in the active-thread show/hide effect after this container
   // is marked visible and the browser has had a frame to settle layout.
   const instance: TerminalInstance = {
-    terminal, fitAddon, container, isAtBottom: true,
+    terminal, fitAddon, container, isAtBottom: true, userScrolledUp: false,
     visible: false, flushPendingOutput: () => {},
   };
   instances.set(thread.sessionId, instance);
@@ -997,6 +1009,8 @@ function createTerminalInstance(
   const checkScrollState = () => {
     const atBottom = isTerminalAtBottom(terminal);
     instance.isAtBottom = atBottom;
+    // Clear the user-scrolled-up flag once they've returned to the bottom
+    if (atBottom) instance.userScrolledUp = false;
     const activeId = useAppStore.getState().activeThreadId;
     if (activeId === thread.id && onScrollStateChange) {
       onScrollStateChange(atBottom);
@@ -1005,6 +1019,17 @@ function createTerminalInstance(
   terminal.onScroll(() => {
     checkScrollState();
   });
+
+  // Detect intentional user scroll-up via wheel events.  When the user
+  // scrolls up we set a sticky flag that prevents auto-scroll in
+  // flushOutput, so they can read previous output while new content
+  // streams in.  The flag is cleared when they scroll back to the bottom
+  // (handled in checkScrollState above) or click the "↓ Latest" button.
+  container.addEventListener("wheel", (e: WheelEvent) => {
+    if (e.deltaY < 0) {
+      instance.userScrolledUp = true;
+    }
+  }, { passive: true });
 
   // Register file path link provider for Cmd+click navigation
   const project = useAppStore
@@ -1126,10 +1151,10 @@ function createTerminalInstance(
         }
       }
 
-      const wasAtBottom = instance.isAtBottom;
+      const shouldAutoScroll = instance.isAtBottom && !instance.userScrolledUp;
       try {
         terminal.write(merged, () => {
-          if (wasAtBottom) terminal.scrollToBottom();
+          if (shouldAutoScroll) terminal.scrollToBottom();
           checkScrollState();
           // If more data remains (capped write or new arrivals), schedule next frame
           if (outputQueue.length > 0) flushOutput();

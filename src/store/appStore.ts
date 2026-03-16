@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { Project, Thread, ThreadType, PersistedThread, PreviewTarget, ProjectIcon, ScheduledJob, LaunchPreset } from "./types";
+import type { Project, Thread, ThreadType, PersistedThread, PreviewTarget, ProjectIcon, ScheduledJob, LaunchPreset, BetaFeatures } from "./types";
 import { THREAD_LABELS } from "./types";
 import type { TranscriptInfo } from "./transcriptTypes";
 import type { AccentColorId, AppearanceMode } from "../lib/themes";
@@ -113,6 +113,16 @@ interface AppState {
   removeLaunchPreset: (id: string) => void;
   loadLaunchPresets: (presets: LaunchPreset[]) => void;
 
+  // Beta features
+  betaFeatures: BetaFeatures;
+  betaFeaturesOpen: boolean;
+  autoDisabledJobIds: string[];
+  setBetaFeature: (key: keyof BetaFeatures, value: boolean) => void;
+  loadBetaFeatures: (features: BetaFeatures) => void;
+  loadAutoDisabledJobIds: (ids: string[]) => void;
+  openBetaFeatures: () => void;
+  closeBetaFeatures: () => void;
+
   // Persistence
   loadProjects: (projects: Project[]) => void;
   loadExpandedPaths: (expandedPaths: Record<string, string[]>) => void;
@@ -144,6 +154,9 @@ export const useAppStore = create<AppState>((set, get) => ({
   scheduledJobs: [],
   activeJobId: null,
   launchPresets: [],
+  betaFeatures: { codexThreads: true, skillsPlugins: true, scheduledJobs: true },
+  betaFeaturesOpen: false,
+  autoDisabledJobIds: [],
 
   openPreview: (path, line) => {
     set({ previewFile: { kind: "file", path, line } });
@@ -683,6 +696,43 @@ export const useAppStore = create<AppState>((set, get) => ({
   loadLaunchPresets: (presets) => {
     set({ launchPresets: presets });
   },
+
+  // Beta features actions
+
+  setBetaFeature: (key, value) => {
+    if (key === "scheduledJobs" && !value) {
+      // Disabling scheduled jobs: remember which were enabled, then disable all
+      const enabledIds = get().scheduledJobs.filter((j) => j.enabled).map((j) => j.id);
+      set((s) => ({
+        betaFeatures: { ...s.betaFeatures, scheduledJobs: false },
+        autoDisabledJobIds: enabledIds,
+        scheduledJobs: s.scheduledJobs.map((j) => j.enabled ? { ...j, enabled: false } : j),
+      }));
+    } else if (key === "scheduledJobs" && value) {
+      // Re-enabling: restore previously auto-disabled jobs
+      const toReEnable = new Set(get().autoDisabledJobIds);
+      set((s) => ({
+        betaFeatures: { ...s.betaFeatures, scheduledJobs: true },
+        autoDisabledJobIds: [],
+        scheduledJobs: s.scheduledJobs.map((j) => toReEnable.has(j.id) ? { ...j, enabled: true } : j),
+      }));
+    } else {
+      set((s) => ({
+        betaFeatures: { ...s.betaFeatures, [key]: value },
+      }));
+    }
+  },
+
+  loadBetaFeatures: (features) => {
+    set({ betaFeatures: features });
+  },
+
+  loadAutoDisabledJobIds: (ids) => {
+    set({ autoDisabledJobIds: ids });
+  },
+
+  openBetaFeatures: () => set({ betaFeaturesOpen: true }),
+  closeBetaFeatures: () => set({ betaFeaturesOpen: false }),
 
   loadProjects: (projects) => {
     set({
