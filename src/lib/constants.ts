@@ -2,7 +2,7 @@ export const TERMINAL_CONFIG = {
   fontSize: 14,
   fontFamily: "'SF Mono', 'Menlo', 'Monaco', 'Courier New', monospace",
   cursorBlink: true,
-  scrollback: 5000,
+  scrollback: 10000,
   allowProposedApi: true,
 } as const;
 
