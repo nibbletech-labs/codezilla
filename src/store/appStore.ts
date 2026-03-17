@@ -154,7 +154,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   scheduledJobs: [],
   activeJobId: null,
   launchPresets: [],
-  betaFeatures: { codexThreads: true, skillsPlugins: true, scheduledJobs: true },
+  betaFeatures: { codexThreads: false, skillsPlugins: false, scheduledJobs: false },
   betaFeaturesOpen: false,
   autoDisabledJobIds: [],
 
