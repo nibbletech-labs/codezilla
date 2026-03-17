@@ -101,6 +101,11 @@ export function deriveSubtitle(info: TranscriptInfo): string {
     if (info.idleReason === "waiting_for_approval") return appendPlanProgress("Waiting for approval", info);
     if (info.idleReason === "waiting_for_input") return appendPlanProgress("Waiting for input", info);
     if (info.semanticPhase === "thinking") return appendPlanProgress("Thinking", info);
+    // Stale "tooling" phase with no pending tools means the turn finished but
+    // the result event was missed — treat as done rather than showing a stale tool name.
+    if (info.semanticPhase === "tooling" && info.pendingToolUseIds.size === 0) {
+      return appendPlanProgress("Idle · Done", info);
+    }
     if (info.semanticPhase === "tooling") return appendPlanProgress(formatToolingSubtitle(info), info);
     if (info.semanticPhase === "responding") return appendPlanProgress("Thinking", info);
     if (info.semanticPhase === "waiting" && info.lastError) return appendPlanProgress("Error", info);
@@ -180,8 +185,15 @@ export function transcriptReducer(
 
     case "tool_use": {
       pendingToolUseIds.add(event.id);
-      lastToolName = event.name;
-      lastToolTarget = deriveToolTarget(event.name, event.input);
+      // Meta-tools (plan mode, user questions) are control-flow, not user-visible
+      // actions — don't overwrite lastToolName so the previous real tool shows.
+      const isMetaTool = event.name === "ExitPlanMode"
+        || event.name === "EnterPlanMode"
+        || event.name === "AskUserQuestion";
+      if (!isMetaTool) {
+        lastToolName = event.name;
+        lastToolTarget = deriveToolTarget(event.name, event.input);
+      }
       lastProgressLabel = null;
       if (idleReason !== "waiting_for_approval" && idleReason !== "waiting_for_input") {
         idleReason = "none";

@@ -1208,12 +1208,25 @@ function createTerminalInstance(
       lastOutputAt = Date.now();
       // Only count unsuppressed PTY output as real activity.
       // Suppressed output is often UI-induced redraw noise (resize/input echo).
+      // Also skip touching idle/done threads — their PTYs still emit housekeeping
+      // output (prompt redraws, cursor blinks, health checks) which would reset
+      // lastActivityAt and make idle threads look freshly active.
       if (!isOutputActivitySuppressed(thread.id)) {
         const now = Date.now();
         const lastTouch = touchTimestamps.get(thread.id) ?? 0;
         if (now - lastTouch >= TOUCH_DEBOUNCE_MS) {
-          touchTimestamps.set(thread.id, now);
-          useAppStore.getState().touchThread(thread.id);
+          const info = useAppStore.getState().transcriptInfo[thread.id];
+          const threadIdle = info != null
+            && thread.type !== "shell"
+            && info.semanticPhase === "waiting"
+            && info.idleReason === "none"
+            && !info.lastError
+            && info.pendingToolUseIds.size === 0
+            && !info.ptyActive;
+          if (!threadIdle) {
+            touchTimestamps.set(thread.id, now);
+            useAppStore.getState().touchThread(thread.id);
+          }
         }
       }
     } else if (event.event === "Activity") {

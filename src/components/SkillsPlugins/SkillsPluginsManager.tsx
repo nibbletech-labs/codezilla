@@ -25,6 +25,7 @@ import { modalKeyframes } from "../../styles/modal";
 import { useModalBackdrop } from "../../hooks/useModalBackdrop";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { InstalledRow } from "./InstalledRow";
+import { InstalledPluginRow } from "./InstalledPluginRow";
 import { PluginRow } from "./PluginRow";
 import { ScannedRow } from "./ScannedRow";
 import { RegistryGroupRow } from "./RegistryGroupRow";
@@ -449,6 +450,13 @@ export default function SkillsPluginsManager() {
         if (inst.itemType === "Plugin") {
           const cliScope = inst.target === "Global" ? "user" : "project";
           await uninstallPlugin(inst.itemName, cliScope);
+          // Also remove child installation records from the store
+          const allInsts = useSkillsPluginsStore.getState().installations;
+          for (const child of Object.values(allInsts)) {
+            if (child.parentPluginName === inst.itemName && child.target === inst.target) {
+              removeInstallation(child.id);
+            }
+          }
         } else {
           await removeItem(inst.installPath, inst.itemType);
         }
@@ -463,9 +471,18 @@ export default function SkillsPluginsManager() {
   const requestRemove = useCallback(
     (inst: Installation) => {
       const isPlugin = inst.itemType === "Plugin";
-      const message = isPlugin
-        ? `Remove ${inst.itemName}? This will run claude plugin uninstall.`
-        : `Remove ${inst.itemName}? Files will be deleted from ${inst.installPath}.`;
+      let message: string;
+      if (isPlugin) {
+        const allInsts = useSkillsPluginsStore.getState().installations;
+        const childCount = Object.values(allInsts).filter(
+          (c) => c.parentPluginName === inst.itemName && c.target === inst.target,
+        ).length;
+        message = childCount > 0
+          ? `Remove ${inst.itemName} and its ${childCount} component${childCount > 1 ? "s" : ""}? This will run claude plugin uninstall.`
+          : `Remove ${inst.itemName}? This will run claude plugin uninstall.`;
+      } else {
+        message = `Remove ${inst.itemName}? Files will be deleted from ${inst.installPath}.`;
+      }
       setConfirmDialog({
         message,
         confirmLabel: "Remove",
@@ -798,6 +815,43 @@ export default function SkillsPluginsManager() {
       )
     : [];
 
+  // Group installations: plugins with their children, standalone items separate
+  const groupInstallations = (insts: Installation[]) => {
+    const plugins: { plugin: Installation; children: Installation[] }[] = [];
+    const standalone: Installation[] = [];
+    const pluginMap = new Map<string, Installation>();
+
+    // First pass: find all plugins
+    for (const inst of insts) {
+      if (inst.itemType === "Plugin") {
+        pluginMap.set(inst.itemName, inst);
+      }
+    }
+    // Second pass: attach children, collect standalone
+    const childIds = new Set<string>();
+    for (const inst of insts) {
+      if (inst.itemType !== "Plugin" && inst.parentPluginName && pluginMap.has(inst.parentPluginName)) {
+        childIds.add(inst.id);
+      }
+    }
+    for (const inst of insts) {
+      if (inst.itemType === "Plugin") {
+        plugins.push({
+          plugin: inst,
+          children: insts.filter(
+            (c) => c.parentPluginName === inst.itemName && c.id !== inst.id,
+          ),
+        });
+      } else if (!childIds.has(inst.id)) {
+        standalone.push(inst);
+      }
+    }
+    return { plugins, standalone };
+  };
+
+  const globalGrouped = groupInstallations(globalInstallations);
+  const projectGrouped = groupInstallations(projectInstallations);
+
   const installedKeys = new Set(
     allInstallations.map((i) => `${i.sourceId}:${i.itemRepoPath}:${i.target}`),
   );
@@ -974,7 +1028,19 @@ export default function SkillsPluginsManager() {
           {globalInstallations.length > 0 && (
             <div style={styles.section}>
               <div style={styles.sectionTitle}>Installed — Global</div>
-              {globalInstallations.map((inst) => (
+              {globalGrouped.plugins.map(({ plugin, children }) => (
+                <InstalledPluginRow
+                  key={plugin.id}
+                  plugin={plugin}
+                  subItems={children}
+                  sourceLabel={getSourceLabel(plugin)}
+                  sourceUrl={getSourceUrl(plugin)}
+                  hasUpdate={sources[plugin.sourceId]?.updateAvailable}
+                  onRemove={() => requestRemove(plugin)}
+                  onUpdate={() => requestUpdate(plugin)}
+                />
+              ))}
+              {globalGrouped.standalone.map((inst) => (
                 <InstalledRow
                   key={inst.id}
                   inst={inst}
@@ -995,7 +1061,19 @@ export default function SkillsPluginsManager() {
           {projectInstallations.length > 0 && (
             <div style={styles.section}>
               <div style={styles.sectionTitle}>Installed — This Project</div>
-              {projectInstallations.map((inst) => (
+              {projectGrouped.plugins.map(({ plugin, children }) => (
+                <InstalledPluginRow
+                  key={plugin.id}
+                  plugin={plugin}
+                  subItems={children}
+                  sourceLabel={getSourceLabel(plugin)}
+                  sourceUrl={getSourceUrl(plugin)}
+                  hasUpdate={sources[plugin.sourceId]?.updateAvailable}
+                  onRemove={() => requestRemove(plugin)}
+                  onUpdate={() => requestUpdate(plugin)}
+                />
+              ))}
+              {projectGrouped.standalone.map((inst) => (
                 <InstalledRow
                   key={inst.id}
                   inst={inst}

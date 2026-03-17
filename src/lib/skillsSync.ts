@@ -60,7 +60,19 @@ export async function reconcileInstalledItems(projectPath?: string): Promise<voi
     for (const item of scanned) {
       const itemPath = stripTrailingSlash(item.path);
       const match = installations.find((inst) => {
+        // Plugins have empty installPaths — match by name + type + scope instead
+        if (inst.itemType === "Plugin") {
+          if (item.item_type === "Plugin") {
+            return inst.itemName === item.name && inst.target === item.scope;
+          }
+          // Plugin sub-items: match if their parent plugin is tracked
+          if (item.parent_plugin_name) {
+            return inst.itemName === item.parent_plugin_name && inst.target === item.scope;
+          }
+          return false;
+        }
         const instPath = stripTrailingSlash(inst.installPath);
+        if (!instPath) return false;
         return instPath === itemPath || itemPath.startsWith(instPath + "/");
       });
       item.managed = !!match;
