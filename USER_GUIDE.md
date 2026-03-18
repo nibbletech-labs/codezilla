@@ -1,6 +1,6 @@
 # Codezilla User Guide
 
-Codezilla is a desktop app for managing AI coding sessions alongside your project files. It gives you terminals for Claude Code, Codex, and plain shell — all in one window with an integrated file browser, Quick Look preview, scheduled jobs, and a skills & plugins manager.
+Codezilla is a desktop app for managing AI coding sessions alongside your project files. It gives you terminals for Claude Code, Codex [Beta], and plain shell — all in one window with an integrated file browser, Quick Look preview, scheduled jobs [Beta], and a skills & plugins manager [Beta].
 
 ---
 
@@ -38,6 +38,7 @@ Click the **+** button in the left panel header to add a project folder. Each pr
 | Add project | Click **+**, pick a folder |
 | Switch project | Click its name |
 | Remove project | Hover, click **x** |
+| Set icon | Click the project icon to choose an emoji or Lucide icon with custom colour |
 
 If a project folder is moved or deleted, a warning icon appears and the name fades out.
 
@@ -50,7 +51,7 @@ A thread is a terminal session tied to a project. There are three types:
 | Type | What it runs |
 |------|-------------|
 | **Claude Code** | `claude` CLI with session persistence |
-| **Codex** | `codex` CLI with resume support |
+| **Codex** [Beta] | `codex` CLI with resume support |
 | **Terminal** | Interactive shell |
 
 ### Creating a thread
@@ -77,9 +78,34 @@ An animated ellipsis appears next to threads that are actively producing output.
 | Rename | Double-click the name, type, press Enter |
 | Close | Hover, click **x** (running threads require a second click to confirm) |
 
+### Thread context menu
+
+Right-click any thread in the left panel to access:
+
+| Action | What it does |
+|--------|-------------|
+| **Rename thread...** | Rename the thread |
+| **Remove thread** | Delete the thread |
+| **Copy session ID** | Copy the Claude/Codex session ID to clipboard |
+| **Copy resume command** | Copy the CLI command to resume this session |
+
+Session ID and resume command are only available for Claude and Codex threads.
+
 ### Session persistence
 
 When you quit and reopen Codezilla, all your projects and threads are restored. Claude Code sessions resume with the same session ID, so conversation context is preserved. Codex threads resume via their thread ID.
+
+### Launch presets
+
+Launch presets let you create reusable thread configurations with custom CLI arguments, so you can quickly spawn threads with predefined flags without typing them each time.
+
+| Field | Description |
+|-------|-------------|
+| **Base type** | Claude, Codex, or Terminal |
+| **Icon** | Custom emoji |
+| **CLI arguments** | e.g. `--model sonnet --thinking medium` |
+
+Access presets from the menu: **Launch Presets**. To create a thread from a preset, use the **+** menu next to the project name — presets appear alongside the standard thread types.
 
 ---
 
@@ -87,7 +113,7 @@ When you quit and reopen Codezilla, all your projects and threads are restored. 
 
 Each thread runs in a full terminal emulator (xterm.js) with:
 
-- 5,000-line scrollback
+- 10,000-line scrollback
 - ANSI colour and style support
 - GPU-accelerated rendering
 - Auto-resize when the panel changes size
@@ -123,11 +149,31 @@ Only paths that match actual files in your project are linked — no false posit
 
 URLs in terminal output (`http://` and `https://`) are automatically detected and clickable. Clicking a URL opens it in your default system browser.
 
+### Copy as prose
+
+When you select text in the terminal, a **Copy as prose** button appears at the top of the terminal. Clicking it copies the selected text with hard line wraps removed, producing clean continuous prose. Paragraph breaks, list markers, and table rows are preserved.
+
+### Scroll to latest
+
+When you scroll up in a terminal, a **↓ Latest** button appears. Clicking it scrolls to the bottom and focuses the terminal so you can start typing immediately.
+
 ---
 
 ## File Tree
 
 The right panel shows your project's directory structure with real-time git status.
+
+### View modes
+
+Above the search bar, three view buttons let you switch how files are displayed:
+
+| View | What it shows |
+|------|-------------|
+| **All** | Full directory tree (default) |
+| **Recent** | Flat list sorted by modification time with relative timestamps |
+| **Changes** | Uncommitted files sorted by total line edits with +/- stats |
+
+All views are searchable using the filter box.
 
 ### Navigation
 
@@ -201,7 +247,9 @@ Quick Look is a modal overlay for previewing files without leaving the app.
 
 ### Supported file types
 
-**Text files** — Syntax-highlighted with line numbers. Supports JS, TS, JSX, TSX, Python, Rust, Go, C/C++, HTML, CSS, JSON, YAML, TOML, SQL, Markdown, Bash, and more.
+**Text files** — Syntax-highlighted with line numbers. Supports JS, TS, JSX, TSX, Python, Rust, Go, C/C++, HTML, CSS, JSON, YAML, TOML, SQL, Bash, and more.
+
+**Markdown** — Rendered with formatted headings, lists, code blocks, and links.
 
 **Images** — PNG, JPG, GIF, SVG, WebP, BMP, ICO, TIFF displayed inline.
 
@@ -268,7 +316,7 @@ Press **D** again to return to the normal file view.
 
 ---
 
-## Scheduled Jobs
+## Scheduled Jobs [Beta]
 
 Scheduled jobs let you run Claude Code prompts, Codex prompts, or shell commands on a recurring schedule. Jobs run in the background using macOS launchd, even when Codezilla is closed.
 
@@ -332,7 +380,7 @@ The detail panel shows:
 
 ---
 
-## Skills & Plugins Manager
+## Skills & Plugins Manager [Beta]
 
 The Skills & Plugins Manager lets you discover, install, update, and organise Claude Code skills, agents, commands, and plugins across your projects.
 
@@ -403,6 +451,34 @@ Marketplace plugins that contain multiple skills, agents, or commands show an ex
 
 ---
 
+## Appearance
+
+### Theme
+
+Choose between three appearance modes from the menu:
+
+| Mode | Behaviour |
+|------|-----------|
+| **Dark** | Dark background |
+| **Light** | Light background |
+| **System** | Matches your macOS appearance setting |
+
+### Accent colours
+
+Eight accent colours are available: Green, Blue, Purple, Orange, Rose, Teal, Amber, and Grey. Change the accent from the menu.
+
+### Text size
+
+| Shortcut | Action |
+|----------|--------|
+| **Cmd+=** | Zoom in |
+| **Cmd+-** | Zoom out |
+| **Cmd+0** | Reset to default |
+
+Text size scales sidebars, terminal, and all UI consistently. Your preference is saved across sessions.
+
+---
+
 ## Recommended Claude Code Settings
 
 Codezilla's thread activity detection (the working spinner, "Idle · Done" badge) relies on OSC `9;4` progress marker sequences emitted by the Claude CLI. If you disable the terminal progress bar in your Claude settings, Codezilla falls back to a less precise output-based detection mode, which can cause the thread status to lag or briefly show "Idle · Done" prematurely.
@@ -436,6 +512,9 @@ Idle threads (waiting for input) close silently — their sessions are saved and
 | Shortcut | Action |
 |----------|--------|
 | **Cmd+Q** | Quit (with confirmation if processes are active) |
+| **Cmd+=** | Zoom in (increase text size) |
+| **Cmd+-** | Zoom out (decrease text size) |
+| **Cmd+0** | Reset text size to default |
 
 ### File Tree
 

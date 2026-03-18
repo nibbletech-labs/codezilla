@@ -2,30 +2,30 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-A macOS desktop app for multi-project management of AI-enabled development. Supports Claude Code and Codex with full session persistence.
+A macOS desktop app for multi-project management of AI-enabled development. Supports Claude Code and Codex [Beta] with full session persistence.
 
 ## Features
 
-- **Multi-project, multi-thread** — Manage multiple projects, each with their own Claude Code, Codex, and shell sessions
+- **Multiple thread types** — Launch Claude Code, Codex [Beta], or standard terminal sessions within project folders
 - **Session resumption** — Conversations persist across restarts; Claude Code and Codex sessions resume automatically
 - **Thread status at a glance** — See which threads are running, saved, or exited across all your projects
-- **Skills & Plugins Manager** — Discover, install, and manage Claude Code skills, agents, commands, and plugins from git repos with a built-in registry and update tracking
-- **Scheduled jobs** — Create recurring tasks with launchd integration and a polished management UI
-- **File preview** — Browse project files with syntax highlighting, Quick Look preview, and git diff view
+- **Launch presets** — Create reusable thread configurations with custom CLI arguments
+- **File preview** — Browse project files with syntax highlighting, Quick Look preview, markdown rendering, and git diff view
+- **File panel views** — Switch between All, Recent, and Changes views to focus on the files that matter
 - **Git-aware file tree** — Real-time modified/added/deleted indicators with diff summary
-- **Intelligent terminal detection** — File paths, URLs, and commit hashes in terminal output become clickable links
+- **Clickable terminal output** — File paths, URLs, and commit hashes become clickable links
+- **Copy as prose** — Select terminal output and copy it as clean, readable text with line wraps removed
+- **Appearance** — Dark, Light, or System theme with 8 accent colours and text size scaling
+- **[Beta] Skills & Plugins Manager** — Discover, install, and manage Claude Code skills, agents, commands, and plugins from git repos with a built-in registry and update tracking
+- **[Beta] Scheduled jobs** — Create recurring tasks with launchd integration
+
+See the [User Guide](USER_GUIDE.md) for full documentation.
 
 ## Install
 
 Download the latest `.dmg` from [Releases](https://github.com/nibbletech-labs/codezilla/releases), open it, and drag Codezilla to Applications.
 
-The app is not yet code-signed, so macOS will block it on first launch. Run this once to allow it:
-
-```bash
-xattr -cr /Applications/Codezilla.app
-```
-
-Then open Codezilla normally.
+The app is code-signed and notarised for macOS.
 
 ## Prerequisites (building from source)
 
