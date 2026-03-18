@@ -4,7 +4,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { invoke } from "@tauri-apps/api/core";
 import { useAppStore } from "../store/appStore";
 import { useSkillsPluginsStore } from "../store/skillsPluginsStore";
-import type { Project, PersistedThread, ScheduledJob, LaunchPreset, BetaFeatures } from "../store/types";
+import type { Project, PersistedThread, ScheduledJob, LaunchPreset, BetaFeatures, ProjectIcon } from "../store/types";
 import type { SkillsPluginsRegistry } from "../store/skillsPluginsTypes";
 import type { AccentColorId, AppearanceMode } from "../lib/themes";
 import { syncLaunchdEntries } from "../lib/launchdSync";
@@ -105,9 +105,17 @@ export function usePersistence() {
         if (savedJobs && savedJobs.length > 0) {
           loadScheduledJobs(savedJobs);
         }
-        const savedPresets = await store.get<LaunchPreset[]>(LAUNCH_PRESETS_KEY);
+        const savedPresets = await store.get<(LaunchPreset & { emoji?: string })[]>(LAUNCH_PRESETS_KEY);
         if (savedPresets && savedPresets.length > 0) {
-          loadLaunchPresets(savedPresets);
+          // Migrate old emoji string → ProjectIcon
+          const migrated = savedPresets.map((p) => {
+            if ("emoji" in p && typeof p.emoji === "string" && !p.icon) {
+              const { emoji, ...rest } = p;
+              return { ...rest, icon: { type: "emoji", value: emoji } as ProjectIcon };
+            }
+            return p;
+          });
+          loadLaunchPresets(migrated);
         }
 
         const savedBetaFeatures = await store.get<BetaFeatures>(BETA_FEATURES_KEY);

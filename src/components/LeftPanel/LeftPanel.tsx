@@ -2,12 +2,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useAppStore } from "../../store/appStore";
 import { pickDirectory } from "../../lib/tauri";
-import type { ThreadType, Project } from "../../store/types";
+import type { ThreadType, Project, LaunchPreset } from "../../store/types";
 import { THREAD_NEW_LABELS } from "../../store/types";
 import ThreadItem from "./ThreadItem";
 import ThreadIcon from "./ThreadIcons";
 import JobItem from "./JobItem";
 import ProjectIcon from "../ProjectIcon";
+import PresetIconButton from "../LaunchPresets/PresetIconButton";
 import { IconPicker } from "../IconPicker";
 import {
   DndContext,
@@ -399,7 +400,7 @@ function ScheduledSection({ jobIds, activeJobId, setActiveJob }: { jobIds: strin
   );
 }
 
-function PresetMenuItem({ preset, onClick }: { preset: { emoji: string; name: string; args: string }; onClick: () => void }) {
+function PresetMenuItem({ preset, onClick }: { preset: LaunchPreset; onClick: () => void }) {
   const [hovered, setHovered] = useState(false);
   return (
     <div
@@ -412,7 +413,7 @@ function PresetMenuItem({ preset, onClick }: { preset: { emoji: string; name: st
         backgroundColor: hovered ? "var(--bg-hover)" : "transparent",
       }}
     >
-      <span style={{ fontSize: "14px", width: "14px", textAlign: "center" }}>{preset.emoji}</span>
+      <PresetIconButton icon={preset.icon} size={14} />
       {preset.name}
     </div>
   );

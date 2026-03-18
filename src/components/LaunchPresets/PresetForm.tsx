@@ -1,7 +1,10 @@
 import { useState, useEffect, useRef } from "react";
+import { createPortal } from "react-dom";
 import { useAppStore } from "../../store/appStore";
-import type { ThreadType, LaunchPreset } from "../../store/types";
+import type { ThreadType, LaunchPreset, ProjectIcon } from "../../store/types";
 import ThreadIcon from "../LeftPanel/ThreadIcons";
+import { IconPicker } from "../IconPicker";
+import PresetIconButton from "./PresetIconButton";
 
 const FORM_WIDTH = 320;
 const FORM_MAX_HEIGHT = 400;
@@ -24,10 +27,12 @@ export default function PresetForm({ anchor, onClose, editPreset }: PresetFormPr
   const removeLaunchPreset = useAppStore((s) => s.removeLaunchPreset);
   const formRef = useRef<HTMLDivElement>(null);
 
-  const [emoji, setEmoji] = useState(editPreset?.emoji ?? "");
+  const [icon, setIcon] = useState<ProjectIcon | undefined>(editPreset?.icon);
   const [name, setName] = useState(editPreset?.name ?? "");
   const [baseType, setBaseType] = useState<ThreadType>(editPreset?.baseType ?? "claude");
   const [args, setArgs] = useState(editPreset?.args ?? "");
+  const [iconPickerPos, setIconPickerPos] = useState<{ x: number; y: number } | null>(null);
+  const iconBtnRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -39,19 +44,18 @@ export default function PresetForm({ anchor, onClose, editPreset }: PresetFormPr
 
   const handleSubmit = () => {
     const presetName = name.trim() || args.slice(0, 30) || "Untitled";
-    const presetEmoji = emoji.trim() || "🚀";
 
     if (editPreset) {
       updateLaunchPreset(editPreset.id, {
         name: presetName,
-        emoji: presetEmoji,
+        icon,
         baseType,
         args: args.trim(),
       });
     } else {
       addLaunchPreset({
         name: presetName,
-        emoji: presetEmoji,
+        icon,
         baseType,
         args: args.trim(),
       });
@@ -127,17 +131,29 @@ export default function PresetForm({ anchor, onClose, editPreset }: PresetFormPr
         </div>
 
         {/* Icon + Name row */}
-        <div style={{ display: "flex", gap: "8px" }}>
-          <input
-            value={emoji}
-            onChange={(e) => {
-              // Keep only the last entered character/emoji
-              const val = e.target.value;
-              setEmoji(val.length > 2 ? [...val].pop() ?? "" : val);
+        <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+          <button
+            ref={iconBtnRef}
+            onClick={() => {
+              const rect = iconBtnRef.current?.getBoundingClientRect();
+              if (rect) setIconPickerPos({ x: rect.left, y: rect.bottom + 4 });
             }}
-            placeholder="🚀"
-            style={{ ...inputStyle, width: "44px", textAlign: "center", fontSize: "18px", padding: "4px" }}
-          />
+            style={{
+              all: "unset",
+              width: 34,
+              height: 34,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              cursor: "pointer",
+              borderRadius: 4,
+              border: "1px solid var(--border-default)",
+              background: "var(--bg-input, var(--bg-primary))",
+              flexShrink: 0,
+            }}
+          >
+            <PresetIconButton icon={icon} size={18} />
+          </button>
           <input
             value={name}
             onChange={(e) => setName(e.target.value)}
@@ -147,11 +163,32 @@ export default function PresetForm({ anchor, onClose, editPreset }: PresetFormPr
           />
         </div>
 
+        {iconPickerPos && createPortal(
+          <IconPicker
+            anchor={iconPickerPos}
+            currentIcon={icon}
+            onSelect={(newIcon) => {
+              setIcon(newIcon);
+              setIconPickerPos(null);
+            }}
+            onRemove={() => {
+              setIcon(undefined);
+              setIconPickerPos(null);
+            }}
+            onClose={() => setIconPickerPos(null)}
+          />,
+          document.body,
+        )}
+
         {/* Args */}
         <input
           value={args}
           onChange={(e) => setArgs(e.target.value)}
-          placeholder="--model sonnet --thinking medium"
+          placeholder={
+            baseType === "claude" ? "--model sonnet --thinking medium" :
+            baseType === "codex" ? "--model o4-mini --approval auto" :
+            "npm run dev"
+          }
           style={{ ...inputStyle, fontFamily: "var(--font-mono, monospace)" }}
         />
 

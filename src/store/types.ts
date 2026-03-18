@@ -36,7 +36,7 @@ export interface PersistedThread {
 export interface LaunchPreset {
   id: string;
   name: string;
-  emoji: string;
+  icon?: ProjectIcon;
   baseType: ThreadType;
   args: string;                    // freeform CLI flags, e.g. "--model sonnet --thinking medium"
 }

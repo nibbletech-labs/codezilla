@@ -1,7 +1,10 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
+import { createPortal } from "react-dom";
 import { useAppStore } from "../../store/appStore";
-import type { ThreadType, LaunchPreset } from "../../store/types";
+import type { ThreadType, LaunchPreset, ProjectIcon } from "../../store/types";
 import ThreadIcon from "../LeftPanel/ThreadIcons";
+import { IconPicker } from "../IconPicker";
+import PresetIconButton from "./PresetIconButton";
 import { modalStyles, modalKeyframes } from "../../styles/modal";
 import { useModalBackdrop } from "../../hooks/useModalBackdrop";
 
@@ -122,9 +125,7 @@ function PresetRow({ preset, onEdit }: { preset: LaunchPreset; onEdit: () => voi
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
     >
-      <span style={{ fontSize: "16px", width: "24px", textAlign: "center", flexShrink: 0 }}>
-        {preset.emoji}
-      </span>
+      <PresetIconButton icon={preset.icon} size={18} />
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ color: "var(--text-primary)", fontSize: "var(--font-size-sm)", fontWeight: 500 }}>
           {preset.name}
@@ -165,14 +166,16 @@ function PresetEditor({
   onCancel,
 }: {
   preset?: LaunchPreset;
-  onSave: (data: { name: string; emoji: string; baseType: ThreadType; args: string }) => void;
+  onSave: (data: { name: string; icon?: ProjectIcon; baseType: ThreadType; args: string }) => void;
   onDelete?: () => void;
   onCancel: () => void;
 }) {
-  const [emoji, setEmoji] = useState(preset?.emoji ?? "");
+  const [icon, setIcon] = useState<ProjectIcon | undefined>(preset?.icon);
   const [name, setName] = useState(preset?.name ?? "");
   const [baseType, setBaseType] = useState<ThreadType>(preset?.baseType ?? "claude");
   const [args, setArgs] = useState(preset?.args ?? "");
+  const [iconPickerPos, setIconPickerPos] = useState<{ x: number; y: number } | null>(null);
+  const iconBtnRef = useRef<HTMLButtonElement>(null);
 
   const canSave = name.trim() || args.trim();
 
@@ -180,7 +183,7 @@ function PresetEditor({
     if (!canSave) return;
     onSave({
       name: name.trim() || args.slice(0, 30) || "Untitled",
-      emoji: emoji.trim() || "\u{1F680}",
+      icon,
       baseType,
       args: args.trim(),
     });
@@ -216,16 +219,29 @@ function PresetEditor({
       </div>
 
       {/* Icon + Name row */}
-      <div style={{ display: "flex", gap: "8px" }}>
-        <input
-          value={emoji}
-          onChange={(e) => {
-            const val = e.target.value;
-            setEmoji(val.length > 2 ? [...val].pop() ?? "" : val);
+      <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+        <button
+          ref={iconBtnRef}
+          onClick={() => {
+            const rect = iconBtnRef.current?.getBoundingClientRect();
+            if (rect) setIconPickerPos({ x: rect.left, y: rect.bottom + 4 });
           }}
-          placeholder="\u{1F680}"
-          style={{ ...inputStyle, width: "40px", textAlign: "center", fontSize: "16px", padding: "4px" }}
-        />
+          style={{
+            all: "unset",
+            width: 34,
+            height: 34,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            cursor: "pointer",
+            borderRadius: 4,
+            border: "1px solid var(--border-default)",
+            background: "var(--bg-input, var(--bg-primary))",
+            flexShrink: 0,
+          }}
+        >
+          <PresetIconButton icon={icon} size={18} />
+        </button>
         <input
           value={name}
           onChange={(e) => setName(e.target.value)}
@@ -235,11 +251,32 @@ function PresetEditor({
         />
       </div>
 
-      {/* Args */}
+      {iconPickerPos && createPortal(
+        <IconPicker
+          anchor={iconPickerPos}
+          currentIcon={icon}
+          onSelect={(newIcon) => {
+            setIcon(newIcon);
+            setIconPickerPos(null);
+          }}
+          onRemove={() => {
+            setIcon(undefined);
+            setIconPickerPos(null);
+          }}
+          onClose={() => setIconPickerPos(null)}
+        />,
+        document.body,
+      )}
+
+      {/* Args / command */}
       <input
         value={args}
         onChange={(e) => setArgs(e.target.value)}
-        placeholder="--model sonnet --thinking medium"
+        placeholder={
+          baseType === "claude" ? "--model sonnet --thinking medium" :
+          baseType === "codex" ? "--model o4-mini --approval auto" :
+          "npm run dev"
+        }
         style={{ ...inputStyle, fontFamily: "var(--font-mono, monospace)" }}
         onKeyDown={(e) => {
           if (e.key === "Enter" && canSave) handleSubmit();

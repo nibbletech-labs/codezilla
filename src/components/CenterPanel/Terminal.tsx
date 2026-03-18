@@ -1487,10 +1487,15 @@ function createTerminalInstance(
   }
 
   // Append extra CLI flags from launch preset (shell-escaped to prevent injection)
-  if (command && thread.extraArgs) {
-    const escaped = shellEscapeArgs(thread.extraArgs);
-    if (escaped) {
-      command = `${command} ${escaped}`;
+  // For shell threads, extraArgs IS the command to run
+  if (thread.extraArgs) {
+    if (command) {
+      const escaped = shellEscapeArgs(thread.extraArgs);
+      if (escaped) {
+        command = `${command} ${escaped}`;
+      }
+    } else if (thread.type === "shell") {
+      command = thread.extraArgs;
     }
   }
 

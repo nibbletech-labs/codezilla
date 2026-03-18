@@ -1,3 +1,7 @@
+## v0.2.2
+
+- **Launch preset fixes** — Preset icons now use the same icon picker as projects, placeholder text adapts to the selected type, and Terminal presets can specify a command to run
+
 ## v0.2.1
 
 - **File panel view modes** — Switch between All, Recent, and Changes views in the right panel to focus on the files that matter
