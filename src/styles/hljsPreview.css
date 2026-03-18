@@ -10,6 +10,11 @@
   counter-reset: line;
 }
 
+.shiki-wrap .shiki .line {
+  display: block;
+  min-height: 1lh;
+}
+
 .shiki-wrap .shiki .line::before {
   counter-increment: line;
   content: counter(line);

@@ -70,7 +70,7 @@ export function highlightWithHljs(code: string, lang: string): string | null {
     // Wrap each line in a <span class="line"> to match Shiki's structure
     // so LINE_NUMBER_CSS works for both highlighters.
     const lines = value.split("\n");
-    const wrapped = lines.map((l) => `<span class="line">${l}</span>`).join("\n");
+    const wrapped = lines.map((l) => `<span class="line">${l}</span>`).join("");
     return `<pre class="shiki hljs"><code>${wrapped}</code></pre>`;
   } catch {
     return null;
