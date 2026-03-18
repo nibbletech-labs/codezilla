@@ -122,6 +122,7 @@ export function usePersistence() {
         if (savedBetaFeatures) {
           loadBetaFeatures(savedBetaFeatures);
         }
+        invoke("sync_codex_menu", { enabled: savedBetaFeatures?.codexThreads ?? false }).catch(() => {});
         const savedAutoDisabledJobIds = await store.get<string[]>(AUTO_DISABLED_JOBS_KEY);
         if (savedAutoDisabledJobIds) {
           loadAutoDisabledJobIds(savedAutoDisabledJobIds);
@@ -255,4 +256,9 @@ export function usePersistence() {
     if (!initialized.current) return;
     invoke("sync_remember_window_position", { checked: rememberWindowPosition }).catch(() => {});
   }, [rememberWindowPosition]);
+
+  useEffect(() => {
+    if (!initialized.current) return;
+    invoke("sync_codex_menu", { enabled: betaFeatures.codexThreads }).catch(() => {});
+  }, [betaFeatures.codexThreads]);
 }

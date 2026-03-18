@@ -11,7 +11,7 @@ use pty::PtyManager;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use tauri::ipc::Channel;
-use tauri::menu::{CheckMenuItem, IconMenuItem};
+use tauri::menu::{CheckMenuItem, IconMenuItem, MenuItem};
 use tauri::{Manager, State};
 use tokio::sync::Mutex;
 
@@ -196,6 +196,7 @@ struct MenuState {
     remember_window: std::sync::Mutex<Option<CheckMenuItem<tauri::Wry>>>,
     appearance_items: std::sync::Mutex<Vec<(String, CheckMenuItem<tauri::Wry>)>>,
     accent_items: std::sync::Mutex<Vec<(String, String, String, IconMenuItem<tauri::Wry>)>>,
+    codex_menu_item: std::sync::Mutex<Option<MenuItem<tauri::Wry>>>,
 }
 
 #[tauri::command]
@@ -236,6 +237,19 @@ fn sync_accent_menu(
             let swatch = color_swatch(hex, 16, 3, tick);
             let img = tauri::image::Image::new_owned(swatch, 16, 16);
             item.set_icon(Some(img)).map_err(|e| e.to_string())?;
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn sync_codex_menu(
+    state: State<'_, MenuState>,
+    enabled: bool,
+) -> Result<(), String> {
+    if let Ok(guard) = state.codex_menu_item.lock() {
+        if let Some(item) = guard.as_ref() {
+            item.set_enabled(enabled).map_err(|e| e.to_string())?;
         }
     }
     Ok(())
@@ -282,6 +296,7 @@ pub fn run() {
             remember_window: std::sync::Mutex::new(None),
             appearance_items: std::sync::Mutex::new(Vec::new()),
             accent_items: std::sync::Mutex::new(Vec::new()),
+            codex_menu_item: std::sync::Mutex::new(None),
         })
         .setup(move |app| {
             info!("Codezilla starting up");
@@ -480,6 +495,9 @@ pub fn run() {
                             })
                             .collect();
                     }
+                    if let Ok(mut guard) = menu_state.codex_menu_item.lock() {
+                        *guard = Some(new_codex);
+                    }
                 }
 
                 let menu = Menu::with_items(app, &[&app_submenu, &edit_submenu, &view_submenu, &window_submenu])?;
@@ -561,7 +579,8 @@ pub fn run() {
             skills::hash_file_in_temp,
             sync_remember_window_position,
             sync_appearance_menu,
-            sync_accent_menu
+            sync_accent_menu,
+            sync_codex_menu
         ])
         .on_window_event(move |window, event| {
             match event {
