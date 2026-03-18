@@ -154,6 +154,7 @@ interface TerminalInstance {
   visible: boolean;
   /** Drain any buffered output (call when making terminal visible). */
   flushPendingOutput: () => void;
+  hasSelection: boolean;
 }
 
 const THREAD_TYPES: ThreadType[] = ["claude", "codex", "shell"];
@@ -428,11 +429,14 @@ export default function TerminalMultiplexer() {
   const lastDimsRef = useRef<Map<string, { rows: number; cols: number }>>(new Map());
 
   const [showScrollButton, setShowScrollButton] = useState(false);
+  const [hasSelection, setHasSelection] = useState(false);
   const [loadingSession, setLoadingSession] = useState<string | null>(null);
   const [iconPickerPos, setIconPickerPos] = useState<{ x: number; y: number } | null>(null);
   const [showJobForm, setShowJobForm] = useState(false);
   const scrollCallbackRef = useRef<((atBottom: boolean) => void) | null>(null);
   scrollCallbackRef.current = (atBottom: boolean) => setShowScrollButton(!atBottom);
+  const selectionCallbackRef = useRef<((hasSel: boolean) => void) | null>(null);
+  selectionCallbackRef.current = (hasSel: boolean) => setHasSelection(hasSel);
   const onFirstOutputRef = useRef<((sessionId: string) => void) | null>(null);
   onFirstOutputRef.current = (sessionId: string) => {
     setLoadingSession((cur) => (cur === sessionId ? null : cur));
@@ -518,6 +522,8 @@ export default function TerminalMultiplexer() {
       if (thread.sessionId && !instances.has(thread.sessionId)) {
         createTerminalInstance(wrapper, thread, instances, markThreadExited, (atBottom) => {
           scrollCallbackRef.current?.(atBottom);
+        }, (hasSel) => {
+          selectionCallbackRef.current?.(hasSel);
         }, (sid) => {
           onFirstOutputRef.current?.(sid);
         });
@@ -658,6 +664,21 @@ export default function TerminalMultiplexer() {
       {loadingSession && activeThreadId && (
         <LoadingOverlay threadType={activeThread?.type ?? "shell"} />
       )}
+      {hasSelection && activeThreadId && (
+        <CopyProseButton onClick={() => {
+          const active = threads.find((t) => t.id === activeThreadId);
+          if (active?.sessionId) {
+            const instance = instancesRef.current.get(active.sessionId);
+            if (instance) {
+              const sel = instance.terminal.getSelection();
+              if (sel) {
+                const cleaned = collapseProseWraps(sel);
+                navigator.clipboard.writeText(cleaned);
+              }
+            }
+          }
+        }} />
+      )}
       {showScrollButton && activeThreadId && (
         <ScrollToBottomButton onClick={() => {
           const active = threads.find((t) => t.id === activeThreadId);
@@ -666,6 +687,7 @@ export default function TerminalMultiplexer() {
             if (instance) {
               instance.userScrolledUp = false;
               instance.terminal.scrollToBottom();
+              instance.terminal.focus();
               setShowScrollButton(false);
             }
           }
@@ -941,12 +963,83 @@ function ScrollToBottomButton({ onClick }: { onClick: () => void }) {
   );
 }
 
+/** Collapse hard-wrapped paragraph lines into continuous text.
+ *  The user explicitly opted in by clicking "Copy as prose", so we
+ *  aggressively strip leading whitespace and collapse single newlines.
+ *  We only preserve breaks for: blank lines (paragraph separators),
+ *  list/bullet markers, table rows (pipes), and separator rules. */
+function collapseProseWraps(sel: string): string {
+  // Strip leading/trailing whitespace from each line so collapsed joins
+  // always produce exactly one space between words.
+  const lines = sel.split("\n").map((l) => l.trim());
+
+  const result: string[] = [lines[0]];
+  for (let i = 1; i < lines.length; i++) {
+    const prev = result[result.length - 1];
+    const next = lines[i];
+    // Preserve blank lines (paragraph breaks)
+    if (next.length === 0 || prev.length === 0) {
+      result.push(next);
+      continue;
+    }
+    // Preserve list/bullet markers
+    if (/^[-*•>]\s/.test(next) || /^\d+[.)]\s/.test(next)) {
+      result.push(next);
+      continue;
+    }
+    // Preserve table rows and separator rules
+    if (prev.includes("|") || /^[\-=─━┄┈═~_│|+┃┊·•*#]{3,}$/.test(prev)) {
+      result.push(next);
+      continue;
+    }
+    // Collapse: join with space
+    result[result.length - 1] = prev + " " + next;
+  }
+  return result.join("\n");
+}
+
+function CopyProseButton({ onClick }: { onClick: () => void }) {
+  const [hovered, setHovered] = useState(false);
+  const [copied, setCopied] = useState(false);
+  return (
+    <button
+      onClick={() => {
+        onClick();
+        setCopied(true);
+        setTimeout(() => setCopied(false), 1200);
+      }}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      style={{
+        position: "absolute",
+        top: "8px",
+        right: "24px",
+        zIndex: 20,
+        background: copied
+          ? "var(--accent)"
+          : hovered ? "var(--accent)" : "var(--accent-selection)",
+        border: "1px solid var(--accent)",
+        color: copied || hovered ? "var(--accent-text)" : "var(--text-primary)",
+        fontSize: "var(--font-size-sm)",
+        fontWeight: 600,
+        cursor: "pointer",
+        padding: "4px 12px",
+        borderRadius: "12px",
+        transition: "background 0.15s, border-color 0.15s, color 0.15s",
+      }}
+    >
+      {copied ? "Copied!" : "Copy as prose"}
+    </button>
+  );
+}
+
 function createTerminalInstance(
   wrapper: HTMLDivElement,
   thread: Thread,
   instances: Map<string, TerminalInstance>,
   markThreadExited: (threadId: string, exitCode: number | null) => void,
   onScrollStateChange: ((atBottom: boolean) => void) | null,
+  onSelectionChange: ((hasSelection: boolean) => void) | null,
   onFirstOutput: ((sessionId: string) => void) | null,
 ) {
   if (!thread.sessionId) return;
@@ -999,9 +1092,19 @@ function createTerminalInstance(
   // is marked visible and the browser has had a frame to settle layout.
   const instance: TerminalInstance = {
     terminal, fitAddon, container, isAtBottom: true, userScrolledUp: false,
-    visible: false, flushPendingOutput: () => {},
+    visible: false, flushPendingOutput: () => {}, hasSelection: false,
   };
   instances.set(thread.sessionId, instance);
+
+  // Track selection state for "Copy as prose" button
+  terminal.onSelectionChange(() => {
+    const hasSel = terminal.hasSelection();
+    instance.hasSelection = hasSel;
+    const activeId = useAppStore.getState().activeThreadId;
+    if (activeId === thread.id && onSelectionChange) {
+      onSelectionChange(hasSel);
+    }
+  });
 
   // Track scroll position to show/hide "scroll to bottom" button.
   // Check on both scroll events and after new output is written, so the
