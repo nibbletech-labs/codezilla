@@ -67,14 +67,6 @@ jobs:
           APPLE_TEAM_ID: ${{ env.SIGN_APP == 'true' && secrets.APPLE_TEAM_ID || '' }}
         run: npx tauri build --target aarch64-apple-darwin --bundles app,dmg,updater
 
-      - name: Read release notes
-        id: notes
-        run: |
-          body=$(cat RELEASE_NOTES.md)
-          echo "body<<EOF" >> "$GITHUB_OUTPUT"
-          echo "$body" >> "$GITHUB_OUTPUT"
-          echo "EOF" >> "$GITHUB_OUTPUT"
-
       - name: Get version
         id: version
         run: echo "version=$(jq -r .version src-tauri/tauri.conf.json)" >> "$GITHUB_OUTPUT"
@@ -108,7 +100,7 @@ jobs:
           # Create release with notes
           gh release create "$TAG" \
             --title "Codezilla $TAG" \
-            --notes "${{ steps.notes.outputs.body }}" \
+            --notes-file RELEASE_NOTES.md \
             "$BUNDLE_DIR/dmg/Codezilla_${VERSION}_aarch64.dmg" \
             "$BUNDLE_DIR/macos/Codezilla.app.tar.gz" \
             "$BUNDLE_DIR/macos/Codezilla.app.tar.gz.sig" \
