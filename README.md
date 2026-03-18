@@ -4,6 +4,8 @@
 
 A macOS desktop app for multi-project management of AI-enabled development. Supports Claude Code and Codex [Beta] with full session persistence.
 
+![Codezilla](screenshot.jpg)
+
 ## Features
 
 - **Multiple thread types** — Launch Claude Code, Codex [Beta], or standard terminal sessions within project folders
