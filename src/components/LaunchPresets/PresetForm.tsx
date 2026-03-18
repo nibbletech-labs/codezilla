@@ -33,6 +33,8 @@ export default function PresetForm({ anchor, onClose, editPreset }: PresetFormPr
   const [args, setArgs] = useState(editPreset?.args ?? "");
   const [iconPickerPos, setIconPickerPos] = useState<{ x: number; y: number } | null>(null);
   const iconBtnRef = useRef<HTMLButtonElement>(null);
+  const betaFeatures = useAppStore((s) => s.betaFeatures);
+  const visibleTypes = TYPE_OPTIONS.filter(({ type }) => type !== "codex" || betaFeatures.codexThreads);
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -105,7 +107,7 @@ export default function PresetForm({ anchor, onClose, editPreset }: PresetFormPr
 
         {/* Type toggle */}
         <div style={{ display: "flex", gap: "6px" }}>
-          {TYPE_OPTIONS.map(({ type, label }) => (
+          {visibleTypes.map(({ type, label }) => (
             <button
               key={type}
               onClick={() => setBaseType(type)}

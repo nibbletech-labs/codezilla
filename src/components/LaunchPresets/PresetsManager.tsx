@@ -176,6 +176,8 @@ function PresetEditor({
   const [args, setArgs] = useState(preset?.args ?? "");
   const [iconPickerPos, setIconPickerPos] = useState<{ x: number; y: number } | null>(null);
   const iconBtnRef = useRef<HTMLButtonElement>(null);
+  const betaFeatures = useAppStore((s) => s.betaFeatures);
+  const visibleTypes = TYPE_OPTIONS.filter(({ type }) => type !== "codex" || betaFeatures.codexThreads);
 
   const canSave = name.trim() || args.trim();
 
@@ -193,7 +195,7 @@ function PresetEditor({
     <div style={styles.editor}>
       {/* Type toggle */}
       <div style={{ display: "flex", gap: "6px" }}>
-        {TYPE_OPTIONS.map(({ type, label }) => (
+        {visibleTypes.map(({ type, label }) => (
           <button
             key={type}
             onClick={() => setBaseType(type)}
