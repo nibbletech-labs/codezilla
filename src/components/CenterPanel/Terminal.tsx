@@ -240,12 +240,12 @@ function outputQueueTailHasActivityHint(
 }
 
 function isTerminalAtBottom(terminal: Terminal): boolean {
-  const buf = terminal.buffer.active;
+  const buf = terminal.buffer.normal;
   return buf.baseY === 0 || buf.viewportY >= buf.baseY - BOTTOM_TOLERANCE_LINES;
 }
 
 function getTerminalDistanceFromBottom(terminal: Terminal): number {
-  const buf = terminal.buffer.active;
+  const buf = terminal.buffer.normal;
   return Math.max(0, buf.baseY - buf.viewportY);
 }
 
@@ -258,7 +258,7 @@ function restoreTerminalViewportAfterFit(
     terminal.scrollToBottom();
     return;
   }
-  const buf = terminal.buffer.active;
+  const buf = terminal.buffer.normal;
   const targetViewportY = Math.max(0, Math.min(buf.baseY, buf.baseY - distanceFromBottom));
   terminal.scrollToLine(targetViewportY);
 }
