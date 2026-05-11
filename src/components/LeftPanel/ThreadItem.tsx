@@ -110,14 +110,16 @@ export default function ThreadItem({ threadId, isActive, ageTick, onSelect }: Th
   const badge: ThreadBadge = info?.badge ?? null;
   // Derive the effective badge, but respect dismissal: if the user already
   // clicked this thread (badgeDismissedAt is set), don't surface a fresh badge
-  // until the next state change.
+  // until the next state change. Badges are background-thread indicators —
+  // the active thread is already in view, so suppress them entirely there
+  // (otherwise stale badges linger until you click away and back).
   const badgeDismissed = info?.badgeDismissedAt != null;
-  const effectiveBadge: ThreadBadge = (
-    badge
-    ?? (badgeDismissed
-      ? null
-      : (info?.activityState === "awaiting_input" ? "needs_input" : null))
-  );
+  const effectiveBadge: ThreadBadge = isActive
+    ? null
+    : (badge
+      ?? (badgeDismissed
+        ? null
+        : (info?.activityState === "awaiting_input" ? "needs_input" : null)));
   const isWorking = thread ? isThreadLikelyWorking(thread, info) : false;
   // If we have a badge to show, prefer it over the working spinner or age
   const showActivityAge = !effectiveBadge && !isWorking;
