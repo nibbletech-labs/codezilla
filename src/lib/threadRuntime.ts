@@ -149,12 +149,21 @@ export function getThreadSubtitle(
   }
 
   // Hook-based activity detection takes precedence for running threads once
-  // a hook event has been observed. Map the three-state model directly to a
-  // user-facing subtitle.
+  // a hook event has been observed. Map the three-state model to a subtitle,
+  // then decorate with plan-mode prefix and plan-progress suffix.
   if (info.hookAuthoritative && info.activityState) {
-    if (info.activityState === "working") return "Working";
-    if (info.activityState === "awaiting_input") return "Awaiting input";
-    if (info.activityState === "idle") return "Idle";
+    let base = "";
+    if (info.activityState === "working") base = "Working";
+    else if (info.activityState === "awaiting_input") base = "Awaiting input";
+    else base = "Idle";
+
+    if (info.planProgress && info.planProgress.total > 0) {
+      // Show the in-progress item (1-indexed), not the done count.
+      const display = Math.min(info.planProgress.done + 1, info.planProgress.total);
+      base = `${base} (${display}/${info.planProgress.total})`;
+    }
+    if (info.inPlanMode) base = `Plan mode · ${base}`;
+    return base;
   }
 
   const now = Date.now();

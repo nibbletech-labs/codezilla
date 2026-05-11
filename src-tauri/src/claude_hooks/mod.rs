@@ -352,17 +352,32 @@ pub fn start_event_log_watcher(app_handle: AppHandle) {
                     continue;
                 };
                 let ts = parsed.get("ts").and_then(|v| v.as_f64()).unwrap_or(0.0);
-                let tool_name = parsed
-                    .get("extra")
+                let extra = parsed.get("extra");
+                let tool_name = extra
                     .and_then(|e| e.get("tool_name"))
                     .and_then(|v| v.as_str())
                     .map(String::from);
+                let task_status = extra
+                    .and_then(|e| e.get("task_status"))
+                    .and_then(|v| v.as_str())
+                    .map(String::from);
+                let todos_total = extra
+                    .and_then(|e| e.get("todos_total"))
+                    .and_then(|v| v.as_u64())
+                    .map(|n| n as u32);
+                let todos_done = extra
+                    .and_then(|e| e.get("todos_done"))
+                    .and_then(|v| v.as_u64())
+                    .map(|n| n as u32);
 
                 let payload = HookEventPayload {
                     event: event_name.to_string(),
                     thread_id: thread_id.to_string(),
                     ts,
                     tool_name,
+                    task_status,
+                    todos_total,
+                    todos_done,
                 };
 
                 if let Err(e) = app_handle.emit("claude-hook-event", &payload) {

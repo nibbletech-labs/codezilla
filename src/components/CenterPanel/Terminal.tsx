@@ -515,19 +515,70 @@ function applyHookEvent(
   };
 
   if (payload.event === "turn_start") {
-    state.updateTranscriptInfo(thread.id, { ...base, activityState: "working" });
+    // Mirror legacy: clear plan progress that has fully completed so the
+    // counter doesn't linger across turns. Don't reset inPlanMode — a user
+    // prompt mid-plan-mode (e.g. answering an AskUserQuestion inside plan
+    // mode) shouldn't drop the indicator.
+    let planProgress = current.planProgress;
+    if (planProgress && planProgress.done >= planProgress.total) {
+      planProgress = null;
+    }
+    state.updateTranscriptInfo(thread.id, { ...base, activityState: "working", planProgress });
     return;
   }
   if (payload.event === "pre_tool_use") {
-    if (payload.tool_name === "AskUserQuestion") {
-      state.updateTranscriptInfo(thread.id, { ...base, activityState: "awaiting_input" });
+    // Plan-mode arming: EnterPlanMode begins planning; ExitPlanMode shows
+    // the user-blocking confirmation picker (defensive re-arm in case the
+    // EnterPlanMode hook was missed).
+    const isPlanModeTool = payload.tool_name === "EnterPlanMode"
+      || payload.tool_name === "ExitPlanMode";
+    const next = {
+      ...base,
+      ...(isPlanModeTool ? { inPlanMode: true } : {}),
+    };
+    if (payload.tool_name === "AskUserQuestion" || payload.tool_name === "ExitPlanMode") {
+      state.updateTranscriptInfo(thread.id, { ...next, activityState: "awaiting_input" });
     } else {
-      state.updateTranscriptInfo(thread.id, base);
+      state.updateTranscriptInfo(thread.id, next);
     }
     return;
   }
   if (payload.event === "tool_use") {
-    state.updateTranscriptInfo(thread.id, { ...base, activityState: "working" });
+    let planProgress = current.planProgress;
+    let inPlanMode = current.inPlanMode;
+
+    if (payload.tool_name === "ExitPlanMode") {
+      // PostToolUse for ExitPlanMode means the user has answered the
+      // confirmation. v1 assumes approval (the common case); a brief wrong
+      // window on rejection is acceptable — the next pre_tool_use(ExitPlanMode)
+      // will re-arm the flag.
+      inPlanMode = false;
+    } else if (payload.tool_name === "TaskCreate") {
+      const prev = planProgress ?? { total: 0, done: 0 };
+      planProgress = { total: prev.total + 1, done: prev.done };
+    } else if (payload.tool_name === "TaskUpdate") {
+      if (payload.task_status === "completed") {
+        const prev = planProgress ?? { total: 0, done: 0 };
+        planProgress = { total: prev.total, done: prev.done + 1 };
+      } else if (payload.task_status === "deleted") {
+        const prev = planProgress ?? { total: 0, done: 0 };
+        planProgress = { total: Math.max(0, prev.total - 1), done: prev.done };
+      }
+    } else if (payload.tool_name === "TodoWrite") {
+      // TodoWrite replaces the entire plan view.
+      if (typeof payload.todos_total === "number") {
+        planProgress = payload.todos_total > 0
+          ? { total: payload.todos_total, done: payload.todos_done ?? 0 }
+          : null;
+      }
+    }
+
+    state.updateTranscriptInfo(thread.id, {
+      ...base,
+      activityState: "working",
+      planProgress,
+      inPlanMode,
+    });
     return;
   }
   if (payload.event === "turn_end") {

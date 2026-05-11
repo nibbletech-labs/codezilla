@@ -11,4 +11,14 @@ pub struct HookEventPayload {
     pub ts: f64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_name: Option<String>,
+    /// `tool_input.status` for TaskUpdate (e.g. "completed", "in_progress",
+    /// "deleted"). Drives planProgress transitions in the frontend reducer.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub task_status: Option<String>,
+    /// Count of items in TodoWrite's `tool_input.todos` array.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub todos_total: Option<u32>,
+    /// Count of TodoWrite items with `status === "completed"`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub todos_done: Option<u32>,
 }

@@ -63,6 +63,10 @@ export interface TranscriptInfo extends ParserDiagnostics {
   activityState: ThreadActivityState | null;
   lastHookEvent: HookEventName | null;
   lastHookEventTs: number | null;
+  // Plan-mode flag: true between EnterPlanMode (or ExitPlanMode picker showing)
+  // and the PostToolUse for ExitPlanMode. v1 trades a brief wrong window if
+  // the user rejects the ExitPlanMode confirmation — acceptable for now.
+  inPlanMode: boolean;
 }
 
 export function createInitialTranscriptInfo(): TranscriptInfo {
@@ -107,5 +111,6 @@ export function createInitialTranscriptInfo(): TranscriptInfo {
     activityState: null,
     lastHookEvent: null,
     lastHookEventTs: null,
+    inPlanMode: false,
   };
 }
