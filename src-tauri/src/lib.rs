@@ -1,3 +1,4 @@
+mod claude_hooks;
 mod config;
 mod launchd;
 mod fs;
@@ -301,6 +302,8 @@ pub fn run() {
         .setup(move |app| {
             info!("Codezilla starting up");
             skills::cleanup_temp_dirs();
+            claude_hooks::ensure_claude_hooks_installed(&app.handle());
+            claude_hooks::start_event_log_watcher(app.handle().clone());
             #[cfg(target_os = "macos")]
             {
                 use tauri::menu::{CheckMenuItem, Menu, MenuItemBuilder, PredefinedMenuItem, Submenu};
@@ -580,7 +583,10 @@ pub fn run() {
             sync_remember_window_position,
             sync_appearance_menu,
             sync_accent_menu,
-            sync_codex_menu
+            sync_codex_menu,
+            claude_hooks::get_claude_hooks_user_disabled,
+            claude_hooks::set_claude_hooks_user_disabled,
+            claude_hooks::write_buffer_snapshot
         ])
         .on_window_event(move |window, event| {
             match event {

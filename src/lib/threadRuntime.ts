@@ -1,5 +1,6 @@
 import type { Thread } from "../store/types";
 import type { TranscriptInfo } from "../store/transcriptTypes";
+import type { ThreadActivityState } from "../store/claudeHooksTypes";
 
 const RECENT_TRANSCRIPT_ACTIVITY_MS = 8_000;
 
@@ -61,7 +62,7 @@ function isLikelyStaleDoneWhileStreaming(
   return lastLineTime > lastParsedTime;
 }
 
-export function isThreadLikelyWorking(
+function legacyIsThreadLikelyWorking(
   thread: Thread,
   info: TranscriptInfo | null | undefined,
   now = Date.now(),
@@ -96,6 +97,40 @@ export function isThreadLikelyWorking(
     && info.idleReason === "none";
 }
 
+/**
+ * Three-state activity derivation. When hook-based detection is engaged for a
+ * thread (`info.hookAuthoritative === true`), the reducer-maintained
+ * `info.activityState` is the source of truth — legacy heuristics are
+ * bypassed. Otherwise we fall back to the legacy two-state working/idle
+ * detection, mapping it onto the three-state model.
+ */
+export function threadActivityState(
+  thread: Thread,
+  info: TranscriptInfo | null | undefined,
+  now = Date.now(),
+): ThreadActivityState {
+  if (thread.state !== "running") return "idle";
+  if (!info) return "idle";
+
+  if (info.hookAuthoritative && info.activityState) {
+    return info.activityState;
+  }
+
+  return legacyIsThreadLikelyWorking(thread, info, now) ? "working" : "idle";
+}
+
+/**
+ * Backwards-compatible boolean wrapper. Most existing callers only need a
+ * working/not-working answer — they continue working unchanged.
+ */
+export function isThreadLikelyWorking(
+  thread: Thread,
+  info: TranscriptInfo | null | undefined,
+  now = Date.now(),
+): boolean {
+  return threadActivityState(thread, info, now) === "working";
+}
+
 export function getThreadSubtitle(
   thread: Thread,
   info: TranscriptInfo | null | undefined,
@@ -111,6 +146,15 @@ export function getThreadSubtitle(
 
   if (thread.state !== "running") {
     return deriveLifecycleSubtitle(thread, info.ptyActive);
+  }
+
+  // Hook-based activity detection takes precedence for running threads once
+  // a hook event has been observed. Map the three-state model directly to a
+  // user-facing subtitle.
+  if (info.hookAuthoritative && info.activityState) {
+    if (info.activityState === "working") return "Working";
+    if (info.activityState === "awaiting_input") return "Awaiting input";
+    if (info.activityState === "idle") return "Idle";
   }
 
   const now = Date.now();

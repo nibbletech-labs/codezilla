@@ -123,6 +123,13 @@ interface AppState {
   openBetaFeatures: () => void;
   closeBetaFeatures: () => void;
 
+  // Hook-based activity detection (Phase 4)
+  // Source of truth lives in ~/.codezilla/claude-hooks/USER_DISABLED marker
+  // file (Rust); this field is a UI mirror loaded once at startup via the
+  // get_claude_hooks_user_disabled Tauri command, and updated by the toggle.
+  claudeHooksUserDisabled: boolean;
+  setClaudeHooksUserDisabled: (value: boolean) => void;
+
   // Persistence
   loadProjects: (projects: Project[]) => void;
   loadExpandedPaths: (expandedPaths: Record<string, string[]>) => void;
@@ -157,6 +164,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   betaFeatures: { codexThreads: false, skillsPlugins: false, scheduledJobs: false },
   betaFeaturesOpen: false,
   autoDisabledJobIds: [],
+  claudeHooksUserDisabled: false,
 
   openPreview: (path, line) => {
     set({ previewFile: { kind: "file", path, line } });
@@ -733,6 +741,8 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   openBetaFeatures: () => set({ betaFeaturesOpen: true }),
   closeBetaFeatures: () => set({ betaFeaturesOpen: false }),
+
+  setClaudeHooksUserDisabled: (value) => set({ claudeHooksUserDisabled: value }),
 
   loadProjects: (projects) => {
     set({

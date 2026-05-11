@@ -56,7 +56,7 @@ impl PtyManager {
         command: Option<String>,
         activity_mode: Option<String>,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        let session = PtySession::spawn(rows, cols, channel, cwd, command, activity_mode)?;
+        let session = PtySession::spawn(&session_id, rows, cols, channel, cwd, command, activity_mode)?;
         self.sessions.insert(session_id, session);
         Ok(())
     }

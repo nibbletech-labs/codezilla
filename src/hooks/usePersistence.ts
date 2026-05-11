@@ -77,6 +77,7 @@ export function usePersistence() {
   const loadAppearanceMode = useAppStore((s) => s.loadAppearanceMode);
   const loadRememberWindowPosition = useAppStore((s) => s.loadRememberWindowPosition);
   const loadPanelVisibility = useAppStore((s) => s.loadPanelVisibility);
+  const setClaudeHooksUserDisabled = useAppStore((s) => s.setClaudeHooksUserDisabled);
   const initialized = useRef(false);
   const threadsLoaded = useRef(false);
 
@@ -164,6 +165,16 @@ export function usePersistence() {
         const savedRightPanel = await store.get<boolean>(SHOW_RIGHT_PANEL_KEY);
         loadPanelVisibility(savedLeftPanel ?? true, savedRightPanel ?? true);
 
+        // Claude hooks user-disabled state — source of truth is a marker
+        // file managed by Rust, not the Tauri plugin-store. Load via invoke
+        // on mount so the toggle UI reflects the persisted state.
+        try {
+          const disabled = await invoke<boolean>("get_claude_hooks_user_disabled");
+          setClaudeHooksUserDisabled(disabled);
+        } catch (e) {
+          console.warn("Failed to load claudeHooks user-disabled state:", e);
+        }
+
         const savedRemember = await store.get<boolean>(REMEMBER_WINDOW_KEY);
         if (savedRemember != null) {
           loadRememberWindowPosition(savedRemember);
@@ -183,7 +194,7 @@ export function usePersistence() {
       }
       initialized.current = true;
     })();
-  }, [loadProjects, loadExpandedPaths, loadThreads, loadScheduledJobs, loadLaunchPresets, loadBetaFeatures, loadAutoDisabledJobIds, loadBaseFontSize, loadAccentColorId, loadAppearanceMode, loadRememberWindowPosition, loadPanelVisibility]);
+  }, [loadProjects, loadExpandedPaths, loadThreads, loadScheduledJobs, loadLaunchPresets, loadBetaFeatures, loadAutoDisabledJobIds, loadBaseFontSize, loadAccentColorId, loadAppearanceMode, loadRememberWindowPosition, loadPanelVisibility, setClaudeHooksUserDisabled]);
 
   // Flush pending saves on window close
   useEffect(() => {

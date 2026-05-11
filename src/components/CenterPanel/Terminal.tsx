@@ -5,7 +5,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import { WebglAddon } from "@xterm/addon-webgl";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { open as openUrl } from "@tauri-apps/plugin-shell";
-import { Channel } from "@tauri-apps/api/core";
+import { Channel, invoke } from "@tauri-apps/api/core";
 import {
   spawnPty,
   writePty,
@@ -45,6 +45,8 @@ import { createInitialTranscriptInfo } from "../../store/transcriptTypes";
 import type { RuntimeStateSource } from "../../store/transcriptTypes";
 import { deriveCoreRuntimeStatus } from "../../lib/threadActivityCore.ts";
 import { deriveSubtitle } from "../../lib/transcriptStateMachine.ts";
+import { listen } from "@tauri-apps/api/event";
+import type { HookEventPayload, ThreadActivityState } from "../../store/claudeHooksTypes";
 import "@xterm/xterm/css/xterm.css";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -353,6 +355,190 @@ function applyPtyActivityUpdate(
   state.updateTranscriptInfo(thread.id, next);
 }
 
+/**
+ * Returns true if the last non-empty line of the terminal's normal buffer
+ * ends with `?` — the heuristic for "Claude's most recent response is a
+ * question". Uses `.normal` (not `.active`) to avoid reading the alt-screen
+ * buffer of fullscreen TUIs like Claude. Scans up to 10 lines back from the
+ * cursor to find the most recent line with content.
+ */
+/** Detect Claude Code UI chrome lines that should be skipped during the
+ *  question-pattern scan: input prompt (`❯ ...`), thinking/status chrome
+ *  (`✻ Sautéed for 2s`, `✻ Baked for 1s`), and horizontal rules. */
+function isClaudeChromeLine(text: string): boolean {
+  const trimmed = text.trimStart();
+  if (trimmed.startsWith("❯") || trimmed.startsWith("✻")) return true;
+  // Horizontal rules: lines made entirely of box-drawing/separator chars
+  if (/^[─━—_=\-]+$/.test(trimmed)) return true;
+  return false;
+}
+
+/** Return whether a line "ends like a question" — the last meaningful
+ *  character (letter, digit, or sentence terminator) is `?`. Emojis,
+ *  whitespace, and other decoration are ignored. */
+function endsLikeQuestion(text: string): "question" | "statement" | "neither" {
+  const matches = text.match(/[A-Za-z0-9?.!]/g);
+  if (!matches || matches.length === 0) return "neither";
+  const last = matches[matches.length - 1];
+  if (last === "?") return "question";
+  if (last === "." || last === "!") return "statement";
+  return "neither";
+}
+
+function scanForQuestionPattern(terminal: Terminal): boolean {
+  const buf = terminal.buffer.normal;
+  const endY = buf.baseY + buf.cursorY;
+  const lookback = 30;
+  // Scan back through non-blank, non-chrome lines. The first one with a
+  // recognizable sentence terminator decides:
+  //   - last meaningful char is '?' → awaiting_input
+  //   - last meaningful char is '.' or '!' → idle
+  // Lines that are pure chrome (input prompt, status indicator, rule) get
+  // skipped, as do lines that don't end in any sentence punctuation
+  // (decorative footers, etc.).
+  for (let i = 0; i < lookback; i += 1) {
+    const line = buf.getLine(endY - i);
+    if (!line) continue;
+    const text = line.translateToString(true).trimEnd();
+    if (text.length === 0) continue;
+    if (isClaudeChromeLine(text)) continue;
+    const kind = endsLikeQuestion(text);
+    if (kind === "question") return true;
+    if (kind === "statement") return false;
+    // "neither" — keep scanning; this line is some other footer/decoration.
+  }
+  return false;
+}
+
+/**
+ * Run the post-Stop evaluation: scan the terminal buffer for a question
+ * pattern, resolve `activityState` into `awaiting_input` or `idle`. Called
+ * immediately after `Stop` (if PTY is already quiet) and on every subsequent
+ * `ptyActive → false` transition while the thread is in post-Stop mode.
+ *
+ * AskUserQuestion is now detected by `pre_tool_use` directly, so the
+ * arming/safety-net branches that used to live here are gone.
+ */
+function runPostStopEvaluation(thread: Thread, terminal: Terminal): void {
+  const state = useAppStore.getState();
+  const current = state.transcriptInfo[thread.id];
+  if (!current || !current.hookAuthoritative || current.lastHookEvent !== "turn_end") return;
+
+  const hasQuestion = scanForQuestionPattern(terminal);
+  const nextState: ThreadActivityState = hasQuestion ? "awaiting_input" : "idle";
+
+  // Debug: dump the buffer the scan looked at so we can inspect outside the app.
+  // Best-effort; failures are swallowed.
+  dumpBufferSnapshot(thread, terminal, hasQuestion, nextState).catch(() => { /* ignore */ });
+
+  if (current.activityState !== nextState) {
+    state.updateTranscriptInfo(thread.id, { ...current, activityState: nextState });
+  }
+}
+
+/**
+ * Write the last ~30 lines of the terminal's normal buffer to
+ * `~/.codezilla/snapshots/<thread-id>.txt` along with the scan result, for
+ * inspecting what `scanForQuestionPattern` saw at the moment of evaluation.
+ * Overwrites the file on each call. Tied to post-Stop evaluation so writes
+ * are infrequent (per turn, not per output chunk).
+ */
+async function dumpBufferSnapshot(
+  thread: Thread,
+  terminal: Terminal,
+  hasQuestion: boolean,
+  resolvedState: ThreadActivityState,
+): Promise<void> {
+  const buf = terminal.buffer.normal;
+  const endY = buf.baseY + buf.cursorY;
+  const lookback = 30;
+  const lines: string[] = [];
+  for (let i = lookback - 1; i >= 0; i -= 1) {
+    const line = buf.getLine(endY - i);
+    if (!line) continue;
+    lines.push(line.translateToString(true).trimEnd());
+  }
+  const header = [
+    `=== Snapshot at ${new Date().toISOString()} ===`,
+    `thread_id: ${thread.id}`,
+    `session_id: ${thread.sessionId ?? "n/a"}`,
+    `thread_type: ${thread.type}`,
+    `scan_has_question: ${hasQuestion}`,
+    `resolved_state: ${resolvedState}`,
+    `cursor: baseY=${buf.baseY} cursorY=${buf.cursorY} (endY=${endY})`,
+    `--- buffer (last ${lookback} lines, oldest first) ---`,
+  ].join("\n");
+  const content = header + "\n" + lines.join("\n") + "\n--- end ---\n";
+  await invoke("write_buffer_snapshot", { threadId: thread.id, content });
+}
+
+/**
+ * Re-run the post-Stop evaluation on `ptyActive → false` while the thread
+ * is in post-Stop mode (waiting for output to settle after `turn_end`).
+ * The `active=true` case is a no-op now — Claude's follow-up output landing
+ * doesn't change the resolution rule.
+ */
+function applyHookPostStopTransition(
+  thread: Thread,
+  terminal: Terminal,
+  ptyActive: boolean,
+): void {
+  if (ptyActive) return;
+  const state = useAppStore.getState();
+  const current = state.transcriptInfo[thread.id];
+  if (!current || !current.hookAuthoritative || current.lastHookEvent !== "turn_end") return;
+  runPostStopEvaluation(thread, terminal);
+}
+
+/**
+ * Reducer for Claude Code hook events. Drives the three-state machine:
+ * - UserPromptSubmit (turn_start) → working
+ * - PreToolUse(AskUserQuestion) → awaiting_input (picker is being shown)
+ * - PreToolUse (other tools) → no state change
+ * - PostToolUse (any tool) → working (resolves awaiting_input naturally)
+ * - Stop (turn_end) → post-Stop evaluation runs immediately if PTY is quiet,
+ *   else waits for the next ptyActive→false
+ */
+function applyHookEvent(
+  thread: Thread,
+  payload: HookEventPayload,
+  terminal: Terminal | null,
+): void {
+  const state = useAppStore.getState();
+  const current = state.transcriptInfo[thread.id] ?? createInitialTranscriptInfo();
+  const tsMs = payload.ts * 1000;
+  const base = {
+    ...current,
+    hookAuthoritative: true,
+    lastHookEvent: payload.event,
+    lastHookEventTs: tsMs,
+  };
+
+  if (payload.event === "turn_start") {
+    state.updateTranscriptInfo(thread.id, { ...base, activityState: "working" });
+    return;
+  }
+  if (payload.event === "pre_tool_use") {
+    if (payload.tool_name === "AskUserQuestion") {
+      state.updateTranscriptInfo(thread.id, { ...base, activityState: "awaiting_input" });
+    } else {
+      state.updateTranscriptInfo(thread.id, base);
+    }
+    return;
+  }
+  if (payload.event === "tool_use") {
+    state.updateTranscriptInfo(thread.id, { ...base, activityState: "working" });
+    return;
+  }
+  if (payload.event === "turn_end") {
+    state.updateTranscriptInfo(thread.id, base);
+    if (!current.ptyActive && terminal) {
+      runPostStopEvaluation(thread, terminal);
+    }
+    return;
+  }
+}
+
 function applyPtyCommandStart(thread: Thread): void {
   const state = useAppStore.getState();
   const now = Date.now();
@@ -452,6 +638,30 @@ export default function TerminalMultiplexer() {
       resumeThread(activeThread.id);
     }
   }, [activeThread, resumeThread]);
+
+  // Listen for Claude Code hook events emitted from the Rust event-log watcher.
+  // Each event is a single hook firing (turn_start | tool_use | turn_end) for
+  // one thread. Dispatch into the per-thread reducer; pass the terminal so the
+  // Stop handler can run an immediate post-Stop evaluation when PTY is quiet.
+  useEffect(() => {
+    let cancelled = false;
+    const unlistenPromise = listen<HookEventPayload>("claude-hook-event", (event) => {
+      if (cancelled) return;
+      const payload = event.payload;
+      const state = useAppStore.getState();
+      // The Rust hook scripts emit the PTY session_id under the `thread_id`
+      // field (env var CODEZILLA_THREAD_ID is set to session_id at spawn).
+      // Match by sessionId so we find the right Codezilla thread.
+      const thread = state.threads.find((t) => t.sessionId === payload.thread_id);
+      if (!thread) return;
+      const instance = thread.sessionId ? instancesRef.current.get(thread.sessionId) : null;
+      applyHookEvent(thread, payload, instance?.terminal ?? null);
+    });
+    return () => {
+      cancelled = true;
+      unlistenPromise.then((fn) => fn()).catch(() => { /* ignore */ });
+    };
+  }, []);
 
   const handleResize = useCallback(() => {
     if (resizeTimeoutRef.current) clearTimeout(resizeTimeoutRef.current);
@@ -1400,6 +1610,7 @@ function createTerminalInstance(
           && !waitingForCommandStart
         ) {
           applyPtyActivityUpdate(thread, true, "output", "output_activity_marker_fallback");
+          applyHookPostStopTransition(thread, terminal, true);
           return;
         }
         if (
@@ -1412,6 +1623,7 @@ function createTerminalInstance(
           // recover runtime status in that case.
           progressActive = false;
           applyPtyActivityUpdate(thread, false, "output", "output_idle_progress_stale_recovery");
+          applyHookPostStopTransition(thread, terminal, false);
         }
         return;
       }
@@ -1441,6 +1653,7 @@ function createTerminalInstance(
           ? (active ? "progress_activity" : "progress_idle")
           : (active ? "output_activity" : "output_idle"),
       );
+      applyHookPostStopTransition(thread, terminal, active);
     } else if (event.event === "CommandStart") {
       markerEventsObserved = true;
       waitingForCommandStart = false;
@@ -1456,6 +1669,7 @@ function createTerminalInstance(
         applyPtyCommandEnd(thread, code ?? null);
       } else {
         applyPtyActivityUpdate(thread, false, "output", "output_idle");
+        applyHookPostStopTransition(thread, terminal, false);
       }
       clearActivity(thread.id);
       touchTimestamps.delete(thread.id);

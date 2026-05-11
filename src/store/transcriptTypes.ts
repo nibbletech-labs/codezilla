@@ -1,3 +1,5 @@
+import type { HookEventName, ThreadActivityState } from "./claudeHooksTypes";
+
 export type TranscriptStatus =
   | "working"  // PTY reports active
   | "idle"     // PTY reports inactive for a running thread
@@ -53,6 +55,14 @@ export interface TranscriptInfo extends ParserDiagnostics {
   codexBindingState: "pending" | "bound" | "failed" | null;
   codexBindingAttempts: number;
   codexBindingError: string | null;
+  // Hook-based activity detection. Set lazily once the first hook event is
+  // observed for this thread; never reset while the thread lives. When
+  // `hookAuthoritative` is true, `activityState` is the source of truth and
+  // legacy heuristics are bypassed.
+  hookAuthoritative: boolean;
+  activityState: ThreadActivityState | null;
+  lastHookEvent: HookEventName | null;
+  lastHookEventTs: number | null;
 }
 
 export function createInitialTranscriptInfo(): TranscriptInfo {
@@ -93,5 +103,9 @@ export function createInitialTranscriptInfo(): TranscriptInfo {
     codexBindingState: null,
     codexBindingAttempts: 0,
     codexBindingError: null,
+    hookAuthoritative: false,
+    activityState: null,
+    lastHookEvent: null,
+    lastHookEventTs: null,
   };
 }
