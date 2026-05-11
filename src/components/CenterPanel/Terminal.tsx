@@ -499,6 +499,15 @@ function applyHookPostStopTransition(
  * - Stop (turn_end) → post-Stop evaluation runs immediately if PTY is quiet,
  *   else waits for the next ptyActive→false
  */
+/** Meta tools whose use shouldn't update lastToolName/lastToolTarget — they're
+ *  control-flow signals (plan mode, user questions) rather than user-visible
+ *  actions. Mirrors the same predicate in transcriptStateMachine.ts. */
+function isMetaTool(name: string | undefined): boolean {
+  return name === "AskUserQuestion"
+    || name === "EnterPlanMode"
+    || name === "ExitPlanMode";
+}
+
 function applyHookEvent(
   thread: Thread,
   payload: HookEventPayload,
@@ -515,15 +524,23 @@ function applyHookEvent(
   };
 
   if (payload.event === "turn_start") {
-    // Mirror legacy: clear plan progress that has fully completed so the
-    // counter doesn't linger across turns. Don't reset inPlanMode — a user
-    // prompt mid-plan-mode (e.g. answering an AskUserQuestion inside plan
-    // mode) shouldn't drop the indicator.
+    // Fresh user prompt — drop the previous turn's tool detail so the subtitle
+    // doesn't claim "Reading X" while the new turn is still spinning up.
+    // Also clear plan progress that has fully completed so the counter
+    // doesn't linger across turns. Don't reset inPlanMode — a user prompt
+    // mid-plan-mode (e.g. answering an AskUserQuestion inside plan mode)
+    // shouldn't drop the indicator.
     let planProgress = current.planProgress;
     if (planProgress && planProgress.done >= planProgress.total) {
       planProgress = null;
     }
-    state.updateTranscriptInfo(thread.id, { ...base, activityState: "working", planProgress });
+    state.updateTranscriptInfo(thread.id, {
+      ...base,
+      activityState: "working",
+      planProgress,
+      lastToolName: null,
+      lastToolTarget: null,
+    });
     return;
   }
   if (payload.event === "pre_tool_use") {
@@ -532,8 +549,17 @@ function applyHookEvent(
     // EnterPlanMode hook was missed).
     const isPlanModeTool = payload.tool_name === "EnterPlanMode"
       || payload.tool_name === "ExitPlanMode";
+    // Update lastToolName/lastToolTarget for "real" tools so the subtitle
+    // can switch to "Reading package.json" the moment the tool starts.
+    const toolFields = !isMetaTool(payload.tool_name) && payload.tool_name
+      ? {
+          lastToolName: payload.tool_name,
+          lastToolTarget: payload.tool_target ?? null,
+        }
+      : {};
     const next = {
       ...base,
+      ...toolFields,
       ...(isPlanModeTool ? { inPlanMode: true } : {}),
     };
     if (payload.tool_name === "AskUserQuestion" || payload.tool_name === "ExitPlanMode") {
@@ -546,6 +572,15 @@ function applyHookEvent(
   if (payload.event === "tool_use") {
     let planProgress = current.planProgress;
     let inPlanMode = current.inPlanMode;
+    // Fallback: if the pre-hook didn't fire (or fired without tool_target),
+    // still pick up the detail from the post-hook so the subtitle remains
+    // accurate for the brief period until the next tool starts.
+    const toolFields = !isMetaTool(payload.tool_name) && payload.tool_name
+      ? {
+          lastToolName: payload.tool_name,
+          lastToolTarget: payload.tool_target ?? current.lastToolTarget,
+        }
+      : {};
 
     if (payload.tool_name === "ExitPlanMode") {
       // PostToolUse for ExitPlanMode means the user has answered the
@@ -575,6 +610,7 @@ function applyHookEvent(
 
     state.updateTranscriptInfo(thread.id, {
       ...base,
+      ...toolFields,
       activityState: "working",
       planProgress,
       inPlanMode,

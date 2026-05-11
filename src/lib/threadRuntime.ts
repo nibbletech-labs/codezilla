@@ -1,6 +1,7 @@
 import type { Thread } from "../store/types";
 import type { TranscriptInfo } from "../store/transcriptTypes";
 import type { ThreadActivityState } from "../store/claudeHooksTypes";
+import { formatToolSubtitle } from "./toolDisplay.ts";
 
 const RECENT_TRANSCRIPT_ACTIVITY_MS = 8_000;
 
@@ -150,12 +151,19 @@ export function getThreadSubtitle(
 
   // Hook-based activity detection takes precedence for running threads once
   // a hook event has been observed. Map the three-state model to a subtitle,
-  // then decorate with plan-mode prefix and plan-progress suffix.
+  // swap in per-tool detail when working on a known tool, then decorate with
+  // plan-mode prefix and plan-progress suffix.
   if (info.hookAuthoritative && info.activityState) {
     let base = "";
-    if (info.activityState === "working") base = "Working";
-    else if (info.activityState === "awaiting_input") base = "Awaiting input";
-    else base = "Idle";
+    if (info.activityState === "working") {
+      base = info.lastToolName
+        ? formatToolSubtitle(info.lastToolName, info.lastToolTarget)
+        : "Working";
+    } else if (info.activityState === "awaiting_input") {
+      base = "Awaiting input";
+    } else {
+      base = "Idle";
+    }
 
     if (info.planProgress && info.planProgress.total > 0) {
       // Show the in-progress item (1-indexed), not the done count.

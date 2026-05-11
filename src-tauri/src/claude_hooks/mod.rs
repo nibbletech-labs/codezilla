@@ -357,6 +357,10 @@ pub fn start_event_log_watcher(app_handle: AppHandle) {
                     .and_then(|e| e.get("tool_name"))
                     .and_then(|v| v.as_str())
                     .map(String::from);
+                let tool_target = extra
+                    .and_then(|e| e.get("tool_target"))
+                    .and_then(|v| v.as_str())
+                    .map(String::from);
                 let task_status = extra
                     .and_then(|e| e.get("task_status"))
                     .and_then(|v| v.as_str())
@@ -375,6 +379,7 @@ pub fn start_event_log_watcher(app_handle: AppHandle) {
                     thread_id: thread_id.to_string(),
                     ts,
                     tool_name,
+                    tool_target,
                     task_status,
                     todos_total,
                     todos_done,

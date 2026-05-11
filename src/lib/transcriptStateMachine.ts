@@ -1,32 +1,7 @@
 import type { TranscriptInfo } from "../store/transcriptTypes";
 import type { ParsedTranscriptSignal, TranscriptEvent } from "./transcriptParser.ts";
 import { getTranscriptSignalDefinition } from "./transcriptSignals.ts";
-
-const TOOL_VERBS: Record<string, string> = {
-  // Claude tools
-  Edit: "Editing",
-  Write: "Writing",
-  Read: "Reading",
-  Bash: "Running",
-  Grep: "Searching",
-  Glob: "Searching",
-  WebSearch: "Searching",
-  WebFetch: "Fetching",
-  Task: "Delegating",
-  TodoWrite: "Updating plan",
-  TaskCreate: "Planning",
-  TaskUpdate: "Executing plan",
-  TaskList: "Checking plan",
-  TaskGet: "Checking task",
-  // Codex tools
-  exec_command: "Running",
-  read_file: "Reading",
-  write_file: "Writing",
-  list_dir: "Listing",
-  apply_diff: "Editing",
-  web_search: "Searching",
-  file_search: "Searching",
-};
+import { formatToolSubtitle } from "./toolDisplay.ts";
 
 function deriveToolTarget(name: string, input: Record<string, unknown>): string | null {
   switch (name) {
@@ -49,25 +24,9 @@ function truncate(s: string | null, max: number): string | null {
   return s.length > max ? s.slice(0, max) + "..." : s;
 }
 
-function shortPath(p: string | null): string | null {
-  if (!p) return null;
-  const parts = p.split("/");
-  return parts[parts.length - 1] ?? p;
-}
-
-function formatToolSubtitle(info: TranscriptInfo): string {
-  const name = info.lastToolName!;
-  const verb = TOOL_VERBS[name] ?? "Using " + name;
-  const useFullTarget = name === "Bash" || name === "exec_command";
-  const target = useFullTarget
-    ? info.lastToolTarget
-    : shortPath(info.lastToolTarget);
-  return target ? `${verb} ${target}` : verb;
-}
-
 function formatToolingSubtitle(info: TranscriptInfo): string {
   if (info.lastToolName) {
-    return formatToolSubtitle(info);
+    return formatToolSubtitle(info.lastToolName, info.lastToolTarget);
   }
   return "Using tools";
 }
@@ -118,7 +77,7 @@ export function deriveSubtitle(info: TranscriptInfo): string {
   if (info.semanticPhase === "responding") return appendPlanProgress("Thinking", info);
 
   if (info.lastToolName && info.pendingToolUseIds.size > 0) {
-    return appendPlanProgress(formatToolSubtitle(info), info);
+    return appendPlanProgress(formatToolSubtitle(info.lastToolName, info.lastToolTarget), info);
   }
 
   return appendPlanProgress("Working", info);
@@ -198,29 +157,35 @@ export function transcriptReducer(
       if (idleReason !== "waiting_for_approval" && idleReason !== "waiting_for_input") {
         idleReason = "none";
       }
-      if (event.name === "TodoWrite") {
-        const todos = event.input.todos;
-        if (Array.isArray(todos)) {
-          const total = todos.length;
-          const done = todos.filter(
-            (t: unknown) =>
-              typeof t === "object" && t !== null && (t as Record<string, unknown>).status === "completed",
-          ).length;
-          planProgress = { total, done };
+      // When hooks are authoritative for this thread, planProgress is
+      // maintained by applyHookEvent — skip the transcript-driven branches
+      // here to avoid double-counting every TaskCreate / TaskUpdate /
+      // TodoWrite.
+      if (!current.hookAuthoritative) {
+        if (event.name === "TodoWrite") {
+          const todos = event.input.todos;
+          if (Array.isArray(todos)) {
+            const total = todos.length;
+            const done = todos.filter(
+              (t: unknown) =>
+                typeof t === "object" && t !== null && (t as Record<string, unknown>).status === "completed",
+            ).length;
+            planProgress = { total, done };
+          }
         }
-      }
-      if (event.name === "TaskCreate") {
-        const prev = current.planProgress ?? { total: 0, done: 0 };
-        planProgress = { total: prev.total + 1, done: prev.done };
-      }
-      if (event.name === "TaskUpdate") {
-        const taskStatus = event.input.status;
-        if (taskStatus === "completed") {
+        if (event.name === "TaskCreate") {
           const prev = current.planProgress ?? { total: 0, done: 0 };
-          planProgress = { total: prev.total, done: prev.done + 1 };
-        } else if (taskStatus === "deleted") {
-          const prev = current.planProgress ?? { total: 0, done: 0 };
-          planProgress = { total: Math.max(0, prev.total - 1), done: prev.done };
+          planProgress = { total: prev.total + 1, done: prev.done };
+        }
+        if (event.name === "TaskUpdate") {
+          const taskStatus = event.input.status;
+          if (taskStatus === "completed") {
+            const prev = current.planProgress ?? { total: 0, done: 0 };
+            planProgress = { total: prev.total, done: prev.done + 1 };
+          } else if (taskStatus === "deleted") {
+            const prev = current.planProgress ?? { total: 0, done: 0 };
+            planProgress = { total: Math.max(0, prev.total - 1), done: prev.done };
+          }
         }
       }
       break;

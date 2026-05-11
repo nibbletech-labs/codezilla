@@ -11,6 +11,8 @@ export interface HookEventPayload {
   ts: number;
   /** Tool name for PostToolUse events; absent for other events */
   tool_name?: string;
+  /** Short user-facing target string for the tool (file path, command, pattern, subject). */
+  tool_target?: string;
   /** TaskUpdate's `tool_input.status` value (e.g. "completed", "in_progress", "deleted"). */
   task_status?: string;
   /** TodoWrite's `tool_input.todos.length`. */

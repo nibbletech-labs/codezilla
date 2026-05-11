@@ -11,6 +11,12 @@ pub struct HookEventPayload {
     pub ts: f64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_name: Option<String>,
+    /// Short user-facing target for the tool (file path, command, pattern,
+    /// subject) — drives the "Reading package.json" / "Running npm test"
+    /// subtitles. Absent for meta tools (AskUserQuestion, *PlanMode, etc.)
+    /// and for tools where we haven't defined an extraction yet.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_target: Option<String>,
     /// `tool_input.status` for TaskUpdate (e.g. "completed", "in_progress",
     /// "deleted"). Drives planProgress transitions in the frontend reducer.
     #[serde(skip_serializing_if = "Option::is_none")]
