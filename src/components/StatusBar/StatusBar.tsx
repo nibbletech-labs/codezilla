@@ -15,7 +15,10 @@ export default function StatusBar() {
     activeThreadId ? s.transcriptInfo[activeThreadId] ?? null : null,
   );
 
-  const subtitle = activeThread ? getThreadSubtitle(activeThread, info) : null;
+  const subtitleObj = activeThread ? getThreadSubtitle(activeThread, info) : null;
+  const subtitle = subtitleObj
+    ? `${subtitleObj.body}${subtitleObj.progress ? ` ${subtitleObj.progress}` : ""}`
+    : null;
   const costUsd = info?.costUsd ?? null;
   const { status, version: updateVersion, progress, downloadAndInstall, dismiss, restart } =
     useUpdater();

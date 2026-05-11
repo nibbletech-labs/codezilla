@@ -10,7 +10,6 @@ import { FileLinkMenu } from "./components/FileLinkMenu";
 import { usePersistence } from "./hooks/usePersistence";
 import { useCloseProtection } from "./hooks/useCloseProtection";
 import { useProjectHealthCheck } from "./hooks/useProjectHealthCheck";
-import { useTranscriptWatcher } from "./hooks/useTranscriptWatcher";
 import { useTheme } from "./hooks/useTheme";
 import { useMenuEvents } from "./hooks/useMenuEvents";
 import { PANEL_WIDTHS, getLeftPanelWidth } from "./lib/constants";
@@ -24,7 +23,6 @@ function App() {
   usePersistence();
   useCloseProtection();
   useProjectHealthCheck();
-  useTranscriptWatcher();
   useTheme();
   useMenuEvents();
 

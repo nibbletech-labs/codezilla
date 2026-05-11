@@ -3,8 +3,6 @@ import type { TranscriptInfo } from "../store/transcriptTypes";
 import type { ThreadActivityState } from "../store/claudeHooksTypes";
 import { formatToolSubtitle } from "./toolDisplay.ts";
 
-const RECENT_TRANSCRIPT_ACTIVITY_MS = 8_000;
-
 function deriveLifecycleSubtitle(thread: Thread, ptyActive = false): string {
   if (thread.state === "running") {
     return ptyActive ? "Working" : "Idle";
@@ -16,99 +14,30 @@ function deriveLifecycleSubtitle(thread: Thread, ptyActive = false): string {
   return "";
 }
 
-function isKnownRuntimeStatus(status: string): boolean {
-  return status === "working" || status === "idle" || status === "exited";
-}
-
-function looksLikeStarting(subtitle: string): boolean {
-  return subtitle.trim().toLowerCase().startsWith("starting");
-}
-
-function isSemanticActive(info: TranscriptInfo): boolean {
-  return info.semanticPhase === "thinking"
-    || info.semanticPhase === "tooling"
-    || info.semanticPhase === "responding";
-}
-
-function hasRecentTranscriptHeartbeat(info: TranscriptInfo, now: number): boolean {
-  const lastTranscriptActivity = Math.max(
-    info.lastLineTime ?? 0,
-    info.lastParsedTime ?? 0,
-  );
-  return lastTranscriptActivity > 0 && (now - lastTranscriptActivity) <= RECENT_TRANSCRIPT_ACTIVITY_MS;
-}
-
-function isDoneState(info: TranscriptInfo): boolean {
-  return info.status === "idle"
-    && info.semanticPhase === "waiting"
-    && info.idleReason === "none"
-    && !info.lastError
-    && info.pendingToolUseIds.size === 0;
-}
-
-function isLikelyStaleDoneWhileStreaming(
-  thread: Thread,
-  info: TranscriptInfo,
-  now: number,
-): boolean {
-  if (thread.type === "shell") return false;
-  if (info.semanticPhase !== "waiting") return false;
-  if (info.idleReason !== "none" || info.lastError || info.pendingToolUseIds.size > 0) return false;
-  if (!hasRecentTranscriptHeartbeat(info, now)) return false;
-
-  const lastLineTime = info.lastLineTime ?? 0;
-  const lastParsedTime = info.lastParsedTime ?? 0;
-  // If unparsed transcript lines are still arriving after the last parsed
-  // completion signal, treat "Idle · Done" as stale until parsing catches up.
-  return lastLineTime > lastParsedTime;
-}
-
-function legacyIsThreadLikelyWorking(
+/**
+ * Dumb PTY-only "is working" check, used when no hook events have fired yet
+ * (e.g. the thread's PTY pre-dates Phase 2's env-var injection, or Codex's
+ * hook bundle hasn't shipped yet). Once a hook fires for the thread, the
+ * hook-authoritative path in `threadActivityState` takes over.
+ */
+function ptyBasedIsWorking(
   thread: Thread,
   info: TranscriptInfo | null | undefined,
-  now = Date.now(),
 ): boolean {
   if (thread.state !== "running") return false;
   if (!info) return false;
-
-  if (thread.type === "shell") {
-    return info.ptyActive || info.status === "working";
-  }
-
-  const waitingForUser = info.idleReason === "waiting_for_input"
-    || info.idleReason === "waiting_for_approval";
-  if (waitingForUser || info.lastError || isDoneState(info)) {
-    return isLikelyStaleDoneWhileStreaming(thread, info, now);
-  }
-
-  // While a thread is replaying its transcript history on resume, suppress
-  // semantic-phase signals — the state machine re-runs old events and will
-  // temporarily show "thinking"/"tooling" until the replay reaches the
-  // completion event. Only PTY activity is authoritative at this point.
-  const semanticSignalsReady = !thread.resuming;
-
-  if (info.status === "working" || info.ptyActive
-    || (semanticSignalsReady && (isSemanticActive(info) || info.pendingToolUseIds.size > 0))
-  ) {
-    return true;
-  }
-
-  return hasRecentTranscriptHeartbeat(info, now)
-    && info.semanticPhase !== "waiting"
-    && info.idleReason === "none";
+  return info.ptyActive === true;
 }
 
 /**
  * Three-state activity derivation. When hook-based detection is engaged for a
  * thread (`info.hookAuthoritative === true`), the reducer-maintained
- * `info.activityState` is the source of truth — legacy heuristics are
- * bypassed. Otherwise we fall back to the legacy two-state working/idle
- * detection, mapping it onto the three-state model.
+ * `info.activityState` is the source of truth. Otherwise we fall back to the
+ * dumb PTY-only check, mapping it onto the three-state model.
  */
 export function threadActivityState(
   thread: Thread,
   info: TranscriptInfo | null | undefined,
-  now = Date.now(),
 ): ThreadActivityState {
   if (thread.state !== "running") return "idle";
   if (!info) return "idle";
@@ -117,42 +46,49 @@ export function threadActivityState(
     return info.activityState;
   }
 
-  return legacyIsThreadLikelyWorking(thread, info, now) ? "working" : "idle";
+  return ptyBasedIsWorking(thread, info) ? "working" : "idle";
 }
 
 /**
  * Backwards-compatible boolean wrapper. Most existing callers only need a
- * working/not-working answer — they continue working unchanged.
+ * working/not-working answer.
  */
 export function isThreadLikelyWorking(
   thread: Thread,
   info: TranscriptInfo | null | undefined,
-  now = Date.now(),
 ): boolean {
-  return threadActivityState(thread, info, now) === "working";
+  return threadActivityState(thread, info) === "working";
 }
+
+export interface ThreadSubtitle {
+  body: string;
+  progress: string | null;
+}
+
+const plain = (body: string): ThreadSubtitle => ({ body, progress: null });
 
 export function getThreadSubtitle(
   thread: Thread,
   info: TranscriptInfo | null | undefined,
-): string {
-  // Shell threads are PTY-only; transcript semantics do not apply.
+): ThreadSubtitle {
+  // Shell threads are PTY-only; transcript semantics never applied.
   if (thread.type === "shell") {
-    return deriveLifecycleSubtitle(thread, info?.ptyActive ?? false);
+    return plain(deriveLifecycleSubtitle(thread, info?.ptyActive ?? false));
   }
 
   if (!info) {
-    return deriveLifecycleSubtitle(thread);
+    return plain(deriveLifecycleSubtitle(thread));
   }
 
   if (thread.state !== "running") {
-    return deriveLifecycleSubtitle(thread, info.ptyActive);
+    return plain(deriveLifecycleSubtitle(thread, info.ptyActive));
   }
 
-  // Hook-based activity detection takes precedence for running threads once
-  // a hook event has been observed. Map the three-state model to a subtitle,
-  // swap in per-tool detail when working on a known tool, then decorate with
-  // plan-mode prefix and plan-progress suffix.
+  // Hook-based activity detection takes precedence once a hook event has been
+  // observed. Map the three-state model to a subtitle, swap in per-tool detail
+  // when working on a known tool, then decorate with plan-mode prefix and
+  // surface plan-progress as a separate field so the sidebar can keep it
+  // visible while ellipsifying the body.
   if (info.hookAuthoritative && info.activityState) {
     let base = "";
     if (info.activityState === "working") {
@@ -165,81 +101,18 @@ export function getThreadSubtitle(
       base = "Idle";
     }
 
+    let progress: string | null = null;
     if (info.planProgress && info.planProgress.total > 0) {
       // Show the in-progress item (1-indexed), not the done count.
       const display = Math.min(info.planProgress.done + 1, info.planProgress.total);
-      base = `${base} (${display}/${info.planProgress.total})`;
+      progress = `(${display}/${info.planProgress.total})`;
     }
     if (info.inPlanMode) base = `Plan mode · ${base}`;
-    return base;
+    return { body: base, progress };
   }
 
-  const now = Date.now();
-  const lifecycle = deriveLifecycleSubtitle(thread, info.ptyActive);
-  const subtitle = info.subtitle?.trim() ?? "";
-
-  if (info.ptyActive && info.status !== "working") {
-    if (
-      !subtitle
-      || subtitle === "Idle"
-      || subtitle.startsWith("Idle ·")
-      || looksLikeStarting(subtitle)
-    ) {
-      return "Working";
-    }
-    return subtitle;
-  }
-
-  if (thread.type === "codex" && info.status === "idle" && (subtitle === "" || subtitle === "Idle")) {
-    // Only surface binding status when the thread has been genuinely idle for a while.
-    // Codex marker events (CommandEnd → CommandStart) create brief idle gaps between
-    // tool calls, so we must not show these messages during active-but-between-commands gaps.
-    const genuinelyIdle = !info.ptyLastTransitionAt || now - info.ptyLastTransitionAt > 8_000;
-    if (genuinelyIdle) {
-      if (info.codexBindingState === "pending" && (info.codexBindingAttempts ?? 0) > 45) {
-        return "Connecting transcript";
-      }
-      if (info.codexBindingState === "failed") {
-        return "Transcript unavailable";
-      }
-    }
-  }
-
-  if (!isKnownRuntimeStatus(info.status) || looksLikeStarting(subtitle)) {
-    return lifecycle;
-  }
-
-  if (info.status === "working") {
-    if (subtitle && subtitle !== "Idle" && !subtitle.startsWith("Idle ·")) {
-      return subtitle;
-    }
-    return "Working";
-  }
-
-  if (info.status === "idle") {
-    if (isThreadLikelyWorking(thread, info)) {
-      if (
-        !subtitle
-        || subtitle === "Idle"
-        || subtitle.startsWith("Idle ·")
-        || looksLikeStarting(subtitle)
-      ) {
-        return "Working";
-      }
-    }
-
-    if (subtitle && subtitle !== "Idle") {
-      return subtitle;
-    }
-    return "Idle";
-  }
-
-  if (info.parserHealth === "degraded" && !info.ptyActive) {
-    return "Idle";
-  }
-
-  if ((!subtitle || subtitle === "Idle") && isThreadLikelyWorking(thread, info)) {
-    return "Working";
-  }
-  return subtitle || lifecycle;
+  // Hook-less thread (pre-hook PTY, or before the first hook event for this
+  // thread). Dumb fallback from PTY activity. Once hooks fire, the hook-
+  // authoritative path above takes over.
+  return plain(deriveLifecycleSubtitle(thread, info.ptyActive));
 }

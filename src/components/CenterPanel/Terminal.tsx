@@ -44,7 +44,6 @@ import { createCommitHashLinkProviderForTerminal } from "../../lib/commitHashLin
 import { createInitialTranscriptInfo } from "../../store/transcriptTypes";
 import type { RuntimeStateSource } from "../../store/transcriptTypes";
 import { deriveCoreRuntimeStatus } from "../../lib/threadActivityCore.ts";
-import { deriveSubtitle } from "../../lib/transcriptStateMachine.ts";
 import { listen } from "@tauri-apps/api/event";
 import type { HookEventPayload, ThreadActivityState } from "../../store/claudeHooksTypes";
 import "@xterm/xterm/css/xterm.css";
@@ -283,28 +282,21 @@ function applyResolvedCoreStatus(
 
   const resolved = {
     ...next,
-    previousStatus: current.status,
     status: nextStatus,
   };
-  resolved.subtitle = deriveSubtitle(resolved);
 
   if (nextStatus === "working") {
-    // PTY is active — tool is executing (was approved or auto-approved).
-    // Clear speculative idle reasons and badges set from transcript hints.
-    // Resize redraws are already suppressed via suppressOutputActivity,
-    // so this won't misfire during real approval waits.
+    // PTY went active — clear any "done" badge from the previous turn.
     return {
       ...resolved,
-      idleReason: "none",
       badge: null,
       badgeSince: null,
     };
   }
 
-  // Badge assignment for idle transitions is handled by the transcript
-  // watcher (useTranscriptWatcher), which has proper confirmation delays
-  // and transcript-driven idle reason detection. Setting badges here
-  // would race with the watcher and cause flash-on/flash-off artifacts.
+  // Idle-side badging is driven by applyHookEvent (turn_end → "done",
+  // pre_tool_use(AskUserQuestion|ExitPlanMode) → activityState=awaiting_input
+  // which ThreadItem maps to "needs_input"). Nothing to set here.
   return resolved;
 }
 
@@ -431,8 +423,18 @@ function runPostStopEvaluation(thread: Thread, terminal: Terminal): void {
   // Best-effort; failures are swallowed.
   dumpBufferSnapshot(thread, terminal, hasQuestion, nextState).catch(() => { /* ignore */ });
 
-  if (current.activityState !== nextState) {
-    state.updateTranscriptInfo(thread.id, { ...current, activityState: nextState });
+  // Resolve activity state and surface the "done" badge on a clean turn end.
+  // awaiting_input stays badge-less here — ThreadItem maps activityState
+  // directly to needs_input.
+  const patch: Partial<typeof current> = { activityState: nextState };
+  if (nextState === "idle"
+    && current.badge !== "done"
+    && current.badgeDismissedAt == null) {
+    patch.badge = "done";
+    patch.badgeSince = Date.now();
+  }
+  if (current.activityState !== nextState || patch.badge != null) {
+    state.updateTranscriptInfo(thread.id, { ...current, ...patch });
   }
 }
 
@@ -501,7 +503,7 @@ function applyHookPostStopTransition(
  */
 /** Meta tools whose use shouldn't update lastToolName/lastToolTarget — they're
  *  control-flow signals (plan mode, user questions) rather than user-visible
- *  actions. Mirrors the same predicate in transcriptStateMachine.ts. */
+ *  actions. */
 function isMetaTool(name: string | undefined): boolean {
   return name === "AskUserQuestion"
     || name === "EnterPlanMode"
@@ -526,10 +528,10 @@ function applyHookEvent(
   if (payload.event === "turn_start") {
     // Fresh user prompt — drop the previous turn's tool detail so the subtitle
     // doesn't claim "Reading X" while the new turn is still spinning up.
-    // Also clear plan progress that has fully completed so the counter
-    // doesn't linger across turns. Don't reset inPlanMode — a user prompt
-    // mid-plan-mode (e.g. answering an AskUserQuestion inside plan mode)
-    // shouldn't drop the indicator.
+    // Clear plan progress that has fully completed so the counter doesn't
+    // linger across turns. Clear any stale "done" badge from the prior turn.
+    // Don't reset inPlanMode — a user prompt mid-plan-mode (e.g. answering an
+    // AskUserQuestion inside plan mode) shouldn't drop the indicator.
     let planProgress = current.planProgress;
     if (planProgress && planProgress.done >= planProgress.total) {
       planProgress = null;
@@ -540,6 +542,8 @@ function applyHookEvent(
       planProgress,
       lastToolName: null,
       lastToolTarget: null,
+      badge: current.badge === "done" ? null : current.badge,
+      badgeSince: current.badge === "done" ? null : current.badgeSince,
     });
     return;
   }
@@ -1496,7 +1500,6 @@ function createTerminalInstance(
   let waitingForCommandStart = false;
   let progressActive = false;
   let lastProgressEventAt = 0;
-  let lastProgressActiveAt = 0;
   let lastOutputAt = 0;
   let lastCtrlCAt = 0;
   let inputEchoSuppressUntil = 0;
@@ -1615,13 +1618,12 @@ function createTerminalInstance(
         const now = Date.now();
         const lastTouch = touchTimestamps.get(thread.id) ?? 0;
         if (now - lastTouch >= TOUCH_DEBOUNCE_MS) {
+          // For Claude/Codex threads, suppress touch if PTY is quiet — the
+          // output we just saw is likely housekeeping (prompt redraws, cursor
+          // blinks) rather than real activity. Shell threads always touch.
           const info = useAppStore.getState().transcriptInfo[thread.id];
           const threadIdle = info != null
             && thread.type !== "shell"
-            && info.semanticPhase === "waiting"
-            && info.idleReason === "none"
-            && !info.lastError
-            && info.pendingToolUseIds.size === 0
             && !info.ptyActive;
           if (!threadIdle) {
             touchTimestamps.set(thread.id, now);
@@ -1644,32 +1646,25 @@ function createTerminalInstance(
       const outputSuppressed = now <= inputEchoSuppressUntil
         || isOutputActivitySuppressed(thread.id);
 
-      // When the transcript has already confirmed the turn is done (result event
-      // fired, semanticPhase === "waiting"), don't suppress the idle signal even
-      // if the star hint is still active. The spinner cleanup can leave the hint
-      // live for up to 12 s, which would otherwise delay the "Done" badge by the
-      // full stale-PTY-recovery window (5 s) on top of that.
-      // Guard: only treat the transcript as "confirmed done" if no progress-active
-      // marker has arrived since the transcript last moved to "waiting". A new
-      // progress-active after the transcript's last event means a new turn has
-      // already started at the PTY level — the "waiting" state is stale and the
-      // activity hint should win.
-      const transcriptInfo = !active && thread.type !== "shell"
-        ? useAppStore.getState().transcriptInfo[thread.id]
-        : null;
-      const transcriptConfirmedDone = transcriptInfo != null
-        && transcriptInfo.semanticPhase === "waiting"
-        && transcriptInfo.idleReason === "none"
-        && transcriptInfo.lastError == null
-        && transcriptInfo.pendingToolUseIds.size === 0
-        && lastProgressActiveAt <= (transcriptInfo.lastParsedTime ?? 0);
+      // The hook system's `turn_end` is the authoritative quiet signal — if
+      // it's fired and the activity state has settled to idle/awaiting_input,
+      // the spinner-hint heuristic should not keep the thread "active". For
+      // hook-less threads we have no such signal, so the interrupt-fallback
+      // still applies.
+      const hookConfirmedDone = !active
+        && thread.type !== "shell"
+        && (() => {
+          const info = useAppStore.getState().transcriptInfo[thread.id];
+          return info?.hookAuthoritative === true
+            && info.lastHookEvent === "turn_end"
+            && info.activityState !== "working";
+        })();
       const userCancelled = now - lastCtrlCAt < 5_000;
-      const effectiveInterruptFallback = interruptFallbackActive && !transcriptConfirmedDone && !userCancelled;
+      const effectiveInterruptFallback = interruptFallbackActive && !hookConfirmedDone && !userCancelled;
 
       if (fromProgress) {
         progressActive = active;
         lastProgressEventAt = now;
-        if (active) lastProgressActiveAt = now;
       }
 
       // When the star animation or activity hint is still visible, don't let

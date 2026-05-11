@@ -7,110 +7,61 @@ export type TranscriptStatus =
 
 export type ThreadBadge = "done" | "needs_input" | "needs_approval" | "error" | null;
 export type RuntimeStateSource = "unknown" | "transcript" | "pty" | "mixed";
-export type ParserHealth = "unknown" | "healthy" | "degraded";
 export type PtyLifecycleSource = "unknown" | "output" | "marker";
-export type SignalConfidence = "high" | "medium" | "low";
-export type SemanticPhase = "unknown" | "initial" | "thinking" | "tooling" | "responding" | "waiting";
-export type SemanticSignalGroup = "unknown" | "turn" | "thinking" | "tooling" | "response" | "lifecycle";
-export type IdleReason = "none" | "waiting_for_input" | "waiting_for_approval";
 
-export interface ParserDiagnostics {
-  parsedLineCount: number;
-  unparsedLineCount: number;
-  lastLineTime: number | null;
-  lastParsedTime: number | null;
-  parserHealth: ParserHealth;
-  ignoredLineCount: number;
-}
-
-export interface TranscriptInfo extends ParserDiagnostics {
+export interface TranscriptInfo {
   status: TranscriptStatus;
-  previousStatus: TranscriptStatus | null;
   badge: ThreadBadge;
   badgeSince: number | null;
   badgeDismissedAt: number | null;
-  subtitle: string;
   costUsd: number | null;
-  transcriptPath: string | null;
-  // Internal state machine tracking
-  pendingToolUseIds: Set<string>;
-  lastToolName: string | null;
-  lastToolTarget: string | null;
-  lastProgressLabel: string | null;
   lastEventTime: number;
   source: RuntimeStateSource;
-  semanticPhase: SemanticPhase;
-  semanticSignalGroup: SemanticSignalGroup;
-  semanticSignalKey: string | null;
-  semanticSignalPattern: string | null;
-  semanticSignalDescription: string | null;
-  lastError: { message: string; time: number } | null;
-  planProgress: { total: number; done: number } | null;
-  idleReason: IdleReason;
-  signalConfidence: SignalConfidence | null;
+  // Tool detail derived from the most recent hook tool event (pre or post).
+  // Cleared on turn_start so the next turn starts with a clean subtitle.
+  lastToolName: string | null;
+  lastToolTarget: string | null;
+  // PTY lifecycle — set by Terminal.tsx from Tauri PTY events.
   ptyActive: boolean;
   ptyLifecycleSource: PtyLifecycleSource;
   ptyLastTransitionReason: string | null;
   ptyLastTransitionAt: number | null;
-  codexBindingState: "pending" | "bound" | "failed" | null;
-  codexBindingAttempts: number;
-  codexBindingError: string | null;
   // Hook-based activity detection. Set lazily once the first hook event is
   // observed for this thread; never reset while the thread lives. When
   // `hookAuthoritative` is true, `activityState` is the source of truth and
-  // legacy heuristics are bypassed.
+  // the dumb PTY-only fallback is bypassed.
   hookAuthoritative: boolean;
   activityState: ThreadActivityState | null;
   lastHookEvent: HookEventName | null;
   lastHookEventTs: number | null;
   // Plan-mode flag: true between EnterPlanMode (or ExitPlanMode picker showing)
-  // and the PostToolUse for ExitPlanMode. v1 trades a brief wrong window if
-  // the user rejects the ExitPlanMode confirmation — acceptable for now.
+  // and the PostToolUse for ExitPlanMode.
   inPlanMode: boolean;
+  // Plan progress: maintained by applyHookEvent from TaskCreate / TaskUpdate /
+  // TodoWrite events.
+  planProgress: { total: number; done: number } | null;
 }
 
 export function createInitialTranscriptInfo(): TranscriptInfo {
   return {
     status: "idle",
-    previousStatus: null,
     badge: null,
     badgeSince: null,
     badgeDismissedAt: null,
-    subtitle: "Idle",
     costUsd: null,
-    transcriptPath: null,
-    pendingToolUseIds: new Set(),
     lastToolName: null,
     lastToolTarget: null,
-    lastProgressLabel: null,
     lastEventTime: Date.now(),
-    parsedLineCount: 0,
-    unparsedLineCount: 0,
-    lastLineTime: null,
-    lastParsedTime: null,
-    parserHealth: "unknown",
     source: "unknown",
-    semanticPhase: "initial",
-    semanticSignalGroup: "unknown",
-    semanticSignalKey: null,
-    semanticSignalPattern: null,
-    semanticSignalDescription: null,
-    lastError: null,
-    planProgress: null,
-    idleReason: "none",
-    signalConfidence: null,
-    ignoredLineCount: 0,
     ptyActive: false,
     ptyLifecycleSource: "unknown",
     ptyLastTransitionReason: null,
     ptyLastTransitionAt: null,
-    codexBindingState: null,
-    codexBindingAttempts: 0,
-    codexBindingError: null,
     hookAuthoritative: false,
     activityState: null,
     lastHookEvent: null,
     lastHookEventTs: null,
     inPlanMode: false,
+    planProgress: null,
   };
 }

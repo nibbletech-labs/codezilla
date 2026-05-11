@@ -104,28 +104,19 @@ export default function ThreadItem({ threadId, isActive, ageTick, onSelect }: Th
 
   // Subscribe to transcript info for this thread
   const info = useAppStore((s) => s.transcriptInfo[threadId]);
-  const rawSubtitle = thread ? getThreadSubtitle(thread, info) : "";
+  const rawSubtitle = thread
+    ? getThreadSubtitle(thread, info)
+    : { body: "", progress: null as string | null };
   const badge: ThreadBadge = info?.badge ?? null;
-  const subtitleNeedsBadge: ThreadBadge = (
-    rawSubtitle.startsWith("Waiting for approval")
-      ? "needs_approval"
-      : rawSubtitle.startsWith("Waiting for input")
-        ? "needs_input"
-        : null
-  );
   // Derive the effective badge, but respect dismissal: if the user already
-  // clicked this thread (badgeDismissedAt is set), don't fall back to
-  // idleReason — the badge was intentionally cleared.
+  // clicked this thread (badgeDismissedAt is set), don't surface a fresh badge
+  // until the next state change.
   const badgeDismissed = info?.badgeDismissedAt != null;
   const effectiveBadge: ThreadBadge = (
     badge
     ?? (badgeDismissed
       ? null
-      : (info?.idleReason === "waiting_for_approval"
-        ? "needs_approval"
-        : info?.idleReason === "waiting_for_input"
-          ? "needs_input"
-          : subtitleNeedsBadge))
+      : (info?.activityState === "awaiting_input" ? "needs_input" : null))
   );
   const isWorking = thread ? isThreadLikelyWorking(thread, info) : false;
   // If we have a badge to show, prefer it over the working spinner or age
@@ -133,41 +124,13 @@ export default function ThreadItem({ threadId, isActive, ageTick, onSelect }: Th
 
   if (!thread) return null;
 
-  // Debounce "Waiting for ..." subtitles — in bypass-permission mode Claude
-  // emits approval-like tool_use events that are auto-approved instantly, so
-  // the waiting state flashes for a single frame.  Only show it if it persists
-  // for 500ms; otherwise keep showing the previous subtitle.
-  const [subtitle, setSubtitle] = useState(rawSubtitle);
-  const waitingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  useEffect(() => {
-    const isWaiting = rawSubtitle.startsWith("Waiting for");
-    if (isWaiting && !subtitle.startsWith("Waiting for")) {
-      waitingTimerRef.current = setTimeout(() => {
-        setSubtitle(rawSubtitle);
-        waitingTimerRef.current = null;
-      }, 500);
-    } else if (isWaiting && rawSubtitle !== subtitle) {
-      if (waitingTimerRef.current) {
-        clearTimeout(waitingTimerRef.current);
-        waitingTimerRef.current = null;
-      }
-      setSubtitle(rawSubtitle);
-    } else if (!isWaiting) {
-      if (waitingTimerRef.current) {
-        clearTimeout(waitingTimerRef.current);
-        waitingTimerRef.current = null;
-      }
-      setSubtitle(rawSubtitle);
-    }
-    return () => {
-      if (waitingTimerRef.current) clearTimeout(waitingTimerRef.current);
-    };
-  }, [rawSubtitle]);
-
   // Defensive fallback: never render a blank subtitle when a thread is active.
-  const displaySubtitle = subtitle.trim().length > 0
-    ? subtitle
-    : (isWorking ? "Working" : "Idle");
+  const displaySubtitle = {
+    body: rawSubtitle.body.trim().length > 0
+      ? rawSubtitle.body
+      : (isWorking ? "Working" : "Idle"),
+    progress: rawSubtitle.progress,
+  };
 
   // Enter edit mode when triggered from title bar dropdown
   useEffect(() => {
@@ -251,9 +214,12 @@ export default function ThreadItem({ threadId, isActive, ageTick, onSelect }: Th
               <ThreadIcon type={thread.type} />
               <span style={styles.name}>{thread.name}</span>
             </div>
-            {/* Bottom row: subtitle */}
+            {/* Bottom row: subtitle (body ellipsifies, plan-progress stays visible) */}
             <div style={styles.subtitleRow}>
-              <span style={styles.subtitle}>{displaySubtitle}</span>
+              <span style={styles.subtitleBody}>{displaySubtitle.body}</span>
+              {displaySubtitle.progress && (
+                <span style={styles.subtitleProgress}>{displaySubtitle.progress}</span>
+              )}
             </div>
           </div>
           <div style={styles.statusColumn}>
@@ -321,6 +287,7 @@ const styles = {
     display: "flex",
     alignItems: "center",
     height: "16px",
+    minWidth: 0,
   } as React.CSSProperties,
   statusColumn: {
     width: INDICATOR_SIZE,
@@ -330,13 +297,21 @@ const styles = {
     alignItems: "center",
     justifyContent: "center",
   } as React.CSSProperties,
-  subtitle: {
+  subtitleBody: {
     color: "var(--text-primary)",
     fontSize: "var(--font-size-sm)",
     overflow: "hidden",
     textOverflow: "ellipsis",
     whiteSpace: "nowrap" as const,
     flex: 1,
+    minWidth: 0,
+  } as React.CSSProperties,
+  subtitleProgress: {
+    color: "var(--text-primary)",
+    fontSize: "var(--font-size-sm)",
+    flexShrink: 0,
+    marginLeft: 4,
+    whiteSpace: "nowrap" as const,
   } as React.CSSProperties,
   age: {
     color: "var(--text-primary)",
