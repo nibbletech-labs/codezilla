@@ -112,6 +112,23 @@ fn ensure_installed_inner(app_handle: &AppHandle) -> Result<(), String> {
         return Ok(());
     }
 
+    // CLI-presence gate: if `claude` isn't on PATH and we don't already have a
+    // prior install, skip entirely — don't create `~/.claude/settings.json` on
+    // a machine that doesn't even have Claude. Prior install (VERSION file
+    // present) means the user installed Claude at some point; leave their
+    // existing entries alone in case the binary returns.
+    let has_prior_install = target_scripts_dir.join("VERSION").exists();
+    if !crate::cli_detect::claude_present() {
+        if has_prior_install {
+            info!(
+                "claude_hooks: claude CLI not detected but prior install exists — leaving config alone"
+            );
+        } else {
+            info!("claude_hooks: claude CLI not detected, skipping install");
+        }
+        return Ok(());
+    }
+
     let bundled_version = read_version_file(&bundled_hooks_dir)
         .ok_or_else(|| format!("bundled VERSION not found at {:?}", bundled_hooks_dir))?;
     let installed_version = read_version_file(&target_scripts_dir);
@@ -326,9 +343,10 @@ pub fn ensure_hooks_in_settings_json(scripts_dir: &Path) -> Result<(), String> {
 }
 
 /// Start a background thread that tails `~/.codezilla/events.jsonl` for new
-/// JSON lines and emits each parsed event as a Tauri `claude-hook-event` to
-/// the frontend. Best-effort; logs and exits the thread on unrecoverable
-/// errors (the app keeps running, activity detection falls back to legacy).
+/// JSON lines and emits each parsed event as a Tauri `hook-event` to the
+/// frontend. Both Claude and Codex bundles append to the same log; the
+/// `producer` field in each payload tells the frontend which CLI emitted it.
+/// Best-effort; logs and exits the thread on unrecoverable errors.
 pub fn start_event_log_watcher(app_handle: AppHandle) {
     let Some(log_path) = event_log_path() else {
         warn!("claude_hooks: HOME unset, watcher not started");
@@ -416,6 +434,13 @@ pub fn start_event_log_watcher(app_handle: AppHandle) {
                     continue;
                 };
                 let ts = parsed.get("ts").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                // Default to "claude" if missing so events from an older
+                // pre-producer bundle still route through the reducer.
+                let producer = parsed
+                    .get("producer")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("claude")
+                    .to_string();
                 let extra = parsed.get("extra");
                 let tool_name = extra
                     .and_then(|e| e.get("tool_name"))
@@ -442,6 +467,7 @@ pub fn start_event_log_watcher(app_handle: AppHandle) {
                     event: event_name.to_string(),
                     thread_id: thread_id.to_string(),
                     ts,
+                    producer,
                     tool_name,
                     tool_target,
                     task_status,
@@ -449,7 +475,7 @@ pub fn start_event_log_watcher(app_handle: AppHandle) {
                     todos_done,
                 };
 
-                if let Err(e) = app_handle.emit("claude-hook-event", &payload) {
+                if let Err(e) = app_handle.emit("hook-event", &payload) {
                     warn!("claude_hooks: emit failed: {}", e);
                 }
             }
@@ -559,19 +585,13 @@ pub fn set_claude_hooks_user_disabled(
     Ok(disabled)
 }
 
-/// Debug helper: write a snapshot of a thread's terminal buffer + scan
-/// metadata to `~/.codezilla/snapshots/<thread_id>.txt`. Called by the
-/// frontend after each post-Stop evaluation so we can inspect what
-/// `scanForQuestionPattern` looked at. Overwrites the file each call.
-///
-/// Gated behind `CODEZILLA_DEBUG_SNAPSHOTS=1` — production builds don't
-/// litter the disk with per-turn dumps. To enable for a debug session,
-/// launch with `CODEZILLA_DEBUG_SNAPSHOTS=1 npx tauri dev`.
+/// Write a snapshot of a thread's terminal buffer + scan metadata to
+/// `~/.codezilla/snapshots/<thread_id>.txt`. Called by the frontend after
+/// each post-Stop evaluation so we can inspect what `scanForQuestionPattern`
+/// looked at. Overwrites the file each call (one file per thread, capped at
+/// ~2KB), so disk impact is bounded — always-on rather than gated.
 #[tauri::command]
 pub fn write_buffer_snapshot(thread_id: String, content: String) -> Result<(), String> {
-    if std::env::var("CODEZILLA_DEBUG_SNAPSHOTS").as_deref() != Ok("1") {
-        return Ok(());
-    }
     // Sanity check: only allow UUID/identifier-ish characters in the file
     // name to prevent path traversal via crafted thread_id.
     if thread_id.is_empty()

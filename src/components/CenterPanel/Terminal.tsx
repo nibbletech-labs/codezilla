@@ -502,12 +502,13 @@ function applyHookPostStopTransition(
  *   else waits for the next ptyActive→false
  */
 /** Meta tools whose use shouldn't update lastToolName/lastToolTarget — they're
- *  control-flow signals (plan mode, user questions) rather than user-visible
- *  actions. */
+ *  control-flow signals (plan mode, user questions, Codex permission prompts)
+ *  rather than user-visible actions. */
 function isMetaTool(name: string | undefined): boolean {
   return name === "AskUserQuestion"
     || name === "EnterPlanMode"
-    || name === "ExitPlanMode";
+    || name === "ExitPlanMode"
+    || name === "PermissionRequest";
 }
 
 function applyHookEvent(
@@ -566,7 +567,11 @@ function applyHookEvent(
       ...toolFields,
       ...(isPlanModeTool ? { inPlanMode: true } : {}),
     };
-    if (payload.tool_name === "AskUserQuestion" || payload.tool_name === "ExitPlanMode") {
+    if (
+      payload.tool_name === "AskUserQuestion"
+      || payload.tool_name === "ExitPlanMode"
+      || payload.tool_name === "PermissionRequest"
+    ) {
       state.updateTranscriptInfo(thread.id, { ...next, activityState: "awaiting_input" });
     } else {
       state.updateTranscriptInfo(thread.id, next);
@@ -730,13 +735,15 @@ export default function TerminalMultiplexer() {
     }
   }, [activeThread, resumeThread]);
 
-  // Listen for Claude Code hook events emitted from the Rust event-log watcher.
-  // Each event is a single hook firing (turn_start | tool_use | turn_end) for
-  // one thread. Dispatch into the per-thread reducer; pass the terminal so the
-  // Stop handler can run an immediate post-Stop evaluation when PTY is quiet.
+  // Listen for hook events emitted from the Rust event-log watcher. Both
+  // Claude and Codex bundles append to the same `events.jsonl`, so this single
+  // listener routes both producers through the reducer. Each event is a hook
+  // firing (turn_start | pre_tool_use | tool_use | turn_end) for one thread.
+  // Dispatch into the per-thread reducer; pass the terminal so the Stop handler
+  // can run an immediate post-Stop evaluation when PTY is quiet.
   useEffect(() => {
     let cancelled = false;
-    const unlistenPromise = listen<HookEventPayload>("claude-hook-event", (event) => {
+    const unlistenPromise = listen<HookEventPayload>("hook-event", (event) => {
       if (cancelled) return;
       const payload = event.payload;
       const state = useAppStore.getState();

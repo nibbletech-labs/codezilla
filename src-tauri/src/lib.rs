@@ -1,4 +1,6 @@
 mod claude_hooks;
+mod cli_detect;
+mod codex_hooks;
 mod config;
 mod launchd;
 mod fs;
@@ -303,6 +305,9 @@ pub fn run() {
             info!("Codezilla starting up");
             skills::cleanup_temp_dirs();
             claude_hooks::ensure_claude_hooks_installed(&app.handle());
+            codex_hooks::ensure_codex_hooks_installed(&app.handle());
+            // Single watcher tails the shared events.jsonl — both producers
+            // route through the same `hook-event` Tauri event.
             claude_hooks::start_event_log_watcher(app.handle().clone());
             #[cfg(target_os = "macos")]
             {
@@ -586,7 +591,9 @@ pub fn run() {
             sync_codex_menu,
             claude_hooks::get_claude_hooks_user_disabled,
             claude_hooks::set_claude_hooks_user_disabled,
-            claude_hooks::write_buffer_snapshot
+            claude_hooks::write_buffer_snapshot,
+            codex_hooks::get_codex_hooks_user_disabled,
+            codex_hooks::set_codex_hooks_user_disabled
         ])
         .on_window_event(move |window, event| {
             match event {

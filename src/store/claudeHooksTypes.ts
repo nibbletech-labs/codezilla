@@ -1,14 +1,16 @@
 /**
- * Hook event payload emitted from the Rust side via the `claude-hook-event`
+ * Hook event payload emitted from the Rust side via the `hook-event`
  * Tauri event. Mirrored on the Rust side in `src-tauri/src/claude_hooks/types.rs`.
  */
 export interface HookEventPayload {
-  /** One of: "turn_start" | "tool_use" | "turn_end" */
+  /** One of: "turn_start" | "pre_tool_use" | "tool_use" | "turn_end" */
   event: HookEventName;
   /** Codezilla thread UUID (from CODEZILLA_THREAD_ID env var) */
   thread_id: string;
   /** Unix epoch seconds with fractional precision */
   ts: number;
+  /** Which CLI's hook bundle emitted this event ("claude" or "codex"). */
+  producer: HookEventProducer;
   /** Tool name for PostToolUse events; absent for other events */
   tool_name?: string;
   /** Short user-facing target string for the tool (file path, command, pattern, subject). */
@@ -22,6 +24,8 @@ export interface HookEventPayload {
 }
 
 export type HookEventName = "turn_start" | "pre_tool_use" | "tool_use" | "turn_end";
+
+export type HookEventProducer = "claude" | "codex";
 
 /**
  * Derived activity state used by the UI. Three discrete states the user sees:

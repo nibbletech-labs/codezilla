@@ -5,10 +5,14 @@ use serde::{Deserialize, Serialize};
 /// `src/store/claudeHooksTypes.ts`.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct HookEventPayload {
-    /// `"turn_start" | "tool_use" | "turn_end"`
+    /// `"turn_start" | "pre_tool_use" | "tool_use" | "turn_end"`
     pub event: String,
     pub thread_id: String,
     pub ts: f64,
+    /// `"claude" | "codex"` — which CLI's hook bundle emitted this event.
+    /// The frontend reducer is largely producer-agnostic but uses this to
+    /// branch on Codex-specific tool names (e.g. PermissionRequest).
+    pub producer: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_name: Option<String>,
     /// Short user-facing target for the tool (file path, command, pattern,

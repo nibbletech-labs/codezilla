@@ -56,6 +56,6 @@ if [ -n "$tool_name" ]; then
   extra="$extra"'}'
 fi
 
-printf '{"event":"pre_tool_use","thread_id":"%s","ts":%s,"producer":"codezilla","extra":%s}\n' \
+printf '{"event":"pre_tool_use","thread_id":"%s","ts":%s,"producer":"claude","extra":%s}\n' \
   "$CODEZILLA_THREAD_ID" "$ts" "$extra" \
   >> "$CODEZILLA_EVENT_LOG"

@@ -4,6 +4,6 @@ set -eu
 [ -z "${CODEZILLA_EVENT_LOG:-}" ] && exit 0
 
 ts=$(/bin/date +%s.%N)
-printf '{"event":"turn_start","thread_id":"%s","ts":%s,"producer":"codezilla","extra":{}}\n' \
+printf '{"event":"turn_start","thread_id":"%s","ts":%s,"producer":"claude","extra":{}}\n' \
   "$CODEZILLA_THREAD_ID" "$ts" \
   >> "$CODEZILLA_EVENT_LOG"

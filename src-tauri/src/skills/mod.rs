@@ -996,21 +996,7 @@ pub fn hash_file_in_temp(path: String) -> Result<String, String> {
 /// the app is launched from Finder / Dock rather than a shell.
 fn claude_command() -> Command {
     let mut cmd = Command::new("claude");
-    let home = std::env::var("HOME").unwrap_or_default();
-    let extra_paths = [
-        format!("{}/.local/bin", home),
-        format!("{}/.claude/local/bin", home),
-        "/usr/local/bin".to_string(),
-        "/opt/homebrew/bin".to_string(),
-    ];
-    let current_path = std::env::var("PATH").unwrap_or_default();
-    let new_path = extra_paths
-        .iter()
-        .chain(std::iter::once(&current_path))
-        .map(|s| s.as_str())
-        .collect::<Vec<_>>()
-        .join(":");
-    cmd.env("PATH", new_path);
+    cmd.env("PATH", crate::cli_detect::augmented_path());
     cmd
 }
 
