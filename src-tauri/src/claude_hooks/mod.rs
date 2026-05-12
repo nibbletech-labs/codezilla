@@ -19,6 +19,13 @@ const HOOK_SCRIPT_NAMES: &[&str] = &[
     "stop.sh",
 ];
 
+/// Cap for `~/.codezilla/events.jsonl` — when the file grows past this on
+/// app launch we rewrite it to keep only the most recent
+/// `EVENT_LOG_KEEP_LINES` entries. ~1MB / ~6000 events at the typical
+/// ~170 bytes per line.
+const EVENT_LOG_MAX_BYTES: u64 = 1_048_576;
+const EVENT_LOG_KEEP_LINES: usize = 6000;
+
 pub fn codezilla_dir() -> Option<PathBuf> {
     std::env::var("HOME").ok().map(|h| PathBuf::from(h).join(".codezilla"))
 }
@@ -90,6 +97,11 @@ fn ensure_installed_inner(app_handle: &AppHandle) -> Result<(), String> {
                 warn!("claude_hooks: could not create event log {:?}: {}", log_path, e);
             }
         }
+        // Cap the event log size on every launch. Runs before the watcher
+        // starts so the watcher's initial seek-to-EOF lands on the new size.
+        if let Err(e) = maybe_truncate_event_log(&log_path) {
+            warn!("claude_hooks: event log truncation failed: {}", e);
+        }
     }
 
     if is_user_disabled() {
@@ -119,6 +131,58 @@ fn ensure_installed_inner(app_handle: &AppHandle) -> Result<(), String> {
     // Always verify settings.json — cheap self-heal
     ensure_hooks_in_settings_json(&target_scripts_dir)?;
 
+    Ok(())
+}
+
+/// If the event log has grown past `EVENT_LOG_MAX_BYTES`, rewrite it with
+/// only the most recent `EVENT_LOG_KEEP_LINES` entries. Atomic via
+/// tmp+rename so a partial write can never corrupt the file. Called at app
+/// launch before the watcher starts.
+///
+/// Race window: a hook script could append to the original file between our
+/// read and our rename. Those appends are dropped (the rename swaps in the
+/// trimmed file). Acceptable for an activity log — worst case is a brief
+/// activity-state desync until the next hook event arrives.
+fn maybe_truncate_event_log(log_path: &Path) -> Result<(), String> {
+    let size = match fs::metadata(log_path) {
+        Ok(m) => m.len(),
+        // No file yet (or stat failed) — nothing to truncate.
+        Err(_) => return Ok(()),
+    };
+    if size <= EVENT_LOG_MAX_BYTES {
+        return Ok(());
+    }
+
+    let raw = fs::read_to_string(log_path)
+        .map_err(|e| format!("read {:?}: {}", log_path, e))?;
+    let lines: Vec<&str> = raw.lines().collect();
+    let original_line_count = lines.len();
+    let kept: &[&str] = if lines.len() > EVENT_LOG_KEEP_LINES {
+        &lines[lines.len() - EVENT_LOG_KEEP_LINES..]
+    } else {
+        &lines[..]
+    };
+    let mut new_contents = kept.join("\n");
+    if !new_contents.is_empty() {
+        new_contents.push('\n');
+    }
+
+    let tmp_path = log_path.with_extension("jsonl.codezilla.tmp");
+    {
+        let mut tmp = fs::File::create(&tmp_path)
+            .map_err(|e| format!("create tmp {:?}: {}", tmp_path, e))?;
+        tmp.write_all(new_contents.as_bytes())
+            .map_err(|e| format!("write tmp: {}", e))?;
+        tmp.sync_all().map_err(|e| format!("fsync tmp: {}", e))?;
+    }
+    fs::rename(&tmp_path, log_path)
+        .map_err(|e| format!("rename {:?} -> {:?}: {}", tmp_path, log_path, e))?;
+    info!(
+        "claude_hooks: trimmed event log from {} bytes / {} lines to {} lines",
+        size,
+        original_line_count,
+        kept.len()
+    );
     Ok(())
 }
 
@@ -499,8 +563,15 @@ pub fn set_claude_hooks_user_disabled(
 /// metadata to `~/.codezilla/snapshots/<thread_id>.txt`. Called by the
 /// frontend after each post-Stop evaluation so we can inspect what
 /// `scanForQuestionPattern` looked at. Overwrites the file each call.
+///
+/// Gated behind `CODEZILLA_DEBUG_SNAPSHOTS=1` — production builds don't
+/// litter the disk with per-turn dumps. To enable for a debug session,
+/// launch with `CODEZILLA_DEBUG_SNAPSHOTS=1 npx tauri dev`.
 #[tauri::command]
 pub fn write_buffer_snapshot(thread_id: String, content: String) -> Result<(), String> {
+    if std::env::var("CODEZILLA_DEBUG_SNAPSHOTS").as_deref() != Ok("1") {
+        return Ok(());
+    }
     // Sanity check: only allow UUID/identifier-ish characters in the file
     // name to prevent path traversal via crafted thread_id.
     if thread_id.is_empty()
