@@ -406,24 +406,44 @@ pub fn start_state_watcher(app_handle: AppHandle) {
     });
 }
 
-/// Resolve the `heed` binary to invoke. In a packaged build Tauri ships `heed`
-/// as a sidecar next to our executable (the target-triple suffix is stripped at
-/// bundle time → `heed`); in `tauri dev` there's no bundled sidecar, so fall
-/// back to `heed` on `PATH`. Checking the suffixed name too is belt-and-braces.
-pub(crate) fn heed_bin() -> std::ffi::OsString {
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            let candidates = [
-                "heed".to_string(),
-                format!("heed-{}-apple-darwin", std::env::consts::ARCH),
-            ];
-            for name in candidates {
-                let p = dir.join(name);
-                if p.exists() {
-                    return p.into_os_string();
-                }
-            }
+/// Stable, update-surviving location the heed binary is staged to: `~/.heed/bin/heed`.
+/// The launchd plist bakes in the binary's path, so it must NOT point inside the
+/// versioned `.app` bundle (that path moves on every Codezilla update and would
+/// strand the daemon). [`crate::cutover`] copies the bundled sidecar here on launch.
+pub(crate) fn stable_heed_path() -> Option<PathBuf> {
+    let home = std::env::var_os("HOME")?;
+    Some(PathBuf::from(home).join(".heed").join("bin").join("heed"))
+}
+
+/// The `heed` sidecar Tauri ships next to our executable, if present. The
+/// target-triple suffix is stripped at bundle time → `heed`; checking the
+/// suffixed name too is belt-and-braces. Absent under `tauri dev` (returns None).
+pub(crate) fn bundled_sidecar() -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    let dir = exe.parent()?;
+    for name in [
+        "heed".to_string(),
+        format!("heed-{}-apple-darwin", std::env::consts::ARCH),
+    ] {
+        let p = dir.join(name);
+        if p.exists() {
+            return Some(p);
         }
+    }
+    None
+}
+
+/// Resolve the `heed` binary to invoke. Prefer the staged stable copy (what the
+/// launchd service runs); then the bundled sidecar (packaged build, before
+/// staging has happened); then `heed` on `PATH` (`tauri dev`).
+pub(crate) fn heed_bin() -> std::ffi::OsString {
+    if let Some(stable) = stable_heed_path() {
+        if stable.exists() {
+            return stable.into_os_string();
+        }
+    }
+    if let Some(sidecar) = bundled_sidecar() {
+        return sidecar.into_os_string();
     }
     std::ffi::OsString::from("heed")
 }
