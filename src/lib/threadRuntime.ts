@@ -1,6 +1,6 @@
 import type { Thread } from "../store/types";
 import type { TranscriptInfo } from "../store/transcriptTypes";
-import type { ThreadActivityState } from "../store/claudeHooksTypes";
+import type { ThreadActivityState } from "../store/activityTypes";
 import { formatToolSubtitle } from "./toolDisplay.ts";
 
 function deriveLifecycleSubtitle(thread: Thread, ptyActive = false): string {

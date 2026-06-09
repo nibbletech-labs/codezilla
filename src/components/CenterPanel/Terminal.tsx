@@ -5,9 +5,10 @@ import { FitAddon } from "@xterm/addon-fit";
 import { WebglAddon } from "@xterm/addon-webgl";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { open as openUrl } from "@tauri-apps/plugin-shell";
-import { Channel, invoke } from "@tauri-apps/api/core";
+import { Channel } from "@tauri-apps/api/core";
 import {
   spawnPty,
+  registerHeedOwner,
   writePty,
   resizePty,
   killPty,
@@ -16,6 +17,7 @@ import {
   type PtyCommandEndData,
   type PtyOutputData,
   type PtyExitData,
+  type HeedThreadPayload,
 } from "../../lib/tauri";
 import {
   TERMINAL_CONFIG,
@@ -45,7 +47,7 @@ import { createInitialTranscriptInfo } from "../../store/transcriptTypes";
 import type { RuntimeStateSource } from "../../store/transcriptTypes";
 import { deriveCoreRuntimeStatus } from "../../lib/threadActivityCore.ts";
 import { listen } from "@tauri-apps/api/event";
-import type { HookEventPayload, ThreadActivityState } from "../../store/claudeHooksTypes";
+import type { ThreadActivityState } from "../../store/activityTypes";
 import "@xterm/xterm/css/xterm.css";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -294,9 +296,9 @@ function applyResolvedCoreStatus(
     };
   }
 
-  // Idle-side badging is driven by applyHookEvent (turn_end → "done",
-  // pre_tool_use(AskUserQuestion|ExitPlanMode) → activityState=awaiting_input
-  // which ThreadItem maps to "needs_input"). Nothing to set here.
+  // Idle-side badging is driven by the Heed state handler (working → idle turn
+  // boundary sets "done"; activityState=awaiting_input maps to "needs_input" in
+  // ThreadItem). Nothing to set here.
   return resolved;
 }
 
@@ -348,290 +350,62 @@ function applyPtyActivityUpdate(
 }
 
 /**
- * Returns true if the last non-empty line of the terminal's normal buffer
- * ends with `?` — the heuristic for "Claude's most recent response is a
- * question". Uses `.normal` (not `.active`) to avoid reading the alt-screen
- * buffer of fullscreen TUIs like Claude. Scans up to 10 lines back from the
- * cursor to find the most recent line with content.
+ * Apply a Heed state-file snapshot to per-thread transcript info. Heed runs the
+ * activity reducer in its daemon, so this is a thin mapper: copy the
+ * pre-computed fields onto `transcriptInfo` (matched to a Codezilla thread by
+ * Heed's `owner_thread_id` overlay) and let the existing `threadActivityState`
+ * / `getThreadSubtitle` derivations render them. The only synthesized field is
+ * the "done" badge on a working -> idle turn boundary, preserving the prior
+ * post-Stop behaviour now that the question scan lives inside Heed.
  */
-/** Detect Claude Code UI chrome lines that should be skipped during the
- *  question-pattern scan: input prompt (`❯ ...`), thinking/status chrome
- *  (`✻ Sautéed for 2s`, `✻ Baked for 1s`), and horizontal rules. */
-function isClaudeChromeLine(text: string): boolean {
-  const trimmed = text.trimStart();
-  if (trimmed.startsWith("❯") || trimmed.startsWith("✻")) return true;
-  // Horizontal rules: lines made entirely of box-drawing/separator chars
-  if (/^[─━—_=\-]+$/.test(trimmed)) return true;
-  return false;
-}
-
-/** Return whether a line "ends like a question" — the last meaningful
- *  character (letter, digit, or sentence terminator) is `?`. Emojis,
- *  whitespace, and other decoration are ignored. */
-function endsLikeQuestion(text: string): "question" | "statement" | "neither" {
-  const matches = text.match(/[A-Za-z0-9?.!]/g);
-  if (!matches || matches.length === 0) return "neither";
-  const last = matches[matches.length - 1];
-  if (last === "?") return "question";
-  if (last === "." || last === "!") return "statement";
-  return "neither";
-}
-
-function scanForQuestionPattern(terminal: Terminal): boolean {
-  const buf = terminal.buffer.normal;
-  const endY = buf.baseY + buf.cursorY;
-  const lookback = 30;
-  // Scan back through non-blank, non-chrome lines. The first one with a
-  // recognizable sentence terminator decides:
-  //   - last meaningful char is '?' → awaiting_input
-  //   - last meaningful char is '.' or '!' → idle
-  // Lines that are pure chrome (input prompt, status indicator, rule) get
-  // skipped, as do lines that don't end in any sentence punctuation
-  // (decorative footers, etc.).
-  for (let i = 0; i < lookback; i += 1) {
-    const line = buf.getLine(endY - i);
-    if (!line) continue;
-    const text = line.translateToString(true).trimEnd();
-    if (text.length === 0) continue;
-    if (isClaudeChromeLine(text)) continue;
-    const kind = endsLikeQuestion(text);
-    if (kind === "question") return true;
-    if (kind === "statement") return false;
-    // "neither" — keep scanning; this line is some other footer/decoration.
-  }
-  return false;
-}
-
-/**
- * Run the post-Stop evaluation: scan the terminal buffer for a question
- * pattern, resolve `activityState` into `awaiting_input` or `idle`. Called
- * immediately after `Stop` (if PTY is already quiet) and on every subsequent
- * `ptyActive → false` transition while the thread is in post-Stop mode.
- *
- * AskUserQuestion is now detected by `pre_tool_use` directly, so the
- * arming/safety-net branches that used to live here are gone.
- */
-function runPostStopEvaluation(thread: Thread, terminal: Terminal): void {
+function applyHeedThreadState(payloads: HeedThreadPayload[]): void {
   const state = useAppStore.getState();
-  const current = state.transcriptInfo[thread.id];
-  if (!current || !current.hookAuthoritative || current.lastHookEvent !== "turn_end") return;
+  for (const p of payloads) {
+    const thread = state.threads.find((t) => t.id === p.ownerThreadId);
+    if (!thread) continue;
+    const current =
+      state.transcriptInfo[thread.id] ?? createInitialTranscriptInfo();
+    const activityState = p.activityState as ThreadActivityState;
 
-  const hasQuestion = scanForQuestionPattern(terminal);
-  const nextState: ThreadActivityState = hasQuestion ? "awaiting_input" : "idle";
-
-  // Debug: dump the buffer the scan looked at so we can inspect outside the app.
-  // Best-effort; failures are swallowed.
-  dumpBufferSnapshot(thread, terminal, hasQuestion, nextState).catch(() => { /* ignore */ });
-
-  // Resolve activity state and surface the "done" badge on a clean turn end.
-  // awaiting_input stays badge-less here — ThreadItem maps activityState
-  // directly to needs_input.
-  const patch: Partial<typeof current> = { activityState: nextState };
-  if (nextState === "idle"
-    && current.badge !== "done"
-    && current.badgeDismissedAt == null) {
-    patch.badge = "done";
-    patch.badgeSince = Date.now();
-  }
-  if (current.activityState !== nextState || patch.badge != null) {
-    state.updateTranscriptInfo(thread.id, { ...current, ...patch });
-  }
-}
-
-/**
- * Write the last ~30 lines of the terminal's normal buffer to
- * `~/.codezilla/snapshots/<thread-id>.txt` along with the scan result, for
- * inspecting what `scanForQuestionPattern` saw at the moment of evaluation.
- * Overwrites the file on each call. Tied to post-Stop evaluation so writes
- * are infrequent (per turn, not per output chunk).
- */
-async function dumpBufferSnapshot(
-  thread: Thread,
-  terminal: Terminal,
-  hasQuestion: boolean,
-  resolvedState: ThreadActivityState,
-): Promise<void> {
-  const buf = terminal.buffer.normal;
-  const endY = buf.baseY + buf.cursorY;
-  const lookback = 30;
-  const lines: string[] = [];
-  for (let i = lookback - 1; i >= 0; i -= 1) {
-    const line = buf.getLine(endY - i);
-    if (!line) continue;
-    lines.push(line.translateToString(true).trimEnd());
-  }
-  const header = [
-    `=== Snapshot at ${new Date().toISOString()} ===`,
-    `thread_id: ${thread.id}`,
-    `session_id: ${thread.sessionId ?? "n/a"}`,
-    `thread_type: ${thread.type}`,
-    `scan_has_question: ${hasQuestion}`,
-    `resolved_state: ${resolvedState}`,
-    `cursor: baseY=${buf.baseY} cursorY=${buf.cursorY} (endY=${endY})`,
-    `--- buffer (last ${lookback} lines, oldest first) ---`,
-  ].join("\n");
-  const content = header + "\n" + lines.join("\n") + "\n--- end ---\n";
-  await invoke("write_buffer_snapshot", { threadId: thread.id, content });
-}
-
-/**
- * Re-run the post-Stop evaluation on `ptyActive → false` while the thread
- * is in post-Stop mode (waiting for output to settle after `turn_end`).
- * The `active=true` case is a no-op now — Claude's follow-up output landing
- * doesn't change the resolution rule.
- */
-function applyHookPostStopTransition(
-  thread: Thread,
-  terminal: Terminal,
-  ptyActive: boolean,
-): void {
-  if (ptyActive) return;
-  const state = useAppStore.getState();
-  const current = state.transcriptInfo[thread.id];
-  if (!current || !current.hookAuthoritative || current.lastHookEvent !== "turn_end") return;
-  runPostStopEvaluation(thread, terminal);
-}
-
-/**
- * Reducer for Claude Code hook events. Drives the three-state machine:
- * - UserPromptSubmit (turn_start) → working
- * - PreToolUse(AskUserQuestion) → awaiting_input (picker is being shown)
- * - PreToolUse (other tools) → no state change
- * - PostToolUse (any tool) → working (resolves awaiting_input naturally)
- * - Stop (turn_end) → post-Stop evaluation runs immediately if PTY is quiet,
- *   else waits for the next ptyActive→false
- */
-/** Meta tools whose use shouldn't update lastToolName/lastToolTarget — they're
- *  control-flow signals (plan mode, user questions, Codex permission prompts)
- *  rather than user-visible actions. */
-function isMetaTool(name: string | undefined): boolean {
-  return name === "AskUserQuestion"
-    || name === "EnterPlanMode"
-    || name === "ExitPlanMode"
-    || name === "PermissionRequest";
-}
-
-function applyHookEvent(
-  thread: Thread,
-  payload: HookEventPayload,
-  terminal: Terminal | null,
-): void {
-  const state = useAppStore.getState();
-  const current = state.transcriptInfo[thread.id] ?? createInitialTranscriptInfo();
-  const tsMs = payload.ts * 1000;
-  const base = {
-    ...current,
-    hookAuthoritative: true,
-    lastHookEvent: payload.event,
-    lastHookEventTs: tsMs,
-  };
-
-  if (payload.event === "turn_start") {
-    // Fresh user prompt — drop the previous turn's tool detail so the subtitle
-    // doesn't claim "Reading X" while the new turn is still spinning up.
-    // Clear plan progress that has fully completed so the counter doesn't
-    // linger across turns. Clear any stale "done" badge from the prior turn.
-    // Don't reset inPlanMode — a user prompt mid-plan-mode (e.g. answering an
-    // AskUserQuestion inside plan mode) shouldn't drop the indicator.
-    let planProgress = current.planProgress;
-    if (planProgress && planProgress.done >= planProgress.total) {
-      planProgress = null;
-    }
-    state.updateTranscriptInfo(thread.id, {
-      ...base,
-      activityState: "working",
-      planProgress,
-      lastToolName: null,
-      lastToolTarget: null,
-      badge: current.badge === "done" ? null : current.badge,
-      badgeSince: current.badge === "done" ? null : current.badgeSince,
-    });
-    return;
-  }
-  if (payload.event === "pre_tool_use") {
-    // Plan-mode arming: EnterPlanMode begins planning; ExitPlanMode shows
-    // the user-blocking confirmation picker (defensive re-arm in case the
-    // EnterPlanMode hook was missed).
-    const isPlanModeTool = payload.tool_name === "EnterPlanMode"
-      || payload.tool_name === "ExitPlanMode";
-    // Update lastToolName/lastToolTarget for "real" tools so the subtitle
-    // can switch to "Reading package.json" the moment the tool starts.
-    const toolFields = !isMetaTool(payload.tool_name) && payload.tool_name
-      ? {
-          lastToolName: payload.tool_name,
-          lastToolTarget: payload.tool_target ?? null,
-        }
-      : {};
-    const next = {
-      ...base,
-      ...toolFields,
-      ...(isPlanModeTool ? { inPlanMode: true } : {}),
-    };
+    // Surface the "done" badge on a clean working -> idle transition, and reset
+    // it when a new turn starts working again. The reset also clears
+    // `badgeDismissedAt` — it's set when the user clicks the thread to dismiss a
+    // badge and is never otherwise cleared, so without this a thread clicked
+    // once would never badge again on later turns. awaiting_input needs no badge
+    // here — ThreadItem maps that activityState to "needs_input".
+    let badge = current.badge;
+    let badgeSince = current.badgeSince;
+    let badgeDismissedAt = current.badgeDismissedAt;
     if (
-      payload.tool_name === "AskUserQuestion"
-      || payload.tool_name === "ExitPlanMode"
-      || payload.tool_name === "PermissionRequest"
+      activityState === "idle"
+      && current.activityState === "working"
+      && current.badge !== "done"
+      && current.badgeDismissedAt == null
     ) {
-      state.updateTranscriptInfo(thread.id, { ...next, activityState: "awaiting_input" });
-    } else {
-      state.updateTranscriptInfo(thread.id, next);
-    }
-    return;
-  }
-  if (payload.event === "tool_use") {
-    let planProgress = current.planProgress;
-    let inPlanMode = current.inPlanMode;
-    // Fallback: if the pre-hook didn't fire (or fired without tool_target),
-    // still pick up the detail from the post-hook so the subtitle remains
-    // accurate for the brief period until the next tool starts.
-    const toolFields = !isMetaTool(payload.tool_name) && payload.tool_name
-      ? {
-          lastToolName: payload.tool_name,
-          lastToolTarget: payload.tool_target ?? current.lastToolTarget,
-        }
-      : {};
-
-    if (payload.tool_name === "ExitPlanMode") {
-      // PostToolUse for ExitPlanMode means the user has answered the
-      // confirmation. v1 assumes approval (the common case); a brief wrong
-      // window on rejection is acceptable — the next pre_tool_use(ExitPlanMode)
-      // will re-arm the flag.
-      inPlanMode = false;
-    } else if (payload.tool_name === "TaskCreate") {
-      const prev = planProgress ?? { total: 0, done: 0 };
-      planProgress = { total: prev.total + 1, done: prev.done };
-    } else if (payload.tool_name === "TaskUpdate") {
-      if (payload.task_status === "completed") {
-        const prev = planProgress ?? { total: 0, done: 0 };
-        planProgress = { total: prev.total, done: prev.done + 1 };
-      } else if (payload.task_status === "deleted") {
-        const prev = planProgress ?? { total: 0, done: 0 };
-        planProgress = { total: Math.max(0, prev.total - 1), done: prev.done };
-      }
-    } else if (payload.tool_name === "TodoWrite") {
-      // TodoWrite replaces the entire plan view.
-      if (typeof payload.todos_total === "number") {
-        planProgress = payload.todos_total > 0
-          ? { total: payload.todos_total, done: payload.todos_done ?? 0 }
-          : null;
-      }
+      badge = "done";
+      badgeSince = Date.now();
+    } else if (
+      activityState === "working"
+      && (current.badge === "done" || current.badgeDismissedAt != null)
+    ) {
+      badge = null;
+      badgeSince = null;
+      badgeDismissedAt = null;
     }
 
     state.updateTranscriptInfo(thread.id, {
-      ...base,
-      ...toolFields,
-      activityState: "working",
-      planProgress,
-      inPlanMode,
+      ...current,
+      hookAuthoritative: true,
+      activityState,
+      lastToolName: p.lastToolName ?? null,
+      lastToolTarget: p.lastToolTarget ?? null,
+      inPlanMode: p.inPlanMode,
+      planProgress: p.planProgress ?? null,
+      lastEventTime: Date.now(),
+      badge,
+      badgeSince,
+      badgeDismissedAt,
     });
-    return;
-  }
-  if (payload.event === "turn_end") {
-    state.updateTranscriptInfo(thread.id, base);
-    if (!current.ptyActive && terminal) {
-      runPostStopEvaluation(thread, terminal);
-    }
-    return;
   }
 }
 
@@ -735,26 +509,19 @@ export default function TerminalMultiplexer() {
     }
   }, [activeThread, resumeThread]);
 
-  // Listen for hook events emitted from the Rust event-log watcher. Both
-  // Claude and Codex bundles append to the same `events.jsonl`, so this single
-  // listener routes both producers through the reducer. Each event is a hook
-  // firing (turn_start | pre_tool_use | tool_use | turn_end) for one thread.
-  // Dispatch into the per-thread reducer; pass the terminal so the Stop handler
-  // can run an immediate post-Stop evaluation when PTY is quiet.
+  // Subscribe to Heed's per-thread activity state. Heed's daemon runs the
+  // reducer and writes ~/.heed/state.json; the Rust heed_client watcher filters
+  // to Codezilla-owned threads and forwards each change here as a batch. Map
+  // every record onto transcriptInfo by Codezilla thread id (owner_thread_id).
   useEffect(() => {
     let cancelled = false;
-    const unlistenPromise = listen<HookEventPayload>("hook-event", (event) => {
-      if (cancelled) return;
-      const payload = event.payload;
-      const state = useAppStore.getState();
-      // The Rust hook scripts emit the PTY session_id under the `thread_id`
-      // field (env var CODEZILLA_THREAD_ID is set to session_id at spawn).
-      // Match by sessionId so we find the right Codezilla thread.
-      const thread = state.threads.find((t) => t.sessionId === payload.thread_id);
-      if (!thread) return;
-      const instance = thread.sessionId ? instancesRef.current.get(thread.sessionId) : null;
-      applyHookEvent(thread, payload, instance?.terminal ?? null);
-    });
+    const unlistenPromise = listen<HeedThreadPayload[]>(
+      "heed-thread-state",
+      (event) => {
+        if (cancelled) return;
+        applyHeedThreadState(event.payload);
+      },
+    );
     return () => {
       cancelled = true;
       unlistenPromise.then((fn) => fn()).catch(() => { /* ignore */ });
@@ -1653,17 +1420,15 @@ function createTerminalInstance(
       const outputSuppressed = now <= inputEchoSuppressUntil
         || isOutputActivitySuppressed(thread.id);
 
-      // The hook system's `turn_end` is the authoritative quiet signal — if
-      // it's fired and the activity state has settled to idle/awaiting_input,
-      // the spinner-hint heuristic should not keep the thread "active". For
-      // hook-less threads we have no such signal, so the interrupt-fallback
-      // still applies.
+      // Heed is the authoritative quiet signal — once it owns this thread and
+      // its activity has settled to idle/awaiting_input, the spinner-hint
+      // heuristic should not keep the thread "active". Threads Heed doesn't
+      // track yet have no such signal, so the interrupt-fallback still applies.
       const hookConfirmedDone = !active
         && thread.type !== "shell"
         && (() => {
           const info = useAppStore.getState().transcriptInfo[thread.id];
           return info?.hookAuthoritative === true
-            && info.lastHookEvent === "turn_end"
             && info.activityState !== "working";
         })();
       const userCancelled = now - lastCtrlCAt < 5_000;
@@ -1699,7 +1464,6 @@ function createTerminalInstance(
           && !waitingForCommandStart
         ) {
           applyPtyActivityUpdate(thread, true, "output", "output_activity_marker_fallback");
-          applyHookPostStopTransition(thread, terminal, true);
           return;
         }
         if (
@@ -1712,7 +1476,6 @@ function createTerminalInstance(
           // recover runtime status in that case.
           progressActive = false;
           applyPtyActivityUpdate(thread, false, "output", "output_idle_progress_stale_recovery");
-          applyHookPostStopTransition(thread, terminal, false);
         }
         return;
       }
@@ -1742,7 +1505,6 @@ function createTerminalInstance(
           ? (active ? "progress_activity" : "progress_idle")
           : (active ? "output_activity" : "output_idle"),
       );
-      applyHookPostStopTransition(thread, terminal, active);
     } else if (event.event === "CommandStart") {
       markerEventsObserved = true;
       waitingForCommandStart = false;
@@ -1758,7 +1520,6 @@ function createTerminalInstance(
         applyPtyCommandEnd(thread, code ?? null);
       } else {
         applyPtyActivityUpdate(thread, false, "output", "output_idle");
-        applyHookPostStopTransition(thread, terminal, false);
       }
       clearActivity(thread.id);
       touchTimestamps.delete(thread.id);
@@ -1816,6 +1577,24 @@ function createTerminalInstance(
   };
 
   spawnWithCommand(command);
+
+  // Tag this thread in Heed's ownership overlay so it shows up as ours in
+  // ~/.heed/state.json. Claude (and resumed Codex) carry a known native id and
+  // bind deterministically; a fresh Codex thread is correlated by the backend
+  // once Heed observes it. Best-effort — failures never block the spawn.
+  if (thread.type === "claude" && isValidUUID(thread.claudeSessionId)) {
+    registerHeedOwner("claude", thread.id, thread.claudeSessionId, cwd).catch(
+      console.error,
+    );
+  } else if (thread.type === "codex") {
+    const codexNativeId =
+      thread.resuming && isValidUUID(thread.codexThreadId)
+        ? thread.codexThreadId
+        : null;
+    registerHeedOwner("codex", thread.id, codexNativeId, cwd).catch(
+      console.error,
+    );
+  }
 
   // Wire input
   terminal.onData((data: string) => {

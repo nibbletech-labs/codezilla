@@ -57,6 +57,9 @@ jobs:
           security list-keychain -d user -s "$KEYCHAIN_PATH"
           security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
 
+      - name: Fetch heed sidecar
+        run: TARGET=aarch64-apple-darwin ./scripts/fetch-heed.sh
+
       - name: Build Tauri app
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}

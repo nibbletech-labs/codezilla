@@ -247,7 +247,10 @@ pub struct PtySession {
 
 impl PtySession {
     pub fn spawn(
-        session_id: &str,
+        // Retained for call-site symmetry with `PtyManager` (which keys sessions
+        // by this id); no longer read here since the legacy hook env injection
+        // was removed in the Heed cutover.
+        _session_id: &str,
         rows: u16,
         cols: u16,
         channel: Channel<PtyEvent>,
@@ -297,17 +300,6 @@ impl PtySession {
         // Set TERM for color support
         cmd.env("TERM", "xterm-256color");
         cmd.env("COLORTERM", "truecolor");
-
-        // Codezilla hook env vars — let the bundled Claude / Codex hook
-        // scripts identify events from this thread and write them to our event
-        // log. Set unconditionally so a user running `claude` or `codex`
-        // manually inside a Shell thread also participates in hook-based
-        // activity detection. The hook scripts gate on these vars and exit
-        // quickly if either is empty.
-        cmd.env("CODEZILLA_THREAD_ID", session_id);
-        if let Some(log_path) = crate::claude_hooks::event_log_path() {
-            cmd.env("CODEZILLA_EVENT_LOG", log_path);
-        }
 
         let child = pair.slave.spawn_command(cmd)?;
         drop(pair.slave);

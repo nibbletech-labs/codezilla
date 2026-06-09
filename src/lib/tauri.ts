@@ -50,6 +50,44 @@ export function spawnPty(
   });
 }
 
+/**
+ * One Codezilla-owned thread's activity, as forwarded by the Rust `heed_client`
+ * watcher from `~/.heed/state.json`. Heed pre-computes every field; the frontend
+ * maps it onto `TranscriptInfo` by `ownerThreadId` (the Codezilla thread id).
+ */
+export interface HeedThreadPayload {
+  ownerThreadId: string;
+  nativeThreadId: string;
+  cli: string;
+  activityState: string;
+  liveness: string;
+  lastToolName: string | null;
+  lastToolTarget: string | null;
+  inPlanMode: boolean;
+  planProgress: { total: number; done: number } | null;
+  subtitle: string | null;
+}
+
+/**
+ * Tag a freshly-spawned thread with Codezilla ownership in Heed's overlay so it
+ * surfaces in `~/.heed/state.json` as ours. Pass the native CLI id when known
+ * (Claude session id, or a resumed Codex id); for a fresh Codex thread pass
+ * `null` and the backend correlates it once Heed sees the thread.
+ */
+export function registerHeedOwner(
+  cli: "claude" | "codex",
+  ownerThreadId: string,
+  nativeThreadId: string | null,
+  cwd?: string,
+): Promise<void> {
+  return invoke("register_heed_owner", {
+    cli,
+    ownerThreadId,
+    nativeThreadId,
+    cwd,
+  });
+}
+
 export function writePty(sessionId: string, data: string): Promise<void> {
   return invoke("write_pty", { sessionId, data });
 }

@@ -1,10 +1,10 @@
-mod claude_hooks;
 mod cli_detect;
-mod codex_hooks;
 mod config;
+mod cutover;
 mod launchd;
 mod fs;
 mod git;
+mod heed_client;
 mod pty;
 mod skills;
 mod transcript;
@@ -123,6 +123,39 @@ async fn spawn_pty(
             e.to_string()
         })?;
     session_count.fetch_add(1, Ordering::Relaxed);
+    Ok(())
+}
+
+/// Register a freshly-spawned CLI thread with Heed's ownership overlay so it is
+/// tagged `owner_product = "codezilla"` in `~/.heed/state.json`.
+///
+/// Claude and resumed-Codex threads carry a caller-assigned native id, so they
+/// register deterministically and immediately. A fresh Codex thread has no id
+/// until Codex mints one, so it's queued for correlation by the state watcher
+/// (see `heed_client::enqueue_codex_owner`).
+#[tauri::command]
+async fn register_heed_owner(
+    cli: String,
+    owner_thread_id: String,
+    native_thread_id: Option<String>,
+    cwd: Option<String>,
+) -> Result<(), String> {
+    match native_thread_id {
+        Some(native) => {
+            heed_client::register_owner_detached(cli, native, owner_thread_id, cwd);
+        }
+        None if cli == "codex" => {
+            // No native id yet — correlate once the thread appears in state.json.
+            heed_client::enqueue_codex_owner(&owner_thread_id, cwd.as_deref().unwrap_or(""));
+        }
+        None => {
+            // Claude/shell without a native id: nothing to bind on.
+            info!(
+                "register_heed_owner: {} thread {} has no native id; skipping",
+                cli, owner_thread_id
+            );
+        }
+    }
     Ok(())
 }
 
@@ -304,11 +337,12 @@ pub fn run() {
         .setup(move |app| {
             info!("Codezilla starting up");
             skills::cleanup_temp_dirs();
-            claude_hooks::ensure_claude_hooks_installed(&app.handle());
-            codex_hooks::ensure_codex_hooks_installed(&app.handle());
-            // Single watcher tails the shared events.jsonl — both producers
-            // route through the same `hook-event` Tauri event.
-            claude_hooks::start_event_log_watcher(app.handle().clone());
+            // Activity detection now comes entirely from the standalone Heed
+            // daemon. Ensure Heed is installed and migrate off Codezilla's own
+            // embedded hooks (remove the legacy ~/.codezilla registrations that
+            // would otherwise double-fire), then consume Heed's state.json.
+            cutover::run();
+            heed_client::start_state_watcher(app.handle().clone());
             #[cfg(target_os = "macos")]
             {
                 use tauri::menu::{CheckMenuItem, Menu, MenuItemBuilder, PredefinedMenuItem, Submenu};
@@ -532,6 +566,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             spawn_pty,
+            register_heed_owner,
             write_pty,
             resize_pty,
             kill_pty,
@@ -588,12 +623,7 @@ pub fn run() {
             sync_remember_window_position,
             sync_appearance_menu,
             sync_accent_menu,
-            sync_codex_menu,
-            claude_hooks::get_claude_hooks_user_disabled,
-            claude_hooks::set_claude_hooks_user_disabled,
-            claude_hooks::write_buffer_snapshot,
-            codex_hooks::get_codex_hooks_user_disabled,
-            codex_hooks::set_codex_hooks_user_disabled
+            sync_codex_menu
         ])
         .on_window_event(move |window, event| {
             match event {

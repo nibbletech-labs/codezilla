@@ -1,4 +1,4 @@
-import type { HookEventName, ThreadActivityState } from "./claudeHooksTypes";
+import type { ThreadActivityState } from "./activityTypes";
 
 export type TranscriptStatus =
   | "working"  // PTY reports active
@@ -32,8 +32,6 @@ export interface TranscriptInfo {
   // the dumb PTY-only fallback is bypassed.
   hookAuthoritative: boolean;
   activityState: ThreadActivityState | null;
-  lastHookEvent: HookEventName | null;
-  lastHookEventTs: number | null;
   // Plan-mode flag: true between EnterPlanMode (or ExitPlanMode picker showing)
   // and the PostToolUse for ExitPlanMode.
   inPlanMode: boolean;
@@ -59,8 +57,6 @@ export function createInitialTranscriptInfo(): TranscriptInfo {
     ptyLastTransitionAt: null,
     hookAuthoritative: false,
     activityState: null,
-    lastHookEvent: null,
-    lastHookEventTs: null,
     inPlanMode: false,
     planProgress: null,
   };
