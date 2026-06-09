@@ -16,12 +16,20 @@ use notify::{Config, Event, EventKind, RecommendedWatcher, RecursiveMode, Watche
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{mpsc, Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter};
 
 /// Product tag Codezilla writes into Heed's `owners.json` for threads it spawns.
 pub const OWNER_PRODUCT: &str = "codezilla";
+
+/// `state.json` schema version this client knows how to map. Heed stamps every
+/// state file with `schema_version`; a value we don't recognise means the
+/// daemon's contract has moved on (a heed/Codezilla version skew), so rather
+/// than mismapping fields we degrade to emitting nothing until the versions
+/// line up again. See [`parse_state`].
+const SUPPORTED_SCHEMA_VERSION: u32 = 1;
 
 /// `~/.heed/state.json` — Heed's consumption contract.
 pub fn heed_state_path() -> Option<PathBuf> {
@@ -39,6 +47,10 @@ pub struct PlanProgress {
 
 #[derive(Debug, Deserialize)]
 struct HeedState {
+    /// Contract version Heed stamped the file with. Absent on (hypothetical)
+    /// pre-versioning state; treated as compatible when missing.
+    #[serde(default)]
+    schema_version: Option<u32>,
     #[serde(default)]
     threads: HashMap<String, HeedThread>,
 }
@@ -93,14 +105,41 @@ pub struct HeedThreadPayload {
     pub subtitle: Option<String>,
 }
 
-/// Parse state.json bytes; returns `None` (and logs) on malformed JSON.
+/// Parse state.json bytes; returns `None` on malformed JSON or an unsupported
+/// `schema_version`. Both failure modes log, but the schema-skew warning fires
+/// only once per distinct unsupported version (state.json is rewritten on every
+/// hook, so an unconditional warn would flood the log).
 fn parse_state(raw: &str) -> Option<HeedState> {
-    match serde_json::from_str(raw) {
-        Ok(s) => Some(s),
+    let state: HeedState = match serde_json::from_str(raw) {
+        Ok(s) => s,
         Err(e) => {
             warn!("heed_client: state.json parse failed: {}", e);
-            None
+            return None;
         }
+    };
+    // A present-but-unrecognised version means the daemon's contract has moved
+    // past what this build understands. Skip rather than mismap fields. A
+    // missing version is treated as compatible (lenient).
+    if let Some(v) = state.schema_version {
+        if v != SUPPORTED_SCHEMA_VERSION {
+            warn_schema_skew(v);
+            return None;
+        }
+    }
+    Some(state)
+}
+
+/// Warn about an unsupported `schema_version`, but only the first time we see
+/// each distinct version (0 is the never-warned sentinel; real versions are ≥1).
+fn warn_schema_skew(version: u32) {
+    static LAST_WARNED: AtomicU32 = AtomicU32::new(0);
+    if LAST_WARNED.swap(version, Ordering::Relaxed) != version {
+        warn!(
+            "heed_client: state.json schema_version {} unsupported (this build \
+             understands {}); skipping until versions align — update Codezilla \
+             or Heed",
+            version, SUPPORTED_SCHEMA_VERSION
+        );
     }
 }
 
@@ -494,6 +533,41 @@ mod tests {
     #[test]
     fn bad_json_yields_no_threads() {
         assert!(owned_payloads("not json").is_empty());
+    }
+
+    #[test]
+    fn unsupported_schema_version_yields_no_threads() {
+        // Same owned thread as SAMPLE, but a schema_version this build can't map.
+        let future = r#"{
+          "schema_version": 2,
+          "threads": {
+            "claude:owned": {
+              "thread_id": "n", "cli": "claude",
+              "activity": "working", "liveness": "live",
+              "first_seen": 1.0, "in_plan_mode": false,
+              "owner_product": "codezilla", "owner_thread_id": "cz-1"
+            }
+          }
+        }"#;
+        assert!(parse_state(future).is_none());
+        assert!(owned_payloads(future).is_empty());
+    }
+
+    #[test]
+    fn missing_schema_version_is_treated_as_compatible() {
+        // No schema_version key at all → lenient, still mapped.
+        let no_version = r#"{
+          "threads": {
+            "claude:owned": {
+              "thread_id": "n", "cli": "claude",
+              "activity": "working", "liveness": "live",
+              "first_seen": 1.0, "in_plan_mode": false,
+              "owner_product": "codezilla", "owner_thread_id": "cz-1"
+            }
+          }
+        }"#;
+        assert!(parse_state(no_version).is_some());
+        assert_eq!(owned_payloads(no_version).len(), 1);
     }
 
     fn codex_thread(thread_id: &str, cwd: &str, first_seen: f64, owned: bool) -> HeedThread {
