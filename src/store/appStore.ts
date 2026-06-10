@@ -2,9 +2,23 @@ import { create } from "zustand";
 import type { Project, Thread, ThreadType, PersistedThread, PreviewTarget, ProjectIcon, ScheduledJob, LaunchPreset, BetaFeatures } from "./types";
 import { THREAD_LABELS } from "./types";
 import type { TranscriptInfo } from "./transcriptTypes";
+import type { RepoHealth } from "../lib/tauri";
 import type { AccentColorId, AppearanceMode } from "../lib/themes";
 
 const MAX_EXITED_THREADS_PER_PROJECT = 50;
+
+// Repo health: a project is flagged after this many consecutive git polls
+// exceed the slow threshold. Streaks live outside the store — only the flag
+// itself needs to trigger renders.
+export const SLOW_GIT_MS = 400;
+const SLOW_GIT_STREAK = 3;
+const gitSlowStreaks = new Map<string, number>();
+
+export interface RepoHealthDismissal {
+  dismissedAt: number;
+  /** `git status` duration when dismissed — re-warn only if it gets much worse. */
+  statusDurationMs: number;
+}
 
 interface AppState {
   // Data
@@ -124,6 +138,15 @@ interface AppState {
   openBetaFeatures: () => void;
   closeBetaFeatures: () => void;
 
+  // Repo health (slow-git detection, keyed by project path)
+  repoHealthFlagged: Record<string, boolean>;
+  repoHealth: Record<string, RepoHealth>;
+  repoHealthDismissals: Record<string, RepoHealthDismissal>;
+  reportGitTiming: (projectPath: string, durationMs: number) => void;
+  setRepoHealth: (projectPath: string, health: RepoHealth) => void;
+  dismissRepoHealth: (projectPath: string) => void;
+  loadRepoHealthDismissals: (dismissals: Record<string, RepoHealthDismissal>) => void;
+
   // Persistence
   loadProjects: (projects: Project[]) => void;
   loadExpandedPaths: (expandedPaths: Record<string, string[]>) => void;
@@ -158,6 +181,9 @@ export const useAppStore = create<AppState>((set, get) => ({
   betaFeatures: { codexThreads: false, skillsPlugins: false, scheduledJobs: false },
   betaFeaturesOpen: false,
   autoDisabledJobIds: [],
+  repoHealthFlagged: {},
+  repoHealth: {},
+  repoHealthDismissals: {},
 
   openPreview: (path, line) => {
     set({ previewFile: { kind: "file", path, line } });
@@ -747,6 +773,42 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   openBetaFeatures: () => set({ betaFeaturesOpen: true }),
   closeBetaFeatures: () => set({ betaFeaturesOpen: false }),
+
+  reportGitTiming: (projectPath, durationMs) => {
+    if (durationMs < SLOW_GIT_MS) {
+      gitSlowStreaks.delete(projectPath);
+      return;
+    }
+    const streak = (gitSlowStreaks.get(projectPath) ?? 0) + 1;
+    gitSlowStreaks.set(projectPath, streak);
+    if (streak < SLOW_GIT_STREAK || get().repoHealthFlagged[projectPath]) return;
+    set((s) => ({
+      repoHealthFlagged: { ...s.repoHealthFlagged, [projectPath]: true },
+    }));
+  },
+
+  setRepoHealth: (projectPath, health) => {
+    set((s) => ({
+      repoHealth: { ...s.repoHealth, [projectPath]: health },
+    }));
+  },
+
+  dismissRepoHealth: (projectPath) => {
+    const health = get().repoHealth[projectPath];
+    set((s) => ({
+      repoHealthDismissals: {
+        ...s.repoHealthDismissals,
+        [projectPath]: {
+          dismissedAt: Date.now(),
+          statusDurationMs: health?.status_duration_ms ?? 0,
+        },
+      },
+    }));
+  },
+
+  loadRepoHealthDismissals: (dismissals) => {
+    set({ repoHealthDismissals: dismissals });
+  },
 
   loadProjects: (projects) => {
     set({

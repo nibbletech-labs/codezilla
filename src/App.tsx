@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import LeftPanel from "./components/LeftPanel/LeftPanel";
 import TerminalMultiplexer from "./components/CenterPanel/Terminal";
+import RepoHealthBanner from "./components/CenterPanel/RepoHealthBanner";
 import RightPanel from "./components/RightPanel/RightPanel";
 import TitleBar from "./components/TitleBar/TitleBar";
 import StatusBar from "./components/StatusBar/StatusBar";
@@ -115,10 +116,11 @@ function App() {
           </PanelErrorBoundary>
         </div>
       </div>
-      <div style={{ gridRow: "2", gridColumn: "2", overflow: "hidden" }}>
+      <div style={{ gridRow: "2", gridColumn: "2", overflow: "hidden", position: "relative" }}>
         <PanelErrorBoundary name="Terminal">
           <TerminalMultiplexer />
         </PanelErrorBoundary>
+        <RepoHealthBanner />
       </div>
       <div
         style={{

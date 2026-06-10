@@ -20,7 +20,9 @@ export function useGitDiffStat(projectPath: string | null): GitDiffStat {
     if (inFlight.current) return;
     inFlight.current = true;
     try {
+      const startedAt = performance.now();
       const [added, removed] = await getGitDiffStat(projectPath);
+      useAppStore.getState().reportGitTiming(projectPath, performance.now() - startedAt);
       setStat((prev) => (
         prev && prev.added === added && prev.removed === removed
           ? prev

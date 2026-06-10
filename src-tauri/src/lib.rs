@@ -589,6 +589,7 @@ pub fn run() {
             git::get_all_file_diff_stats,
             git::get_commit_info,
             git::get_commit_diff,
+            git::diagnose_repo_health,
             transcript::watch_transcript,
             transcript::unwatch_transcript,
             transcript::switch_transcript,

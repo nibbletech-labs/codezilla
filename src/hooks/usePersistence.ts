@@ -2,7 +2,7 @@ import { useEffect, useRef } from "react";
 import { load } from "@tauri-apps/plugin-store";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { invoke } from "@tauri-apps/api/core";
-import { useAppStore } from "../store/appStore";
+import { useAppStore, type RepoHealthDismissal } from "../store/appStore";
 import { useSkillsPluginsStore } from "../store/skillsPluginsStore";
 import type { Project, PersistedThread, ScheduledJob, LaunchPreset, BetaFeatures, ProjectIcon } from "../store/types";
 import type { SkillsPluginsRegistry } from "../store/skillsPluginsTypes";
@@ -25,6 +25,7 @@ const SKILLS_PLUGINS_KEY = "skillsPluginsRegistry";
 const LAUNCH_PRESETS_KEY = "launchPresets";
 const BETA_FEATURES_KEY = "betaFeatures";
 const AUTO_DISABLED_JOBS_KEY = "autoDisabledJobIds";
+const REPO_HEALTH_DISMISSALS_KEY = "repoHealthDismissals";
 
 let pendingSave: ReturnType<typeof setTimeout> | null = null;
 let lastStore: Awaited<ReturnType<typeof load>> | null = null;
@@ -67,6 +68,8 @@ export function usePersistence() {
   const loadBetaFeatures = useAppStore((s) => s.loadBetaFeatures);
   const autoDisabledJobIds = useAppStore((s) => s.autoDisabledJobIds);
   const loadAutoDisabledJobIds = useAppStore((s) => s.loadAutoDisabledJobIds);
+  const repoHealthDismissals = useAppStore((s) => s.repoHealthDismissals);
+  const loadRepoHealthDismissals = useAppStore((s) => s.loadRepoHealthDismissals);
   const skillsSources = useSkillsPluginsStore((s) => s.sources);
   const skillsInstallations = useSkillsPluginsStore((s) => s.installations);
   const loadProjects = useAppStore((s) => s.loadProjects);
@@ -126,6 +129,10 @@ export function usePersistence() {
         const savedAutoDisabledJobIds = await store.get<string[]>(AUTO_DISABLED_JOBS_KEY);
         if (savedAutoDisabledJobIds) {
           loadAutoDisabledJobIds(savedAutoDisabledJobIds);
+        }
+        const savedRepoHealthDismissals = await store.get<Record<string, RepoHealthDismissal>>(REPO_HEALTH_DISMISSALS_KEY);
+        if (savedRepoHealthDismissals) {
+          loadRepoHealthDismissals(savedRepoHealthDismissals);
         }
 
         // Always sync launchd agents with persisted jobs
@@ -218,6 +225,7 @@ export function usePersistence() {
         await store.set(LAUNCH_PRESETS_KEY, launchPresets);
         await store.set(BETA_FEATURES_KEY, betaFeatures);
         await store.set(AUTO_DISABLED_JOBS_KEY, autoDisabledJobIds);
+        await store.set(REPO_HEALTH_DISMISSALS_KEY, repoHealthDismissals);
         await store.set(SKILLS_PLUGINS_KEY, { sources: skillsSources, installations: skillsInstallations });
         // Guard threads against HMR store resets wiping persisted data
         if (threads.length > 0 || threadsLoaded.current) {
@@ -239,7 +247,7 @@ export function usePersistence() {
         console.error("Failed to persist state:", e);
       }
     })();
-  }, [projects, expandedPaths, threads, scheduledJobs, launchPresets, betaFeatures, autoDisabledJobIds, skillsSources, skillsInstallations, baseFontSize, accentColorId, appearanceMode, rememberWindowPosition, showLeftPanel, showRightPanel]);
+  }, [projects, expandedPaths, threads, scheduledJobs, launchPresets, betaFeatures, autoDisabledJobIds, repoHealthDismissals, skillsSources, skillsInstallations, baseFontSize, accentColorId, appearanceMode, rememberWindowPosition, showLeftPanel, showRightPanel]);
 
   // Sync Rust menu state (separate from persistence — these only need their specific dep)
   useEffect(() => {

@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { getGitStatus, type GitFileStatus } from "../lib/tauri";
+import { useAppStore } from "../store/appStore";
 
 const STATUS_PRIORITY: Record<GitFileStatus, number> = {
   Conflicted: 6,
@@ -38,7 +39,9 @@ export function useGitStatus(projectPath: string | null): GitStatusMap {
     if (inFlight.current) return;
     inFlight.current = true;
     try {
+      const startedAt = performance.now();
       const entries = await getGitStatus(projectPath);
+      useAppStore.getState().reportGitTiming(projectPath, performance.now() - startedAt);
       const map: GitStatusMap = new Map();
       const root = projectPath.endsWith("/") ? projectPath : projectPath + "/";
 

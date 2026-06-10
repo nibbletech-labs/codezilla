@@ -2,7 +2,10 @@ pub mod types;
 
 use log::error;
 use std::process::Command;
-use types::{CommitFileStat, CommitInfo, FileDiffStat, GitFileStatus, GitStatusEntry};
+use types::{
+    CommitFileStat, CommitInfo, FileDiffStat, GitFileStatus, GitStatusEntry, RepoHealth,
+    SuspiciousTrackedDir,
+};
 
 fn parse_status(xy: &str) -> Option<GitFileStatus> {
     let bytes = xy.as_bytes();
@@ -276,6 +279,92 @@ pub async fn get_all_file_diff_stats(path: String) -> Result<Vec<FileDiffStat>, 
     stats.sort_by(|a, b| (b.added + b.removed).cmp(&(a.added + a.removed)));
 
     Ok(stats)
+}
+
+/// Directory names that almost always mean build output or vendored
+/// dependencies. Tracked files under these make git slow and noisy; the repo
+/// health banner names them so the user can untrack them.
+const SUSPICIOUS_DIR_NAMES: [&str; 11] = [
+    "node_modules",
+    "DerivedData",
+    "build",
+    "dist",
+    "target",
+    "Pods",
+    ".next",
+    ".venv",
+    "__pycache__",
+    "coverage",
+    ".gradle",
+];
+
+/// Ignore tiny matches — a handful of files in a `build/` dir is plausibly
+/// intentional; thousands are not.
+const SUSPICIOUS_MIN_FILES: u32 = 50;
+
+/// One-shot deep diagnosis, run by the frontend only after it has observed
+/// repeatedly slow git polls for a project. Measures `git status` and scans
+/// the tracked file list for build/dependency directories.
+#[tauri::command]
+pub async fn diagnose_repo_health(path: String) -> Result<RepoHealth, String> {
+    let canonical = crate::fs::canonicalize_path(&path)?;
+    let repo_path = canonical.as_path();
+    if !repo_path.is_dir() {
+        return Err(format!("Not a directory: {}", path));
+    }
+
+    let started = std::time::Instant::now();
+    let status_output = Command::new("git")
+        .args(["status", "--porcelain=v1", "-uall"])
+        .current_dir(repo_path)
+        .output()
+        .map_err(|e| format!("Failed to run git: {}", e))?;
+    let status_duration_ms = started.elapsed().as_millis() as u64;
+
+    if !status_output.status.success() {
+        return Err("Not a git repository".to_string());
+    }
+    let dirty_count = String::from_utf8_lossy(&status_output.stdout).lines().count() as u32;
+
+    let ls_output = Command::new("git")
+        .args(["ls-files"])
+        .current_dir(repo_path)
+        .output()
+        .map_err(|e| format!("Failed to run git: {}", e))?;
+
+    let mut tracked_count: u32 = 0;
+    let mut groups: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
+    if ls_output.status.success() {
+        let stdout = String::from_utf8_lossy(&ls_output.stdout);
+        for line in stdout.lines() {
+            tracked_count += 1;
+            // Group by the path prefix up to and including the first
+            // suspicious component, e.g. "apps/mobile/build".
+            let mut offset = 0usize;
+            for comp in line.split('/') {
+                if SUSPICIOUS_DIR_NAMES.contains(&comp) {
+                    *groups.entry(line[..offset + comp.len()].to_string()).or_insert(0) += 1;
+                    break;
+                }
+                offset += comp.len() + 1;
+            }
+        }
+    }
+
+    let mut suspicious: Vec<SuspiciousTrackedDir> = groups
+        .into_iter()
+        .filter(|(_, count)| *count >= SUSPICIOUS_MIN_FILES)
+        .map(|(dir, count)| SuspiciousTrackedDir { dir, count })
+        .collect();
+    suspicious.sort_by(|a, b| b.count.cmp(&a.count));
+    suspicious.truncate(3);
+
+    Ok(RepoHealth {
+        status_duration_ms,
+        dirty_count,
+        tracked_count,
+        suspicious,
+    })
 }
 
 fn validate_commit_ref(commit_ref: &str) -> Result<(), String> {

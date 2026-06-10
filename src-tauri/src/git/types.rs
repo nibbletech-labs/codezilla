@@ -43,3 +43,18 @@ pub struct CommitInfo {
     pub deletions: u32,
     pub file_stats: Vec<CommitFileStat>,
 }
+
+/// A tracked directory that looks like build output / dependencies.
+#[derive(Serialize, Clone, Debug)]
+pub struct SuspiciousTrackedDir {
+    pub dir: String,
+    pub count: u32,
+}
+
+#[derive(Serialize, Clone, Debug)]
+pub struct RepoHealth {
+    pub status_duration_ms: u64,
+    pub dirty_count: u32,
+    pub tracked_count: u32,
+    pub suspicious: Vec<SuspiciousTrackedDir>,
+}

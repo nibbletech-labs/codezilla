@@ -199,6 +199,22 @@ export function getGitDiffStat(path: string): Promise<[number, number]> {
   return invoke("get_git_diff_stat", { path });
 }
 
+export interface SuspiciousTrackedDir {
+  dir: string;
+  count: number;
+}
+
+export interface RepoHealth {
+  status_duration_ms: number;
+  dirty_count: number;
+  tracked_count: number;
+  suspicious: SuspiciousTrackedDir[];
+}
+
+export function diagnoseRepoHealth(path: string): Promise<RepoHealth> {
+  return invoke("diagnose_repo_health", { path });
+}
+
 export function getFileDiffStat(repoPath: string, filePath: string): Promise<[number, number]> {
   return invoke("get_file_diff_stat", { repoPath, filePath });
 }
