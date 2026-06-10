@@ -123,6 +123,15 @@ const sessionsWithOutput = new Set<string>();
 const MAX_WEBGL_CONTEXTS = 8;
 const webglAddons = new Map<string, import("@xterm/addon-webgl").WebglAddon>();
 
+// Context-loss recovery: under GPU pressure WebKit can drop a context, which
+// silently demotes that terminal to the DOM renderer — unusably slow with a
+// full scrollback. Re-attach if the terminal is still on screen, but cap
+// retries so a flapping GPU degrades to the DOM renderer instead of looping.
+const CONTEXT_LOSS_WINDOW_MS = 60_000;
+const MAX_CONTEXT_LOSSES_PER_WINDOW = 3;
+const CONTEXT_LOSS_REATTACH_DELAY_MS = 300;
+const contextLossTimes = new Map<string, number[]>();
+
 /** Lazily attach a WebGL addon to a terminal the first time it becomes visible. */
 function ensureWebgl(sessionId: string, terminal: Terminal) {
   if (webglAddons.has(sessionId)) {
@@ -131,7 +140,13 @@ function ensureWebgl(sessionId: string, terminal: Terminal) {
     // insertion order, so cycling among >MAX sessions thrashes contexts.
     const addon = webglAddons.get(sessionId);
     webglAddons.delete(sessionId);
-    if (addon) webglAddons.set(sessionId, addon);
+    if (addon) {
+      webglAddons.set(sessionId, addon);
+      // GPU pressure can corrupt the glyph atlas (blank or mangled characters)
+      // without ever firing context loss; rebuilding it on re-activation keeps
+      // that damage from persisting for the rest of the app session.
+      addon.clearTextureAtlas();
+    }
     return;
   }
   try {
@@ -147,6 +162,21 @@ function ensureWebgl(sessionId: string, terminal: Terminal) {
     webglAddon.onContextLoss(() => {
       webglAddon.dispose();
       webglAddons.delete(sessionId);
+
+      const now = Date.now();
+      const losses = (contextLossTimes.get(sessionId) ?? []).filter(
+        (t) => now - t < CONTEXT_LOSS_WINDOW_MS,
+      );
+      losses.push(now);
+      contextLossTimes.set(sessionId, losses);
+      if (losses.length > MAX_CONTEXT_LOSSES_PER_WINDOW) return;
+
+      setTimeout(() => {
+        const el = terminal.element;
+        if (el?.isConnected && getComputedStyle(el).visibility === "visible") {
+          ensureWebgl(sessionId, terminal);
+        }
+      }, CONTEXT_LOSS_REATTACH_DELAY_MS);
     });
     terminal.loadAddon(webglAddon);
     webglAddons.set(sessionId, webglAddon);
@@ -627,6 +657,7 @@ export default function TerminalMultiplexer() {
         instances.delete(sessionId);
         lastDimsRef.current.delete(sessionId);
         sessionsWithOutput.delete(sessionId);
+        contextLossTimes.delete(sessionId);
       }
     }
 
@@ -764,6 +795,7 @@ export default function TerminalMultiplexer() {
           webglAddons.delete(sessionId);
         }
         instance.terminal.dispose();
+        contextLossTimes.delete(sessionId);
       }
       instancesRef.current.clear();
     };

@@ -26,6 +26,7 @@ export function useGitStatus(projectPath: string | null): GitStatusMap {
   const [statusMap, setStatusMap] = useState<GitStatusMap>(new Map());
   const prevPath = useRef<string | null>(null);
   const refreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const inFlight = useRef(false);
 
   const fetchStatus = useCallback(async () => {
     if (!projectPath) {
@@ -33,6 +34,9 @@ export function useGitStatus(projectPath: string | null): GitStatusMap {
       return;
     }
 
+    // On slow repos one git call can outlive the refresh debounce; never stack them.
+    if (inFlight.current) return;
+    inFlight.current = true;
     try {
       const entries = await getGitStatus(projectPath);
       const map: GitStatusMap = new Map();
@@ -57,6 +61,8 @@ export function useGitStatus(projectPath: string | null): GitStatusMap {
     } catch (err) {
       console.error("Failed to fetch git status:", err);
       setStatusMap((prev) => (prev.size === 0 ? prev : new Map()));
+    } finally {
+      inFlight.current = false;
     }
   }, [projectPath]);
 

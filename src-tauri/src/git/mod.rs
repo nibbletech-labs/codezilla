@@ -33,7 +33,7 @@ fn parse_status(xy: &str) -> Option<GitFileStatus> {
 }
 
 #[tauri::command]
-pub fn get_git_branch(path: String) -> Result<String, String> {
+pub async fn get_git_branch(path: String) -> Result<String, String> {
     let canonical = crate::fs::canonicalize_path(&path)?;
     let repo_path = canonical.as_path();
     if !repo_path.is_dir() {
@@ -57,7 +57,7 @@ pub fn get_git_branch(path: String) -> Result<String, String> {
 }
 
 #[tauri::command]
-pub fn get_git_status(path: String) -> Result<Vec<GitStatusEntry>, String> {
+pub async fn get_git_status(path: String) -> Result<Vec<GitStatusEntry>, String> {
     let canonical = crate::fs::canonicalize_path(&path)?;
     let repo_path = canonical.as_path();
     if !repo_path.is_dir() {
@@ -101,7 +101,7 @@ pub fn get_git_status(path: String) -> Result<Vec<GitStatusEntry>, String> {
 }
 
 #[tauri::command]
-pub fn get_git_diff_stat(path: String) -> Result<(u32, u32), String> {
+pub async fn get_git_diff_stat(path: String) -> Result<(u32, u32), String> {
     let canonical = crate::fs::canonicalize_path(&path)?;
     let repo_path = canonical.as_path();
     if !repo_path.is_dir() {
@@ -134,7 +134,7 @@ pub fn get_git_diff_stat(path: String) -> Result<(u32, u32), String> {
 }
 
 #[tauri::command]
-pub fn get_file_diff_stat(repo_path: String, file_path: String) -> Result<(u32, u32), String> {
+pub async fn get_file_diff_stat(repo_path: String, file_path: String) -> Result<(u32, u32), String> {
     let canonical = crate::fs::canonicalize_path(&repo_path)?;
     let repo = canonical.as_path();
     if !repo.is_dir() {
@@ -167,7 +167,7 @@ pub fn get_file_diff_stat(repo_path: String, file_path: String) -> Result<(u32, 
 }
 
 #[tauri::command]
-pub fn get_git_diff(repo_path: String, file_path: String) -> Result<String, String> {
+pub async fn get_git_diff(repo_path: String, file_path: String) -> Result<String, String> {
     let canonical = crate::fs::canonicalize_path(&repo_path)?;
     let repo = canonical.as_path();
     if !repo.is_dir() {
@@ -212,7 +212,7 @@ pub fn get_git_diff(repo_path: String, file_path: String) -> Result<String, Stri
 /// Returns per-file diff stats (added/removed lines) for all uncommitted changes.
 /// Includes both tracked (diff HEAD) and untracked files (counted via wc -l equivalent).
 #[tauri::command]
-pub fn get_all_file_diff_stats(path: String) -> Result<Vec<FileDiffStat>, String> {
+pub async fn get_all_file_diff_stats(path: String) -> Result<Vec<FileDiffStat>, String> {
     let canonical = crate::fs::canonicalize_path(&path)?;
     let repo_path = canonical.as_path();
     if !repo_path.is_dir() {
@@ -292,7 +292,7 @@ fn validate_commit_ref(commit_ref: &str) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub fn get_commit_info(repo_path: String, commit_ref: String) -> Result<CommitInfo, String> {
+pub async fn get_commit_info(repo_path: String, commit_ref: String) -> Result<CommitInfo, String> {
     validate_commit_ref(&commit_ref)?;
     let canonical = crate::fs::canonicalize_path(&repo_path)?;
     let repo = canonical.as_path();
@@ -373,7 +373,7 @@ pub fn get_commit_info(repo_path: String, commit_ref: String) -> Result<CommitIn
 }
 
 #[tauri::command]
-pub fn get_commit_diff(repo_path: String, commit_ref: String) -> Result<String, String> {
+pub async fn get_commit_diff(repo_path: String, commit_ref: String) -> Result<String, String> {
     validate_commit_ref(&commit_ref)?;
     let canonical = crate::fs::canonicalize_path(&repo_path)?;
     let repo = canonical.as_path();

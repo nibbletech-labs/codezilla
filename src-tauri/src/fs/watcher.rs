@@ -11,6 +11,20 @@ pub struct FileWatcher {
     _stop_tx: mpsc::Sender<()>,
 }
 
+/// Directories whose churn is meaningless to the UI but can be extremely
+/// high-volume (git index rewrites, package installs, Xcode builds). Filtering
+/// here keeps `fs-change` emits — and the git/file-tree refreshes they trigger
+/// in the frontend — from firing on every build or `git` invocation.
+const EXCLUDED_DIRS: [&str; 3] = [".git", "node_modules", "DerivedData"];
+
+fn is_excluded(path: &std::path::Path) -> bool {
+    path.components().any(|c| {
+        c.as_os_str()
+            .to_str()
+            .is_some_and(|name| EXCLUDED_DIRS.contains(&name))
+    })
+}
+
 pub type WatcherState = Arc<Mutex<Option<FileWatcher>>>;
 
 impl FileWatcher {
@@ -56,6 +70,9 @@ impl FileWatcher {
                 // Collect affected parent dirs
                 let mut changed_dirs: HashSet<PathBuf> = HashSet::new();
                 for path in &event.paths {
+                    if is_excluded(path) {
+                        continue;
+                    }
                     if let Some(parent) = path.parent() {
                         changed_dirs.insert(parent.to_path_buf());
                     }
@@ -71,6 +88,9 @@ impl FileWatcher {
                     match event_rx.recv_timeout(remaining) {
                         Ok(ev) => {
                             for path in &ev.paths {
+                                if is_excluded(path) {
+                                    continue;
+                                }
                                 if let Some(parent) = path.parent() {
                                     changed_dirs.insert(parent.to_path_buf());
                                 }
@@ -80,7 +100,10 @@ impl FileWatcher {
                     }
                 }
 
-                // Emit to frontend
+                // Emit to frontend (skip if everything in the batch was excluded)
+                if changed_dirs.is_empty() {
+                    continue;
+                }
                 let dirs: Vec<String> = changed_dirs
                     .into_iter()
                     .map(|p| p.to_string_lossy().to_string())

@@ -6,17 +6,23 @@ export function useGitBranch(projectPath: string | null): string | null {
   const [branch, setBranch] = useState<string | null>(null);
   const prevPath = useRef<string | null>(null);
   const refreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const inFlight = useRef(false);
 
   const fetchBranch = useCallback(async () => {
     if (!projectPath) {
       setBranch((prev) => (prev === null ? prev : null));
       return;
     }
+    // On slow repos one git call can outlive the refresh debounce; never stack them.
+    if (inFlight.current) return;
+    inFlight.current = true;
     try {
       const name = await getGitBranch(projectPath);
       setBranch((prev) => (prev === name ? prev : name));
     } catch {
       setBranch((prev) => (prev === null ? prev : null));
+    } finally {
+      inFlight.current = false;
     }
   }, [projectPath]);
 

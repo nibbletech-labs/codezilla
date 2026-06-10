@@ -9,12 +9,16 @@ export function useGitDiffStat(projectPath: string | null): GitDiffStat {
   const [stat, setStat] = useState<GitDiffStat>(null);
   const prevPath = useRef<string | null>(null);
   const refreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const inFlight = useRef(false);
 
   const fetchStat = useCallback(async () => {
     if (!projectPath) {
       setStat((prev) => (prev === null ? prev : null));
       return;
     }
+    // On slow repos one git call can outlive the poll interval; never stack them.
+    if (inFlight.current) return;
+    inFlight.current = true;
     try {
       const [added, removed] = await getGitDiffStat(projectPath);
       setStat((prev) => (
@@ -25,6 +29,8 @@ export function useGitDiffStat(projectPath: string | null): GitDiffStat {
     } catch (err) {
       console.error("Failed to fetch git diff stat:", err);
       setStat((prev) => (prev === null ? prev : null));
+    } finally {
+      inFlight.current = false;
     }
   }, [projectPath]);
 
