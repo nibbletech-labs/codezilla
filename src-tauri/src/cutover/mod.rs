@@ -135,20 +135,66 @@ fn stage_stable_heed() -> Option<(PathBuf, bool)> {
     Some((dst, true))
 }
 
-/// Restage when the destination is absent, a different size, or older than the
-/// bundled sidecar (a newer Codezilla ships a newer-mtimed binary). Metadata
-/// only — avoids reading the whole binary on every launch.
+/// Restage only when it would install a *newer* Heed than the one already at the
+/// stable path — never downgrade, and never clobber an installed binary we can't
+/// verify. We compare the binaries' reported versions (`heed --version`) rather
+/// than file mtime/size: a freshly-fetched-but-older sidecar can carry a newer
+/// mtime than a manually-installed current build and would otherwise overwrite
+/// it (e.g. running a dev Codezilla against a hand-installed Heed daemon).
 fn needs_restage(src: &Path, dst: &Path) -> bool {
-    let (Ok(sm), Ok(dm)) = (fs::metadata(src), fs::metadata(dst)) else {
-        return true;
+    if !dst.exists() {
+        return true; // nothing installed yet
+    }
+    decide_restage(heed_version(src), heed_version(dst))
+}
+
+/// Pure restage policy (split out so it's testable without spawning binaries):
+///   - both versions known  → restage only if the bundled one is strictly newer
+///   - installed unreadable  → replace it (likely broken/corrupt)
+///   - bundled unverifiable  → leave the installed binary alone (don't risk a clobber)
+fn decide_restage(src_ver: Option<(u64, u64, u64)>, dst_ver: Option<(u64, u64, u64)>) -> bool {
+    match (src_ver, dst_ver) {
+        (Some(s), Some(d)) => s > d,
+        (Some(_), None) => true,
+        (None, _) => false,
+    }
+}
+
+/// Best-effort semantic version of a heed binary via `heed --version`
+/// (e.g. "heed 0.3.1" → `(0, 3, 1)`). `None` if it can't be run or parsed.
+fn heed_version(bin: &Path) -> Option<(u64, u64, u64)> {
+    let out = Command::new(bin)
+        .arg("--version")
+        .env("PATH", crate::cli_detect::augmented_path())
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    parse_semver(&String::from_utf8_lossy(&out.stdout))
+}
+
+/// Pull the first `X.Y.Z` token out of a version string. Tolerates a leading `v`
+/// and a pre-release/build suffix on the patch (e.g. "0.3.1-rc2" → `(0, 3, 1)`).
+fn parse_semver(s: &str) -> Option<(u64, u64, u64)> {
+    let lead_num = |x: &str| {
+        x.chars()
+            .take_while(|c| c.is_ascii_digit())
+            .collect::<String>()
+            .parse::<u64>()
+            .ok()
     };
-    if sm.len() != dm.len() {
-        return true;
+    for tok in s.split_whitespace() {
+        let mut parts = tok.trim_start_matches('v').split('.');
+        if let (Some(maj), Some(min), Some(pat)) = (parts.next(), parts.next(), parts.next()) {
+            if let (Some(maj), Some(min), Some(pat)) =
+                (lead_num(maj), lead_num(min), lead_num(pat))
+            {
+                return Some((maj, min, pat));
+            }
+        }
     }
-    match (sm.modified(), dm.modified()) {
-        (Ok(s), Ok(d)) => s > d,
-        _ => true,
-    }
+    None
 }
 
 /// Copy via a temp file + rename so a crash mid-copy can't leave a truncated
@@ -454,13 +500,13 @@ mod tests {
     }
 
     #[test]
-    fn restage_when_missing_then_copy_makes_executable() {
+    fn restage_when_missing_and_copy_makes_executable() {
         let dir = unique_tmp_dir("restage");
         let src = dir.join("heed-src");
         let dst = dir.join("bin").join("heed");
         fs::write(&src, b"#!/bin/sh\necho heed\n").unwrap();
 
-        // Destination absent → must (re)stage.
+        // Destination absent → must (re)stage regardless of version.
         assert!(needs_restage(&src, &dst));
 
         fs::create_dir_all(dst.parent().unwrap()).unwrap();
@@ -472,14 +518,29 @@ mod tests {
             assert_eq!(fs::metadata(&dst).unwrap().permissions().mode() & 0o777, 0o755);
         }
 
-        // Same content (same length, src no newer than dst) → no restage.
-        assert!(!needs_restage(&src, &dst));
-
-        // A different-sized destination → restage.
-        fs::write(&dst, b"different length entirely").unwrap();
-        assert!(needs_restage(&src, &dst));
-
         fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn decide_restage_never_downgrades_and_protects_unverifiable() {
+        // Strictly-newer bundled binary installs; equal or older never does.
+        assert!(decide_restage(Some((0, 3, 1)), Some((0, 3, 0))));
+        assert!(decide_restage(Some((0, 4, 0)), Some((0, 3, 9))));
+        assert!(!decide_restage(Some((0, 3, 0)), Some((0, 3, 0))));
+        assert!(!decide_restage(Some((0, 2, 9)), Some((0, 3, 0))));
+        // An unreadable install gets replaced; an unverifiable source is left alone.
+        assert!(decide_restage(Some((0, 3, 1)), None));
+        assert!(!decide_restage(None, Some((0, 3, 0))));
+        assert!(!decide_restage(None, None));
+    }
+
+    #[test]
+    fn parse_semver_extracts_version() {
+        assert_eq!(parse_semver("heed 0.3.1"), Some((0, 3, 1)));
+        assert_eq!(parse_semver("v1.2.3"), Some((1, 2, 3)));
+        assert_eq!(parse_semver("heed 0.10.2"), Some((0, 10, 2)));
+        assert_eq!(parse_semver("heed 0.3.1-rc2"), Some((0, 3, 1)));
+        assert_eq!(parse_semver("no version here"), None);
     }
 
     #[test]

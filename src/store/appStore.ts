@@ -41,6 +41,7 @@ interface AppState {
   showFileLinkMenu: (path: string, position: { x: number; y: number }, line?: number, col?: number) => void;
   closeFileLinkMenu: () => void;
   updateTranscriptInfo: (threadId: string, info: TranscriptInfo) => void;
+  updateTranscriptInfoBatch: (entries: Record<string, TranscriptInfo>) => void;
   clearTranscriptInfo: (threadId: string) => void;
 
   // Project actions
@@ -222,6 +223,19 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (get().transcriptInfo[threadId] === info) return;
     set((s) => ({
       transcriptInfo: { ...s.transcriptInfo, [threadId]: info },
+    }));
+  },
+
+  // Apply many transcript-info updates in a single store mutation. Used by the
+  // Heed activity stream, which can touch every owned thread per emit: one
+  // `set()` (one spread, one subscriber-notification pass) instead of N keeps
+  // the activity-indicator hot path off the main thread. Callers must only
+  // include threads whose info actually changed — unchanged entries here still
+  // produce new object references and would force redundant ThreadItem renders.
+  updateTranscriptInfoBatch: (entries) => {
+    if (Object.keys(entries).length === 0) return;
+    set((s) => ({
+      transcriptInfo: { ...s.transcriptInfo, ...entries },
     }));
   },
 

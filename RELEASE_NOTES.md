@@ -1,3 +1,11 @@
+## v0.3.1 — Snappier Activity Tracking
+
+A fast follow-up to v0.3.0: the new activity tracking is now light on its feet, so the app stays responsive no matter how many threads you're running.
+
+**Fixes**
+
+- Fixed the app becoming sluggish when several threads were open or actively working — stuttering activity spinners, laggy scrolling, and pauses when switching threads. Responsiveness no longer degrades as you add more threads, and switching between them is instant again.
+
 ## v0.3.0 — Smarter Activity Tracking
 
 Activity tracking has been completely rebuilt — Codezilla now understands what each thread is doing far more accurately and reliably, and shows it at a glance, across both Claude and Codex.

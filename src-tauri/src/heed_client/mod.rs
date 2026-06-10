@@ -18,7 +18,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{mpsc, Mutex, OnceLock};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter};
 
 /// Product tag Codezilla writes into Heed's `owners.json` for threads it spawns.
@@ -394,14 +394,39 @@ pub fn start_state_watcher(app_handle: AppHandle) {
         }
         info!("heed_client: watching {:?}", state_path);
 
-        for event in rx {
-            if !matches!(event.kind, EventKind::Modify(_) | EventKind::Create(_)) {
-                continue;
+        // Coalesce bursts of writes: the daemon may rewrite state.json several
+        // times in quick succession (and an atomic rename fires more than one
+        // event), while the shared `~/.heed` dir also churns from the event log.
+        // Debounce a short window and read+emit at most once per batch — without
+        // this, every write drove a full read+parse+emit on a hot path whose
+        // `app.emit` lands on the main UI thread. Mirrors the transcript watcher.
+        const DEBOUNCE_MS: u64 = 50;
+        let is_relevant = |ev: &Event| {
+            matches!(ev.kind, EventKind::Modify(_) | EventKind::Create(_))
+                && ev.paths.iter().any(|p| p == &state_path)
+        };
+        loop {
+            let event = match rx.recv() {
+                Ok(ev) => ev,
+                Err(_) => break, // watcher dropped
+            };
+            let mut relevant = is_relevant(&event);
+
+            let deadline = Instant::now() + Duration::from_millis(DEBOUNCE_MS);
+            loop {
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                if remaining.is_zero() {
+                    break;
+                }
+                match rx.recv_timeout(remaining) {
+                    Ok(ev) => relevant |= is_relevant(&ev),
+                    Err(_) => break,
+                }
             }
-            if !event.paths.iter().any(|p| p == &state_path) {
-                continue;
+
+            if relevant {
+                read_and_emit(&app_handle, &mut last);
             }
-            read_and_emit(&app_handle, &mut last);
         }
     });
 }

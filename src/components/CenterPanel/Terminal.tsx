@@ -117,12 +117,23 @@ const sessionsWithOutput = new Set<string>();
 
 // Track WebGL addons so we can dispose when too many contexts are active.
 // Browsers typically allow 8-16 WebGL contexts; exceeding this causes freezes.
-const MAX_WEBGL_CONTEXTS = 6;
+// Map insertion order is used as the LRU ordering: the most-recently-used key
+// is always re-inserted at the end (see below), so `keys().next()` is the
+// genuine least-recently-used victim on overflow.
+const MAX_WEBGL_CONTEXTS = 8;
 const webglAddons = new Map<string, import("@xterm/addon-webgl").WebglAddon>();
 
 /** Lazily attach a WebGL addon to a terminal the first time it becomes visible. */
 function ensureWebgl(sessionId: string, terminal: Terminal) {
-  if (webglAddons.has(sessionId)) return;
+  if (webglAddons.has(sessionId)) {
+    // Already has a context — mark it most-recently-used so swapping back to it
+    // doesn't make it the eviction victim. Without this, eviction is by
+    // insertion order, so cycling among >MAX sessions thrashes contexts.
+    const addon = webglAddons.get(sessionId);
+    webglAddons.delete(sessionId);
+    if (addon) webglAddons.set(sessionId, addon);
+    return;
+  }
   try {
     if (webglAddons.size >= MAX_WEBGL_CONTEXTS) {
       const oldestKey = webglAddons.keys().next().value;
@@ -360,6 +371,12 @@ function applyPtyActivityUpdate(
  */
 function applyHeedThreadState(payloads: HeedThreadPayload[]): void {
   const state = useAppStore.getState();
+  // The Heed daemon forwards the full owned-thread list on every state.json
+  // write (de-dup is list-level, not per-thread). Diff each thread here and
+  // collect only the ones that actually changed, then commit them in a single
+  // store mutation — otherwise one thread's churn rebuilds + re-renders every
+  // thread, which is what made the activity indicator stutter under load.
+  const changed: Record<string, ReturnType<typeof createInitialTranscriptInfo>> = {};
   for (const p of payloads) {
     const thread = state.threads.find((t) => t.id === p.ownerThreadId);
     if (!thread) continue;
@@ -393,20 +410,41 @@ function applyHeedThreadState(payloads: HeedThreadPayload[]): void {
       badgeDismissedAt = null;
     }
 
-    state.updateTranscriptInfo(thread.id, {
+    const lastToolName = p.lastToolName ?? null;
+    const lastToolTarget = p.lastToolTarget ?? null;
+    const planProgress = p.planProgress ?? null;
+
+    // Skip threads whose Heed-derived state is unchanged. `lastEventTime` is
+    // deliberately excluded — a redundant emit must not, on its own, count as a
+    // change (that would defeat the diff and re-render the thread anyway).
+    const unchanged =
+      current.hookAuthoritative === true
+      && current.activityState === activityState
+      && current.lastToolName === lastToolName
+      && current.lastToolTarget === lastToolTarget
+      && current.inPlanMode === p.inPlanMode
+      && current.badge === badge
+      && current.badgeSince === badgeSince
+      && current.badgeDismissedAt === badgeDismissedAt
+      && (current.planProgress?.total ?? null) === (planProgress?.total ?? null)
+      && (current.planProgress?.done ?? null) === (planProgress?.done ?? null);
+    if (unchanged) continue;
+
+    changed[thread.id] = {
       ...current,
       hookAuthoritative: true,
       activityState,
-      lastToolName: p.lastToolName ?? null,
-      lastToolTarget: p.lastToolTarget ?? null,
+      lastToolName,
+      lastToolTarget,
       inPlanMode: p.inPlanMode,
-      planProgress: p.planProgress ?? null,
+      planProgress,
       lastEventTime: Date.now(),
       badge,
       badgeSince,
       badgeDismissedAt,
-    });
+    };
   }
+  state.updateTranscriptInfoBatch(changed);
 }
 
 function applyPtyCommandStart(thread: Thread): void {
