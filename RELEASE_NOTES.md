@@ -1,3 +1,17 @@
+## v0.3.2 — Further Performance Improvements
+
+Further performance improvements: Codezilla now stays smooth even when a project's git repository is slow or unhealthy, recovers from rendering glitches on its own, and tells you when a repo needs attention.
+
+**New Features**
+
+- **Slow-repo warning** — if git in a project is repeatedly slow, Codezilla diagnoses why and shows a banner naming the build or dependency folders that shouldn't be under version control, with a one-click copy of the fix commands.
+
+**Fixes**
+
+- Working in a project with a slow git repository no longer makes the whole app stutter or freeze mid-scroll.
+- Terminals now recover from rendering glitches on their own — blank or garbled characters and suddenly-sluggish scrolling fix themselves instead of persisting until a restart.
+- Changes in build folders no longer trigger unnecessary background refreshes.
+
 ## v0.3.1 — Snappier Activity Tracking
 
 A fast follow-up to v0.3.0: the new activity tracking is now light on its feet, so the app stays responsive no matter how many threads you're running.
