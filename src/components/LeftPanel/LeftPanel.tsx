@@ -10,6 +10,7 @@ import JobItem from "./JobItem";
 import ProjectIcon from "../ProjectIcon";
 import PresetIconButton from "../LaunchPresets/PresetIconButton";
 import { IconPicker } from "../IconPicker";
+import UsageSection from "./UsageSection";
 import {
   DndContext,
   closestCenter,
@@ -117,6 +118,7 @@ export default function LeftPanel() {
 
   return (
     <div style={styles.container} onContextMenu={(e) => e.preventDefault()}>
+      <UsageSection />
       <div style={styles.header}>
         <span style={styles.headerText}>Projects</span>
         <button

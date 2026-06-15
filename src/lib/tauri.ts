@@ -1,5 +1,6 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
+import type { UsageSnapshot } from "../store/usageTypes";
 
 export interface PtyEvent {
   event: "Output" | "Activity" | "CommandStart" | "CommandEnd" | "Exit";
@@ -359,4 +360,21 @@ export function runJobNow(jobId: string, execution: ScheduledJobExecution): Prom
 
 export function pruneJobLogs(jobId: string, keep: number): Promise<number> {
   return invoke("prune_job_logs", { jobId, keep });
+}
+
+// --- Plan-usage tracker (src-tauri/src/usage) ---
+
+/** Start the backend usage refresher (Codex file reads + Claude endpoint poll). */
+export function startUsageTracking(): Promise<void> {
+  return invoke("start_usage_tracking");
+}
+
+/** Stop the backend usage refresher. */
+export function stopUsageTracking(): Promise<void> {
+  return invoke("stop_usage_tracking");
+}
+
+/** Current cached snapshot, for painting before the first `usage-updated` event. */
+export function getUsageSnapshot(): Promise<UsageSnapshot> {
+  return invoke("get_usage_snapshot");
 }

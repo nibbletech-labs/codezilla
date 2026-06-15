@@ -13,6 +13,7 @@ import { useCloseProtection } from "./hooks/useCloseProtection";
 import { useProjectHealthCheck } from "./hooks/useProjectHealthCheck";
 import { useTheme } from "./hooks/useTheme";
 import { useMenuEvents } from "./hooks/useMenuEvents";
+import { useUsage } from "./hooks/useUsage";
 import { PANEL_WIDTHS, getLeftPanelWidth } from "./lib/constants";
 import { useAppStore } from "./store/appStore";
 
@@ -26,6 +27,7 @@ function App() {
   useProjectHealthCheck();
   useTheme();
   useMenuEvents();
+  useUsage();
 
   const [rightPanelWidth, setRightPanelWidth] = useState<number>(PANEL_WIDTHS.right);
   const isDragging = useRef(false);

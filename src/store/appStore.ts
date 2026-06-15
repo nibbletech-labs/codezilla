@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import type { Project, Thread, ThreadType, PersistedThread, PreviewTarget, ProjectIcon, ScheduledJob, LaunchPreset, BetaFeatures } from "./types";
+import type { UsageSnapshot } from "./usageTypes";
 import { THREAD_LABELS } from "./types";
 import type { TranscriptInfo } from "./transcriptTypes";
 import type { RepoHealth } from "../lib/tauri";
@@ -128,6 +129,10 @@ interface AppState {
   removeLaunchPreset: (id: string) => void;
   loadLaunchPresets: (presets: LaunchPreset[]) => void;
 
+  // Plan-usage tracker (Claude + Codex subscription limits)
+  usage: UsageSnapshot | null;
+  setUsage: (snapshot: UsageSnapshot) => void;
+
   // Beta features
   betaFeatures: BetaFeatures;
   betaFeaturesOpen: boolean;
@@ -178,6 +183,9 @@ export const useAppStore = create<AppState>((set, get) => ({
   scheduledJobs: [],
   activeJobId: null,
   launchPresets: [],
+  usage: null,
+  setUsage: (snapshot) => set({ usage: snapshot }),
+
   betaFeatures: { codexThreads: false, skillsPlugins: false, scheduledJobs: false },
   betaFeaturesOpen: false,
   autoDisabledJobIds: [],
@@ -764,7 +772,10 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   loadBetaFeatures: (features) => {
-    set({ betaFeatures: features });
+    // Merge over defaults so flags added in newer versions default to off
+    // rather than `undefined` when loading an older persisted object.
+    const defaults: BetaFeatures = { codexThreads: false, skillsPlugins: false, scheduledJobs: false };
+    set({ betaFeatures: { ...defaults, ...features } });
   },
 
   loadAutoDisabledJobIds: (ids) => {

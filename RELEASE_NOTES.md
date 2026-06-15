@@ -1,3 +1,11 @@
+## v0.3.3 — Plan Usage Tracking
+
+Keep an eye on your subscription limits without leaving Codezilla. A new Usage panel in the sidebar shows, at a glance, how close you are to your Claude and Codex plan limits.
+
+**New Features**
+
+- **Usage panel** — a new "Usage" section above your projects tracks your 5-hour and weekly plan usage for both Claude and Codex, with a countdown to when each window resets. Click a row for the full detail — both windows, your plan tier, and tokens used today. It updates on its own, and only shows the agents you actually have a subscription for.
+
 ## v0.3.2 — Further Performance Improvements
 
 Further performance improvements: Codezilla now stays smooth even when a project's git repository is slow or unhealthy, recovers from rendering glitches on its own, and tells you when a repo needs attention.

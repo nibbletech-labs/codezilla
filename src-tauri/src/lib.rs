@@ -8,6 +8,7 @@ mod heed_client;
 mod pty;
 mod skills;
 mod transcript;
+mod usage;
 
 use log::{error, info};
 use pty::PtyManager;
@@ -300,6 +301,7 @@ pub fn run() {
     let watcher_state: fs::watcher::WatcherState = Arc::new(std::sync::Mutex::new(None));
     let transcript_state: transcript::TranscriptState =
         Arc::new(std::sync::Mutex::new(transcript::TranscriptManager::new()));
+    let usage_state: usage::UsageState = usage::new_state();
 
     tauri::Builder::default()
         .plugin(
@@ -328,6 +330,7 @@ pub fn run() {
         .manage(pty_session_count)
         .manage(watcher_state)
         .manage(transcript_state)
+        .manage(usage_state)
         .manage(MenuState {
             remember_window: std::sync::Mutex::new(None),
             appearance_items: std::sync::Mutex::new(Vec::new()),
@@ -597,6 +600,9 @@ pub fn run() {
             transcript::unregister_codex_thread,
             transcript::get_codex_binding,
             transcript::discover::discover_transcript,
+            usage::start_usage_tracking,
+            usage::stop_usage_tracking,
+            usage::get_usage_snapshot,
             launchd::write_launchd_entry,
             launchd::remove_launchd_entry,
             launchd::list_launchd_entries,
