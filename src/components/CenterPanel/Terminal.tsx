@@ -1114,9 +1114,14 @@ function ScrollToBottomButton({ onClick }: { onClick: () => void }) {
  *  We only preserve breaks for: blank lines (paragraph separators),
  *  list/bullet markers, table rows (pipes), and separator rules. */
 function collapseProseWraps(sel: string): string {
-  // Strip leading/trailing whitespace from each line so collapsed joins
-  // always produce exactly one space between words.
-  const lines = sel.split("\n").map((l) => l.trim());
+  // Strip a leading blockquote bar (box-drawing verticals that Claude Code
+  // renders down the left edge of quoted text) plus its trailing space, then
+  // strip leading/trailing whitespace so collapsed joins always produce
+  // exactly one space between words. ASCII "|" is left alone — that's a table
+  // pipe, handled separately below.
+  const lines = sel
+    .split("\n")
+    .map((l) => l.replace(/^\s*[│┃▌⎜⎢]\s?/, "").trim());
 
   const result: string[] = [lines[0]];
   for (let i = 1; i < lines.length; i++) {
