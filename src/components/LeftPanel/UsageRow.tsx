@@ -1,7 +1,12 @@
 import { useState } from "react";
 import type { AgentUsage, UsageAgent } from "../../store/usageTypes";
 import UsageGauge from "./UsageGauge";
-import { formatResetCountdown } from "./usageFormat";
+import {
+  formatResetCountdown,
+  windowElapsedPct,
+  FIVE_HOUR_SECONDS,
+  WEEKLY_SECONDS,
+} from "./usageFormat";
 
 const AGENT_LABELS: Record<UsageAgent, string> = {
   claude: "Claude",
@@ -49,8 +54,22 @@ export default function UsageRow({ agent, usage, onClick }: UsageRowProps) {
       </div>
       {isOk && (
         <div style={styles.gauges}>
-          <UsageGauge label="5h" pct={usage?.five_hour_pct ?? null} />
-          <UsageGauge label="7d" pct={usage?.weekly_pct ?? null} />
+          <UsageGauge
+            label="5h"
+            pct={usage?.five_hour_pct ?? null}
+            elapsedPct={windowElapsedPct(
+              usage?.five_hour_resets_at ?? null,
+              FIVE_HOUR_SECONDS,
+            )}
+          />
+          <UsageGauge
+            label="7d"
+            pct={usage?.weekly_pct ?? null}
+            elapsedPct={windowElapsedPct(
+              usage?.weekly_resets_at ?? null,
+              WEEKLY_SECONDS,
+            )}
+          />
         </div>
       )}
     </div>

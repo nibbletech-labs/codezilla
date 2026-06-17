@@ -1,5 +1,25 @@
 // Formatting helpers for the plan-usage UI. Kept dependency-free (no date libs).
 
+/** Fixed window lengths, in seconds, used to derive how far through a period we are. */
+export const FIVE_HOUR_SECONDS = 5 * 3600;
+export const WEEKLY_SECONDS = 7 * 86_400;
+
+/**
+ * Fraction (0–100) of a usage window that has elapsed, derived from its reset
+ * timestamp and known length. This is the "pace" against which utilization is
+ * compared: if usage outruns this, you're burning faster than the clock.
+ * Returns null when the timestamp is missing.
+ */
+export function windowElapsedPct(
+  resetsAtEpoch: number | null,
+  periodSeconds: number,
+): number | null {
+  if (!resetsAtEpoch) return null;
+  const remaining = resetsAtEpoch - Math.floor(Date.now() / 1000);
+  const elapsed = (1 - remaining / periodSeconds) * 100;
+  return Math.max(0, Math.min(100, elapsed));
+}
+
 /** Compact token count: 12_014_493 → "12.0M", 4500 → "4.5K", 320 → "320". */
 export function formatTokens(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
