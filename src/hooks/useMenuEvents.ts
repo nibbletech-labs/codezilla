@@ -56,6 +56,12 @@ export function useMenuEvents() {
           }
           break;
         }
+        case "usage-chart-claude":
+          state.setUsageChartVisibility("claude", !state.usageChartVisibility.claude);
+          break;
+        case "usage-chart-codex":
+          state.setUsageChartVisibility("codex", !state.usageChartVisibility.codex);
+          break;
         default:
           if (id.startsWith("appearance-")) {
             const mode = id.slice("appearance-".length) as AppearanceMode;

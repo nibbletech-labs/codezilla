@@ -1,9 +1,10 @@
 import { create } from "zustand";
-import type { Project, Thread, ThreadType, PersistedThread, PreviewTarget, ProjectIcon, ScheduledJob, LaunchPreset, BetaFeatures } from "./types";
-import type { UsageSnapshot } from "./usageTypes";
+import type { Project, Thread, ThreadType, PersistedThread, PreviewTarget, ProjectIcon, ScheduledJob, LaunchPreset, BetaFeatures, UsageChartVisibility } from "./types";
+import type { UsageSnapshot, UsageAgent } from "./usageTypes";
 import { THREAD_LABELS } from "./types";
 import type { TranscriptInfo } from "./transcriptTypes";
-import type { RepoHealth } from "../lib/tauri";
+import type { RepoHealth, WorktreeInfo } from "../lib/tauri";
+import { cwdInWorktree } from "../lib/worktree";
 import type { AccentColorId, AppearanceMode } from "../lib/themes";
 
 const MAX_EXITED_THREADS_PER_PROJECT = 50;
@@ -34,6 +35,8 @@ interface AppState {
   filePicker: { candidates: string[]; position: { x: number; y: number }; line?: number; col?: number } | null;
   fileLinkMenu: { path: string; position: { x: number; y: number }; line?: number; col?: number } | null;
   transcriptInfo: Record<string, TranscriptInfo>;
+  cwdByThreadId: Record<string, string | null>; // runtime: live foreground cwd per thread (not persisted)
+  worktrees: WorktreeInfo[];                     // runtime: worktrees of the active project (git source of truth)
   baseFontSize: number;
   accentColorId: AccentColorId;
   appearanceMode: AppearanceMode;
@@ -58,6 +61,8 @@ interface AppState {
   updateTranscriptInfo: (threadId: string, info: TranscriptInfo) => void;
   updateTranscriptInfoBatch: (entries: Record<string, TranscriptInfo>) => void;
   clearTranscriptInfo: (threadId: string) => void;
+  setThreadCwd: (threadId: string, cwd: string | null) => void;
+  setWorktrees: (worktrees: WorktreeInfo[]) => void;
 
   // Project actions
   addProject: (path: string, name: string) => void;
@@ -132,6 +137,9 @@ interface AppState {
   // Plan-usage tracker (Claude + Codex subscription limits)
   usage: UsageSnapshot | null;
   setUsage: (snapshot: UsageSnapshot) => void;
+  usageChartVisibility: UsageChartVisibility;
+  setUsageChartVisibility: (agent: UsageAgent, visible: boolean) => void;
+  loadUsageChartVisibility: (v: UsageChartVisibility) => void;
 
   // Beta features
   betaFeatures: BetaFeatures;
@@ -170,6 +178,8 @@ export const useAppStore = create<AppState>((set, get) => ({
   filePicker: null,
   fileLinkMenu: null,
   transcriptInfo: {},
+  cwdByThreadId: {},
+  worktrees: [],
   baseFontSize: 14,
   accentColorId: "green",
   appearanceMode: "dark",
@@ -185,6 +195,11 @@ export const useAppStore = create<AppState>((set, get) => ({
   launchPresets: [],
   usage: null,
   setUsage: (snapshot) => set({ usage: snapshot }),
+  usageChartVisibility: { claude: true, codex: true },
+  setUsageChartVisibility: (agent, visible) =>
+    set((s) => ({ usageChartVisibility: { ...s.usageChartVisibility, [agent]: visible } })),
+  loadUsageChartVisibility: (v) =>
+    set({ usageChartVisibility: { claude: v.claude ?? true, codex: v.codex ?? true } }),
 
   betaFeatures: { codexThreads: false, skillsPlugins: false, scheduledJobs: false },
   betaFeaturesOpen: false,
@@ -280,6 +295,53 @@ export const useAppStore = create<AppState>((set, get) => ({
       delete next[threadId];
       return { transcriptInfo: next };
     });
+  },
+
+  // Record a thread's live foreground cwd (worktree awareness). Sticky: once a
+  // thread is attributed to a worktree, a later reading that isn't in any
+  // worktree (the agent idle at the repo root between commands) does NOT clear
+  // it — we keep the worktree until the agent is seen in a different worktree,
+  // or the worktree is removed from git (resolveWorktree then maps it to main
+  // because it no longer matches the live list). The changed cwd is mirrored
+  // into the persisted lastKnownCwd so an exited thread still resolves.
+  setThreadCwd: (threadId, cwd) => {
+    const s = get();
+    const prev = s.cwdByThreadId[threadId] ?? null;
+    let next = cwd;
+    if (!cwdInWorktree(cwd, s.worktrees) && cwdInWorktree(prev, s.worktrees)) {
+      next = prev;
+    }
+    if (next === prev) return;
+    const persistChanged =
+      next !== null && s.threads.some((t) => t.id === threadId && t.lastKnownCwd !== next);
+    set((state) => ({
+      cwdByThreadId: { ...state.cwdByThreadId, [threadId]: next },
+      threads: persistChanged
+        ? state.threads.map((t) => (t.id === threadId ? { ...t, lastKnownCwd: next } : t))
+        : state.threads,
+    }));
+  },
+
+  // Replace the active project's worktree list. Skips the update when nothing
+  // changed so consumers (TitleBar, RightPanel, ThreadItem) don't re-render.
+  setWorktrees: (worktrees) => {
+    const prev = get().worktrees;
+    if (
+      prev.length === worktrees.length &&
+      prev.every((w, i) => {
+        const n = worktrees[i];
+        return (
+          w.path === n.path &&
+          w.branch === n.branch &&
+          w.detached === n.detached &&
+          w.head === n.head &&
+          w.source === n.source
+        );
+      })
+    ) {
+      return;
+    }
+    set({ worktrees });
   },
 
   addProject: (path, name) => {
@@ -399,6 +461,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         resuming: false,
         lastActivityAt: Date.now(),
         extraArgs: extraArgs ?? null,
+        lastKnownCwd: null,
       };
 
       let newThreads = [...s.threads, thread];
@@ -840,6 +903,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       resuming: false,
       lastActivityAt: pt.lastActivityAt ?? 0,
       extraArgs: pt.extraArgs ?? null,
+      lastKnownCwd: pt.lastKnownCwd ?? null,
     }));
     set({ threads });
   },

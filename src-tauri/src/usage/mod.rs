@@ -90,6 +90,11 @@ pub struct UsageInner {
     running: bool,
     /// Bumped on every start/stop so a superseded scheduler thread exits.
     generation: u64,
+    /// Per-agent polling switches. When an agent's chart is hidden, the frontend
+    /// flips its flag off so the scheduler skips that agent's fetch entirely —
+    /// no Claude endpoint calls / Codex disk reads happen for a hidden agent.
+    claude_enabled: bool,
+    codex_enabled: bool,
 }
 
 pub type UsageState = Arc<Mutex<UsageInner>>;
@@ -102,7 +107,17 @@ pub fn new_state() -> UsageState {
         },
         running: false,
         generation: 0,
+        claude_enabled: true,
+        codex_enabled: true,
     }))
+}
+
+/// Whether a cached agent snapshot is older than its refresh interval (or has
+/// never been fetched). Used to avoid showing stale numbers when an agent's
+/// chart is re-enabled after being hidden longer than the refresh window.
+fn is_stale(u: &AgentUsage, max_age_secs: i64) -> bool {
+    u.updated_at
+        .map_or(true, |t| now_epoch() - t > max_age_secs)
 }
 
 /// How often the scheduler wakes. Codex is refreshed every tick (cheap file
@@ -112,6 +127,11 @@ const TICK_SECS: u64 = 15;
 /// endpoint is undocumented and 429s aggressively under ~180s, so we poll above
 /// that floor. Primed immediately on start, then every 5 minutes.
 const CLAUDE_REFRESH_SECS: i64 = 300;
+/// How recent a hidden agent's cached snapshot must be to paint it instantly when
+/// its chart is re-enabled. Deliberately decoupled from the per-agent poll cadence
+/// (Codex ticks every 15s) so a quick off→on reuses the cache for *both* agents;
+/// only a long absence (re-enabling much later) shows `loading` and refetches.
+const REENABLE_CACHE_SECS: i64 = 300;
 
 fn now_epoch() -> i64 {
     SystemTime::now()
@@ -158,8 +178,8 @@ pub fn start_usage_tracking(app: AppHandle, state: tauri::State<'_, UsageState>)
     std::thread::spawn(move || {
         let mut last_claude_at: i64 = 0;
         loop {
-            // Bail if a stop/restart superseded us.
-            {
+            // Bail if a stop/restart superseded us; read per-agent switches.
+            let (claude_enabled, codex_enabled) = {
                 let inner = match state_arc.lock() {
                     Ok(g) => g,
                     Err(_) => break,
@@ -167,24 +187,29 @@ pub fn start_usage_tracking(app: AppHandle, state: tauri::State<'_, UsageState>)
                 if !inner.running || inner.generation != my_generation {
                     break;
                 }
-            }
+                (inner.claude_enabled, inner.codex_enabled)
+            };
 
-            let codex = codex::fetch();
+            // A disabled agent is skipped entirely — no disk read / endpoint hit.
+            let codex = if codex_enabled { Some(codex::fetch()) } else { None };
 
             let now = now_epoch();
-            let claude = if now - last_claude_at >= CLAUDE_REFRESH_SECS {
+            let claude = if claude_enabled && now - last_claude_at >= CLAUDE_REFRESH_SECS {
                 last_claude_at = now;
                 Some(claude::fetch(&user_agent))
             } else {
                 None
             };
 
-            // Merge into the cached snapshot and emit.
+            // Merge fetched agents into the cached snapshot and emit. A skipped
+            // agent keeps its last cached value.
             if let Ok(mut inner) = state_arc.lock() {
                 if inner.generation != my_generation || !inner.running {
                     break;
                 }
-                inner.snapshot.codex = codex;
+                if let Some(c) = codex {
+                    inner.snapshot.codex = c;
+                }
                 if let Some(c) = claude {
                     inner.snapshot.claude = c;
                 }
@@ -226,4 +251,36 @@ pub fn stop_usage_tracking(state: tauri::State<'_, UsageState>) -> Result<(), St
 pub fn get_usage_snapshot(state: tauri::State<'_, UsageState>) -> Result<UsageSnapshot, String> {
     let inner = state.lock().map_err(|_| "usage state poisoned")?;
     Ok(inner.snapshot.clone())
+}
+
+/// Enable/disable polling for a single agent. Driven by the View → Usage Charts
+/// menu toggles: a hidden agent's chart isn't worth the disk read / endpoint
+/// call, so the scheduler skips it. Re-enabling an agent whose cached snapshot is
+/// older than its refresh window resets it to `loading` so we never flash stale
+/// numbers, then emits so the frontend repaints immediately.
+#[tauri::command]
+pub fn set_usage_agent_enabled(
+    app: AppHandle,
+    state: tauri::State<'_, UsageState>,
+    agent: String,
+    enabled: bool,
+) -> Result<(), String> {
+    let mut inner = state.lock().map_err(|_| "usage state poisoned")?;
+    match agent.as_str() {
+        "claude" => {
+            inner.claude_enabled = enabled;
+            if enabled && is_stale(&inner.snapshot.claude, REENABLE_CACHE_SECS) {
+                inner.snapshot.claude = AgentUsage::loading();
+            }
+        }
+        "codex" => {
+            inner.codex_enabled = enabled;
+            if enabled && is_stale(&inner.snapshot.codex, REENABLE_CACHE_SECS) {
+                inner.snapshot.codex = AgentUsage::loading();
+            }
+        }
+        other => return Err(format!("unknown usage agent: {other}")),
+    }
+    let _ = app.emit("usage-updated", &inner.snapshot);
+    Ok(())
 }

@@ -3,6 +3,7 @@ import { ask } from "@tauri-apps/plugin-dialog";
 import { useAppStore } from "../../store/appStore";
 import type { ThreadBadge } from "../../store/transcriptTypes";
 import { getThreadSubtitle, isThreadLikelyWorking } from "../../lib/threadRuntime";
+import { resolveWorktree } from "../../lib/worktree";
 import { timeAgo } from "../../lib/timeAgo";
 import ThreadIcon from "./ThreadIcons";
 
@@ -101,6 +102,20 @@ export default function ThreadItem({ threadId, isActive, ageTick, onSelect }: Th
     () => thread ? timeAgo(thread.lastActivityAt) : "",
     [thread?.lastActivityAt, ageTick],
   );
+
+  // Worktree denomination: resolve this thread's working directory against the
+  // project's worktrees. Subscribe only to this thread's cwd (a primitive) so a
+  // sibling's cwd update doesn't re-render this row.
+  const worktrees = useAppStore((s) => s.worktrees);
+  const threadCwd = useAppStore((s) => s.cwdByThreadId[threadId]);
+  const projectPath = useAppStore(
+    (s) => s.projects.find((p) => p.id === thread?.projectId)?.path ?? null,
+  );
+  const wt = useMemo(
+    () => resolveWorktree(thread, worktrees, { [threadId]: threadCwd ?? null }, projectPath),
+    [thread, worktrees, threadId, threadCwd, projectPath],
+  );
+  const worktreeLabel = wt.isWorktree ? (wt.detached ? "detached" : wt.branch) : null;
 
   // Subscribe to transcript info for this thread
   const info = useAppStore((s) => s.transcriptInfo[threadId]);
@@ -215,6 +230,20 @@ export default function ThreadItem({ threadId, isActive, ageTick, onSelect }: Th
             <div style={styles.nameRow}>
               <ThreadIcon type={thread.type} />
               <span style={styles.name}>{thread.name}</span>
+              {worktreeLabel && (
+                <span
+                  style={styles.worktreeChip}
+                  title={`Worktree: ${worktreeLabel}`}
+                >
+                  <svg width="9" height="9" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
+                    <circle cx="4" cy="3" r="2" />
+                    <circle cx="4" cy="13" r="2" />
+                    <circle cx="12" cy="8" r="2" />
+                    <path d="M4 5v6M6 13h2a2 2 0 002-2V10" />
+                  </svg>
+                  <span style={styles.worktreeChipLabel}>{worktreeLabel}</span>
+                </span>
+              )}
             </div>
             {/* Bottom row: subtitle (body ellipsifies, plan-progress stays visible) */}
             <div style={styles.subtitleRow}>
@@ -281,6 +310,25 @@ const styles = {
     color: "var(--text-primary)",
     fontSize: "var(--font-size)",
     flex: 1,
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+    whiteSpace: "nowrap" as const,
+  } as React.CSSProperties,
+  worktreeChip: {
+    display: "inline-flex",
+    alignItems: "center",
+    gap: "3px",
+    flexShrink: 0,
+    maxWidth: "45%",
+    padding: "0 5px",
+    height: "14px",
+    borderRadius: "7px",
+    backgroundColor: "var(--accent-soft, rgba(127,127,127,0.16))",
+    color: "var(--accent, var(--text-secondary))",
+    fontSize: "calc(var(--font-size) * 0.82)",
+    lineHeight: 1,
+  } as React.CSSProperties,
+  worktreeChipLabel: {
     overflow: "hidden",
     textOverflow: "ellipsis",
     whiteSpace: "nowrap" as const,

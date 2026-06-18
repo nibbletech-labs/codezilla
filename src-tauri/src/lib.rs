@@ -172,6 +172,17 @@ async fn write_pty(
 }
 
 #[tauri::command]
+async fn get_session_cwd(
+    state: State<'_, PtyState>,
+    session_id: String,
+    worktree_paths: Vec<String>,
+) -> Result<Option<String>, String> {
+    validate_session_id(&session_id)?;
+    let manager = state.lock().await;
+    Ok(manager.session_cwd(&session_id, &worktree_paths))
+}
+
+#[tauri::command]
 async fn resize_pty(
     state: State<'_, PtyState>,
     session_id: String,
@@ -234,6 +245,7 @@ struct MenuState {
     appearance_items: std::sync::Mutex<Vec<(String, CheckMenuItem<tauri::Wry>)>>,
     accent_items: std::sync::Mutex<Vec<(String, String, String, IconMenuItem<tauri::Wry>)>>,
     codex_menu_item: std::sync::Mutex<Option<MenuItem<tauri::Wry>>>,
+    usage_chart_items: std::sync::Mutex<Vec<(String, CheckMenuItem<tauri::Wry>)>>,
 }
 
 #[tauri::command]
@@ -292,6 +304,25 @@ fn sync_codex_menu(
     Ok(())
 }
 
+#[tauri::command]
+fn sync_usage_chart_menu(
+    state: State<'_, MenuState>,
+    claude: bool,
+    codex: bool,
+) -> Result<(), String> {
+    if let Ok(items) = state.usage_chart_items.lock() {
+        for (id, item) in items.iter() {
+            let checked = match id.as_str() {
+                "claude" => claude,
+                "codex" => codex,
+                _ => continue,
+            };
+            item.set_checked(checked).map_err(|e| e.to_string())?;
+        }
+    }
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let pty_state: PtyState = Arc::new(Mutex::new(PtyManager::new()));
@@ -336,6 +367,7 @@ pub fn run() {
             appearance_items: std::sync::Mutex::new(Vec::new()),
             accent_items: std::sync::Mutex::new(Vec::new()),
             codex_menu_item: std::sync::Mutex::new(None),
+            usage_chart_items: std::sync::Mutex::new(Vec::new()),
         })
         .setup(move |app| {
             info!("Codezilla starting up");
@@ -476,6 +508,17 @@ pub fn run() {
                     &accent_refs,
                 )?;
 
+                // Usage Charts — CheckMenuItems toggling each agent's sidebar chart
+                // (and its background polling). Both default on.
+                let usage_claude = CheckMenuItem::with_id(app, "usage-chart-claude", "Claude", true, true, None::<&str>)?;
+                let usage_codex = CheckMenuItem::with_id(app, "usage-chart-codex", "Codex", true, true, None::<&str>)?;
+                let usage_charts_submenu = Submenu::with_items(
+                    app,
+                    "Usage Charts",
+                    true,
+                    &[&usage_claude, &usage_codex],
+                )?;
+
                 let toggle_left = MenuItemBuilder::with_id("toggle-left-panel", "Toggle Sidebar")
                     .accelerator("CmdOrCtrl+[")
                     .build(app)?;
@@ -497,6 +540,8 @@ pub fn run() {
                         &PredefinedMenuItem::separator(app)?,
                         &appearance_submenu,
                         &accent_submenu,
+                        &PredefinedMenuItem::separator(app)?,
+                        &usage_charts_submenu,
                     ],
                 )?;
 
@@ -543,6 +588,12 @@ pub fn run() {
                     if let Ok(mut guard) = menu_state.codex_menu_item.lock() {
                         *guard = Some(new_codex);
                     }
+                    if let Ok(mut guard) = menu_state.usage_chart_items.lock() {
+                        *guard = vec![
+                            ("claude".into(), usage_claude),
+                            ("codex".into(), usage_codex),
+                        ];
+                    }
                 }
 
                 let menu = Menu::with_items(app, &[&app_submenu, &edit_submenu, &view_submenu, &window_submenu])?;
@@ -573,6 +624,7 @@ pub fn run() {
             write_pty,
             resize_pty,
             kill_pty,
+            get_session_cwd,
             fs::read_directory,
             fs::scan_all_files,
             fs::get_recent_files,
@@ -585,6 +637,7 @@ pub fn run() {
             fs::watcher::start_watching,
             fs::watcher::stop_watching,
             git::get_git_branch,
+            git::get_git_worktrees,
             git::get_git_status,
             git::get_git_diff_stat,
             git::get_git_diff,
@@ -603,6 +656,7 @@ pub fn run() {
             usage::start_usage_tracking,
             usage::stop_usage_tracking,
             usage::get_usage_snapshot,
+            usage::set_usage_agent_enabled,
             launchd::write_launchd_entry,
             launchd::remove_launchd_entry,
             launchd::list_launchd_entries,
@@ -630,7 +684,8 @@ pub fn run() {
             sync_remember_window_position,
             sync_appearance_menu,
             sync_accent_menu,
-            sync_codex_menu
+            sync_codex_menu,
+            sync_usage_chart_menu
         ])
         .on_window_event(move |window, event| {
             match event {

@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import Fuse from "fuse.js";
 import { listen } from "@tauri-apps/api/event";
 import { useAppStore } from "../../store/appStore";
+import { resolveWorktree } from "../../lib/worktree";
 import { useFileTree } from "../../hooks/useFileTree";
 import { useFileWatcher } from "../../hooks/useFileWatcher";
 import { useGitStatus } from "../../hooks/useGitStatus";
@@ -20,8 +21,15 @@ type ViewMode = "all" | "recent" | "changes";
 
 export default function RightPanel() {
   const activeProject = useAppStore((s) => s.getActiveProject());
+  const activeThread = useAppStore((s) => s.getActiveThread());
+  const worktrees = useAppStore((s) => s.worktrees);
+  const cwdByThreadId = useAppStore((s) => s.cwdByThreadId);
   const projectId = activeProject?.id ?? null;
-  const projectPath = activeProject?.path ?? null;
+
+  // The whole panel reflects the active thread's working directory: its
+  // worktree root when operating in one, else the project root (unchanged).
+  const wt = resolveWorktree(activeThread, worktrees, cwdByThreadId, activeProject?.path ?? null);
+  const projectPath = wt.workingDir || null;
 
   const { rootEntries, dirCache, expandedPaths, toggleExpand, refresh, isLoading } =
     useFileTree(projectId, projectPath);

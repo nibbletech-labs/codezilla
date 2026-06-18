@@ -4,7 +4,7 @@ use log::error;
 use std::process::Command;
 use types::{
     CommitFileStat, CommitInfo, FileDiffStat, GitFileStatus, GitStatusEntry, RepoHealth,
-    SuspiciousTrackedDir,
+    SuspiciousTrackedDir, WorktreeInfo,
 };
 
 fn parse_status(xy: &str) -> Option<GitFileStatus> {
@@ -57,6 +57,94 @@ pub async fn get_git_branch(path: String) -> Result<String, String> {
     }
 
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+/// Classify a worktree by its path. The first porcelain record (the repo's
+/// main working tree) is always "main"; others are inferred from where they
+/// live: Claude under `<repo>/.claude/worktrees/`, Codex under
+/// `~/.codex/worktrees/`, anything else is a manual `git worktree add`.
+fn classify_worktree(path: &str, is_main: bool) -> String {
+    if is_main {
+        "main".to_string()
+    } else if path.contains("/.claude/worktrees/") {
+        "claude".to_string()
+    } else if path.contains("/.codex/worktrees/") {
+        "codex".to_string()
+    } else {
+        "manual".to_string()
+    }
+}
+
+/// Enumerate every worktree of the repo at `path` via `git worktree list
+/// --porcelain`. A single query covers the main worktree and all linked
+/// worktrees (Claude, Codex, manual) regardless of physical location — git is
+/// the source of truth. Branch names are read from porcelain, never derived.
+#[tauri::command]
+pub async fn get_git_worktrees(path: String) -> Result<Vec<WorktreeInfo>, String> {
+    let canonical = crate::fs::canonicalize_path(&path)?;
+    let repo_path = canonical.as_path();
+    if !repo_path.is_dir() {
+        return Err(format!("Not a directory: {}", path));
+    }
+
+    let output = Command::new("git")
+        .args(["worktree", "list", "--porcelain"])
+        .current_dir(repo_path)
+        .output()
+        .map_err(|e| format!("Failed to run git: {}", e))?;
+
+    if !output.status.success() {
+        // Not a git repo (or no worktree support) — surface nothing.
+        return Ok(vec![]);
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut worktrees: Vec<WorktreeInfo> = Vec::new();
+
+    // Records are separated by blank lines. Each starts with `worktree <path>`,
+    // then `HEAD <sha>`, then either `branch refs/heads/<name>` or `detached`
+    // (and `bare` for a bare main repo, which has no HEAD/branch).
+    let mut cur_path: Option<String> = None;
+    let mut cur_head = String::new();
+    let mut cur_branch: Option<String> = None;
+    let mut cur_detached = false;
+
+    let flush =
+        |path: &mut Option<String>, head: &mut String, branch: &mut Option<String>, detached: &mut bool, out: &mut Vec<WorktreeInfo>| {
+            if let Some(p) = path.take() {
+                let is_main = out.is_empty();
+                let source = classify_worktree(&p, is_main);
+                out.push(WorktreeInfo {
+                    path: p,
+                    branch: branch.take(),
+                    detached: *detached,
+                    head: std::mem::take(head),
+                    source,
+                });
+            }
+            *detached = false;
+        };
+
+    for line in stdout.lines() {
+        if line.is_empty() {
+            flush(&mut cur_path, &mut cur_head, &mut cur_branch, &mut cur_detached, &mut worktrees);
+            continue;
+        }
+        if let Some(p) = line.strip_prefix("worktree ") {
+            cur_path = Some(p.to_string());
+        } else if let Some(h) = line.strip_prefix("HEAD ") {
+            cur_head = h.to_string();
+        } else if let Some(b) = line.strip_prefix("branch ") {
+            cur_branch = Some(b.strip_prefix("refs/heads/").unwrap_or(b).to_string());
+        } else if line == "detached" {
+            cur_detached = true;
+        }
+        // `bare`, `locked`, `prunable` lines are ignored.
+    }
+    // Final record (porcelain output may not end with a blank line).
+    flush(&mut cur_path, &mut cur_head, &mut cur_branch, &mut cur_detached, &mut worktrees);
+
+    Ok(worktrees)
 }
 
 #[tauri::command]

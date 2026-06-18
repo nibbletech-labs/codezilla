@@ -4,7 +4,8 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { invoke } from "@tauri-apps/api/core";
 import { useAppStore, type RepoHealthDismissal } from "../store/appStore";
 import { useSkillsPluginsStore } from "../store/skillsPluginsStore";
-import type { Project, PersistedThread, ScheduledJob, LaunchPreset, BetaFeatures, ProjectIcon } from "../store/types";
+import type { Project, PersistedThread, ScheduledJob, LaunchPreset, BetaFeatures, ProjectIcon, UsageChartVisibility } from "../store/types";
+import { setUsageAgentEnabled } from "../lib/tauri";
 import type { SkillsPluginsRegistry } from "../store/skillsPluginsTypes";
 import type { AccentColorId, AppearanceMode } from "../lib/themes";
 import { syncLaunchdEntries } from "../lib/launchdSync";
@@ -26,6 +27,7 @@ const LAUNCH_PRESETS_KEY = "launchPresets";
 const BETA_FEATURES_KEY = "betaFeatures";
 const AUTO_DISABLED_JOBS_KEY = "autoDisabledJobIds";
 const REPO_HEALTH_DISMISSALS_KEY = "repoHealthDismissals";
+const USAGE_CHART_VISIBILITY_KEY = "usageChartVisibility";
 
 let pendingSave: ReturnType<typeof setTimeout> | null = null;
 let lastStore: Awaited<ReturnType<typeof load>> | null = null;
@@ -66,6 +68,8 @@ export function usePersistence() {
   const loadLaunchPresets = useAppStore((s) => s.loadLaunchPresets);
   const betaFeatures = useAppStore((s) => s.betaFeatures);
   const loadBetaFeatures = useAppStore((s) => s.loadBetaFeatures);
+  const usageChartVisibility = useAppStore((s) => s.usageChartVisibility);
+  const loadUsageChartVisibility = useAppStore((s) => s.loadUsageChartVisibility);
   const autoDisabledJobIds = useAppStore((s) => s.autoDisabledJobIds);
   const loadAutoDisabledJobIds = useAppStore((s) => s.loadAutoDisabledJobIds);
   const repoHealthDismissals = useAppStore((s) => s.repoHealthDismissals);
@@ -126,6 +130,15 @@ export function usePersistence() {
           loadBetaFeatures(savedBetaFeatures);
         }
         invoke("sync_codex_menu", { enabled: savedBetaFeatures?.codexThreads ?? false }).catch(() => {});
+
+        const savedUsageCharts = await store.get<UsageChartVisibility>(USAGE_CHART_VISIBILITY_KEY);
+        const usageCharts = { claude: savedUsageCharts?.claude ?? true, codex: savedUsageCharts?.codex ?? true };
+        if (savedUsageCharts) {
+          loadUsageChartVisibility(savedUsageCharts);
+        }
+        invoke("sync_usage_chart_menu", { claude: usageCharts.claude, codex: usageCharts.codex }).catch(() => {});
+        setUsageAgentEnabled("claude", usageCharts.claude).catch(() => {});
+        setUsageAgentEnabled("codex", usageCharts.codex).catch(() => {});
         const savedAutoDisabledJobIds = await store.get<string[]>(AUTO_DISABLED_JOBS_KEY);
         if (savedAutoDisabledJobIds) {
           loadAutoDisabledJobIds(savedAutoDisabledJobIds);
@@ -190,7 +203,7 @@ export function usePersistence() {
       }
       initialized.current = true;
     })();
-  }, [loadProjects, loadExpandedPaths, loadThreads, loadScheduledJobs, loadLaunchPresets, loadBetaFeatures, loadAutoDisabledJobIds, loadBaseFontSize, loadAccentColorId, loadAppearanceMode, loadRememberWindowPosition, loadPanelVisibility]);
+  }, [loadProjects, loadExpandedPaths, loadThreads, loadScheduledJobs, loadLaunchPresets, loadBetaFeatures, loadUsageChartVisibility, loadAutoDisabledJobIds, loadBaseFontSize, loadAccentColorId, loadAppearanceMode, loadRememberWindowPosition, loadPanelVisibility]);
 
   // Flush pending saves on window close
   useEffect(() => {
@@ -224,6 +237,7 @@ export function usePersistence() {
         await store.set(SCHEDULED_JOBS_KEY, scheduledJobs);
         await store.set(LAUNCH_PRESETS_KEY, launchPresets);
         await store.set(BETA_FEATURES_KEY, betaFeatures);
+        await store.set(USAGE_CHART_VISIBILITY_KEY, usageChartVisibility);
         await store.set(AUTO_DISABLED_JOBS_KEY, autoDisabledJobIds);
         await store.set(REPO_HEALTH_DISMISSALS_KEY, repoHealthDismissals);
         await store.set(SKILLS_PLUGINS_KEY, { sources: skillsSources, installations: skillsInstallations });
@@ -239,6 +253,7 @@ export function usePersistence() {
             exitCode: t.exitCode,
             lastActivityAt: t.lastActivityAt,
             extraArgs: t.extraArgs,
+            lastKnownCwd: t.lastKnownCwd,
           }));
           await store.set(THREADS_KEY, persisted);
         }
@@ -247,7 +262,7 @@ export function usePersistence() {
         console.error("Failed to persist state:", e);
       }
     })();
-  }, [projects, expandedPaths, threads, scheduledJobs, launchPresets, betaFeatures, autoDisabledJobIds, repoHealthDismissals, skillsSources, skillsInstallations, baseFontSize, accentColorId, appearanceMode, rememberWindowPosition, showLeftPanel, showRightPanel]);
+  }, [projects, expandedPaths, threads, scheduledJobs, launchPresets, betaFeatures, usageChartVisibility, autoDisabledJobIds, repoHealthDismissals, skillsSources, skillsInstallations, baseFontSize, accentColorId, appearanceMode, rememberWindowPosition, showLeftPanel, showRightPanel]);
 
   // Sync Rust menu state (separate from persistence — these only need their specific dep)
   useEffect(() => {
@@ -269,4 +284,15 @@ export function usePersistence() {
     if (!initialized.current) return;
     invoke("sync_codex_menu", { enabled: betaFeatures.codexThreads }).catch(() => {});
   }, [betaFeatures.codexThreads]);
+
+  // Re-sync the Usage Charts menu checkmarks and gate backend polling per agent.
+  useEffect(() => {
+    if (!initialized.current) return;
+    invoke("sync_usage_chart_menu", {
+      claude: usageChartVisibility.claude,
+      codex: usageChartVisibility.codex,
+    }).catch(() => {});
+    setUsageAgentEnabled("claude", usageChartVisibility.claude).catch(() => {});
+    setUsageAgentEnabled("codex", usageChartVisibility.codex).catch(() => {});
+  }, [usageChartVisibility.claude, usageChartVisibility.codex]);
 }

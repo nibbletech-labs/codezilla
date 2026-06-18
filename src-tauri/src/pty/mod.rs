@@ -93,6 +93,12 @@ impl PtyManager {
         }
     }
 
+    pub fn session_cwd(&self, session_id: &str, worktree_paths: &[String]) -> Option<String> {
+        self.sessions
+            .get(session_id)
+            .and_then(|s| s.foreground_cwd(worktree_paths))
+    }
+
     pub fn has_active_sessions(&self) -> bool {
         self.sessions
             .values()

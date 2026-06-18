@@ -16,6 +16,7 @@ const AGENTS: UsageAgent[] = ["claude", "codex"];
  */
 export default function UsageSection() {
   const usage = useAppStore((s) => s.usage);
+  const usageChartVisibility = useAppStore((s) => s.usageChartVisibility);
 
   const [openAgent, setOpenAgent] = useState<UsageAgent | null>(null);
   const [anchor, setAnchor] = useState<{ x: number; y: number } | null>(null);
@@ -29,8 +30,11 @@ export default function UsageSection() {
     return () => clearInterval(id);
   }, []);
 
-  // Hide agents with nothing to track; hide the section if none remain.
-  const visibleAgents = AGENTS.filter((a) => usage?.[a]?.status !== "na");
+  // Hide agents the user has toggled off, or with nothing to track; hide the
+  // whole section if none remain.
+  const visibleAgents = AGENTS.filter(
+    (a) => usageChartVisibility[a] && usage?.[a]?.status !== "na",
+  );
   if (visibleAgents.length === 0) return null;
 
   const handleRowClick = (agent: UsageAgent) => (e: React.MouseEvent) => {

@@ -186,6 +186,29 @@ export function getGitStatus(path: string): Promise<GitStatusEntry[]> {
   return invoke("get_git_status", { path });
 }
 
+export interface WorktreeInfo {
+  path: string;
+  /** Real branch name (refs/heads/ stripped), or null when detached/bare. */
+  branch: string | null;
+  detached: boolean;
+  head: string;
+  /** "main" | "claude" | "codex" | "manual" — classified by path. */
+  source: string;
+}
+
+export function getGitWorktrees(path: string): Promise<WorktreeInfo[]> {
+  return invoke("get_git_worktrees", { path });
+}
+
+/**
+ * Working directory of a thread's terminal, reflecting worktree activity. Pass
+ * the project's worktree paths so the backend can attribute a root-launched
+ * agent to a worktree it's working in via cd subshells. Null if unresolved.
+ */
+export function getSessionCwd(sessionId: string, worktreePaths: string[]): Promise<string | null> {
+  return invoke("get_session_cwd", { sessionId, worktreePaths });
+}
+
 export interface FileDiffStat {
   path: string;
   added: number;
@@ -377,4 +400,9 @@ export function stopUsageTracking(): Promise<void> {
 /** Current cached snapshot, for painting before the first `usage-updated` event. */
 export function getUsageSnapshot(): Promise<UsageSnapshot> {
   return invoke("get_usage_snapshot");
+}
+
+/** Enable/disable backend polling for a single agent (hidden chart → no polling). */
+export function setUsageAgentEnabled(agent: "claude" | "codex", enabled: boolean): Promise<void> {
+  return invoke("set_usage_agent_enabled", { agent, enabled });
 }

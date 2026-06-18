@@ -3,6 +3,9 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useAppStore } from "../../store/appStore";
 import { useGitDiffStat } from "../../hooks/useGitDiffStat";
 import { useGitBranch } from "../../hooks/useGitBranch";
+import { useWorktrees } from "../../hooks/useWorktrees";
+import { useThreadCwds } from "../../hooks/useThreadCwds";
+import { resolveWorktree } from "../../lib/worktree";
 import { getLeftPanelWidth } from "../../lib/constants";
 import TitleBarDropdown from "./TitleBarDropdown";
 import ProjectIconComponent from "../ProjectIcon";
@@ -19,8 +22,22 @@ export default function TitleBar() {
   const toggleRightPanel = useAppStore((s) => s.toggleRightPanel);
   const baseFontSize = useAppStore((s) => s.baseFontSize);
   const projectPath = project?.path ?? null;
-  const diffStat = useGitDiffStat(projectPath);
-  const branch = useGitBranch(projectPath);
+  const worktrees = useAppStore((s) => s.worktrees);
+  const cwdByThreadId = useAppStore((s) => s.cwdByThreadId);
+
+  // Drive the worktree watchers from the always-mounted title bar.
+  useWorktrees(projectPath);
+  useThreadCwds(project?.id ?? null);
+
+  // The active thread's effective working directory: its worktree when it's
+  // operating in one, otherwise the project root (identical to prior behavior).
+  const wt = resolveWorktree(thread, worktrees, cwdByThreadId, projectPath);
+  const effectivePath = wt.workingDir || null;
+  const diffStat = useGitDiffStat(effectivePath);
+  const rawBranch = useGitBranch(effectivePath);
+  // `git rev-parse --abbrev-ref HEAD` returns the literal "HEAD" when detached
+  // (common for Codex worktrees) — show a clearer label instead.
+  const branch = rawBranch === "HEAD" ? "detached" : rawBranch;
   const leftPanelWidth = getLeftPanelWidth(baseFontSize);
 
   const [isFullscreen, setIsFullscreen] = useState(false);

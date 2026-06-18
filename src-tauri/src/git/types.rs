@@ -51,6 +51,19 @@ pub struct SuspiciousTrackedDir {
     pub count: u32,
 }
 
+/// One entry from `git worktree list --porcelain` — the main worktree (repo
+/// root) plus any linked worktrees, wherever they physically live.
+#[derive(Serialize, Clone, Debug)]
+pub struct WorktreeInfo {
+    pub path: String,
+    /// Real branch name (refs/heads/ stripped), or None when detached/bare.
+    pub branch: Option<String>,
+    pub detached: bool,
+    pub head: String,
+    /// "main" (repo root) | "claude" | "codex" | "manual" — classified by path.
+    pub source: String,
+}
+
 #[derive(Serialize, Clone, Debug)]
 pub struct RepoHealth {
     pub status_duration_ms: u64,

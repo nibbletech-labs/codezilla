@@ -18,6 +18,7 @@ export interface Thread {
   resuming: boolean;
   lastActivityAt: number;          // epoch ms, 0 = no activity recorded
   extraArgs: string | null;        // CLI flags from launch preset
+  lastKnownCwd: string | null;     // last resolved foreground cwd (worktree awareness)
 }
 
 // Subset persisted to codezilla-config.json
@@ -31,6 +32,7 @@ export interface PersistedThread {
   exitCode: number | null;
   lastActivityAt: number;          // epoch ms, 0 = no activity recorded
   extraArgs: string | null;        // CLI flags from launch preset
+  lastKnownCwd: string | null;     // persisted so exited threads still resolve their worktree
 }
 
 export interface LaunchPreset {
@@ -82,4 +84,10 @@ export interface BetaFeatures {
   codexThreads: boolean;
   skillsPlugins: boolean;
   scheduledJobs: boolean;
+}
+
+/** Per-agent visibility of the sidebar usage charts (also gates backend polling). */
+export interface UsageChartVisibility {
+  claude: boolean;
+  codex: boolean;
 }

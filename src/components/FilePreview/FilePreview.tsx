@@ -5,6 +5,7 @@ import { sanitizeHtml } from "../../lib/sanitize";
 import { isMarkdownFile, renderMarkdown } from "../../lib/markdownRenderer";
 import { highlightWithHljs } from "../../lib/hljs";
 import { useAppStore } from "../../store/appStore";
+import { resolveWorktree } from "../../lib/worktree";
 import { useGitStatus } from "../../hooks/useGitStatus";
 import DiffView from "./DiffView";
 
@@ -73,9 +74,15 @@ export default function FilePreview({ filePath, line, onClose }: FilePreviewProp
   const fileName = filePath.split("/").pop() ?? filePath;
   const category = getFileCategory(filePath);
 
-  // Git status for badge
+  // Git status for badge — scoped to the active thread's working directory so
+  // the badge reflects the worktree when one is in use.
   const activeProject = useAppStore((s) => s.getActiveProject());
-  const projectPath = activeProject?.path ?? null;
+  const activeThread = useAppStore((s) => s.getActiveThread());
+  const worktrees = useAppStore((s) => s.worktrees);
+  const cwdByThreadId = useAppStore((s) => s.cwdByThreadId);
+  const projectPath =
+    resolveWorktree(activeThread, worktrees, cwdByThreadId, activeProject?.path ?? null).workingDir ||
+    null;
   const gitStatus = useGitStatus(projectPath);
   const fileGitStatus = gitStatus.get(filePath);
   const [fileDiffStat, setFileDiffStat] = useState<[number, number] | null>(null);
