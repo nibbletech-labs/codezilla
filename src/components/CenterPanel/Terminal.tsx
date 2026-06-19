@@ -417,7 +417,13 @@ function applyHeedThreadState(payloads: HeedThreadPayload[]): void {
     if (!thread) continue;
     const current =
       state.transcriptInfo[thread.id] ?? createInitialTranscriptInfo();
-    const activityState = p.activityState as ThreadActivityState;
+    // A thread Heed has declared gone is never "working" — its process is dead.
+    // Heed can leave activity frozen at its last value (e.g. killed mid-turn), so
+    // coerce gone -> idle here rather than trusting the stale field.
+    const isGone = p.liveness === "gone";
+    const activityState: ThreadActivityState = isGone
+      ? "idle"
+      : (p.activityState as ThreadActivityState);
 
     // Surface the "done" badge on a clean working -> idle transition, and reset
     // it when a new turn starts working again. The reset also clears
@@ -430,6 +436,7 @@ function applyHeedThreadState(payloads: HeedThreadPayload[]): void {
     let badgeDismissedAt = current.badgeDismissedAt;
     if (
       activityState === "idle"
+      && !isGone
       && current.activityState === "working"
       && current.badge !== "done"
       && current.badgeDismissedAt == null
