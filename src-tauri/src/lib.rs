@@ -172,17 +172,6 @@ async fn write_pty(
 }
 
 #[tauri::command]
-async fn get_session_cwd(
-    state: State<'_, PtyState>,
-    session_id: String,
-    worktree_paths: Vec<String>,
-) -> Result<Option<String>, String> {
-    validate_session_id(&session_id)?;
-    let manager = state.lock().await;
-    Ok(manager.session_cwd(&session_id, &worktree_paths))
-}
-
-#[tauri::command]
 async fn resize_pty(
     state: State<'_, PtyState>,
     session_id: String,
@@ -624,7 +613,6 @@ pub fn run() {
             write_pty,
             resize_pty,
             kill_pty,
-            get_session_cwd,
             fs::read_directory,
             fs::scan_all_files,
             fs::get_recent_files,

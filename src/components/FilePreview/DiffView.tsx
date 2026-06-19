@@ -15,7 +15,8 @@ export default function DiffView({ filePath, layout }: DiffViewProps) {
   const [error, setError] = useState<string | null>(null);
 
   const activeProject = useAppStore((s) => s.getActiveProject());
-  const projectPath = activeProject?.path ?? null;
+  const selectedEnvPath = useAppStore((s) => s.selectedEnvPath);
+  const projectPath = selectedEnvPath ?? activeProject?.path ?? null;
 
   useEffect(() => {
     setDiffHtml(null);

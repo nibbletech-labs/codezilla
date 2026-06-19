@@ -1,11 +1,8 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useAppStore } from "../../store/appStore";
-import { useGitDiffStat } from "../../hooks/useGitDiffStat";
-import { useGitBranch } from "../../hooks/useGitBranch";
 import { useWorktrees } from "../../hooks/useWorktrees";
-import { useThreadCwds } from "../../hooks/useThreadCwds";
-import { resolveWorktree } from "../../lib/worktree";
+import { useWorktreeDiffStats } from "../../hooks/useWorktreeDiffStats";
 import { getLeftPanelWidth } from "../../lib/constants";
 import TitleBarDropdown from "./TitleBarDropdown";
 import ProjectIconComponent from "../ProjectIcon";
@@ -22,22 +19,12 @@ export default function TitleBar() {
   const toggleRightPanel = useAppStore((s) => s.toggleRightPanel);
   const baseFontSize = useAppStore((s) => s.baseFontSize);
   const projectPath = project?.path ?? null;
-  const worktrees = useAppStore((s) => s.worktrees);
-  const cwdByThreadId = useAppStore((s) => s.cwdByThreadId);
 
-  // Drive the worktree watchers from the always-mounted title bar.
+  // Drive the worktree watchers from the always-mounted title bar: enumerate the
+  // project's worktrees and keep each env's uncommitted +/- totals fresh.
   useWorktrees(projectPath);
-  useThreadCwds(project?.id ?? null);
+  useWorktreeDiffStats();
 
-  // The active thread's effective working directory: its worktree when it's
-  // operating in one, otherwise the project root (identical to prior behavior).
-  const wt = resolveWorktree(thread, worktrees, cwdByThreadId, projectPath);
-  const effectivePath = wt.workingDir || null;
-  const diffStat = useGitDiffStat(effectivePath);
-  const rawBranch = useGitBranch(effectivePath);
-  // `git rev-parse --abbrev-ref HEAD` returns the literal "HEAD" when detached
-  // (common for Codex worktrees) — show a clearer label instead.
-  const branch = rawBranch === "HEAD" ? "detached" : rawBranch;
   const leftPanelWidth = getLeftPanelWidth(baseFontSize);
 
   const [isFullscreen, setIsFullscreen] = useState(false);
@@ -147,27 +134,6 @@ export default function TitleBar() {
 
       {/* Right zone */}
       <div style={styles.rightZone}>
-        {branch && (
-          <span style={styles.branchName}>
-            <svg width="10" height="10" viewBox="0 0 16 16" fill="currentColor" style={{ opacity: 0.7 }}>
-              <path d="M9.5 3.25a2.25 2.25 0 1 1 3 2.122V6A2.5 2.5 0 0 1 10 8.5H6a1 1 0 0 0-1 1v1.128a2.251 2.251 0 1 1-1.5 0V5.372a2.25 2.25 0 1 1 1.5 0v1.836A2.493 2.493 0 0 1 6 7h4a1 1 0 0 0 1-1v-.628A2.25 2.25 0 0 1 9.5 3.25z" />
-            </svg>
-            {branch}
-          </span>
-        )}
-        {diffStat !== null && (
-          <span style={styles.diffStat}>
-            {diffStat.added === 0 && diffStat.removed === 0 ? (
-              <span title="Working directory clean" style={{ color: "#89d185" }}>&#x2713;</span>
-            ) : (
-              <>
-                <span style={{ color: "#89d185" }}>+{diffStat.added}</span>
-                {" "}
-                <span style={{ color: "#f48771" }}>-{diffStat.removed}</span>
-              </>
-            )}
-          </span>
-        )}
         <button
           onClick={toggleRightPanel}
           style={{
@@ -282,20 +248,6 @@ const styles: Record<string, React.CSSProperties> = {
     whiteSpace: "nowrap" as const,
     overflow: "hidden",
     textOverflow: "ellipsis",
-  },
-  branchName: {
-    display: "inline-flex",
-    alignItems: "center",
-    gap: "4px",
-    color: "var(--text-secondary)",
-    fontFamily: "monospace",
-    fontSize: "var(--font-size-sm)",
-    whiteSpace: "nowrap" as const,
-  },
-  diffStat: {
-    fontFamily: "monospace",
-    fontSize: "var(--font-size-sm)",
-    whiteSpace: "nowrap" as const,
   },
   iconBtn: {
     background: "none",

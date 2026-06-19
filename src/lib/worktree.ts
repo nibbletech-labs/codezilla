@@ -1,17 +1,4 @@
-import type { Thread } from "../store/types";
 import type { WorktreeInfo } from "./tauri";
-
-export interface ResolvedWorktree {
-  /** Effective root for the file tree, git status, branch, and diff stat. */
-  workingDir: string;
-  /** True when the thread is operating in a non-main worktree. */
-  isWorktree: boolean;
-  /** Matched worktree's branch (null when detached/bare/unknown). */
-  branch: string | null;
-  detached: boolean;
-  /** "main" | "claude" | "codex" | "manual". */
-  source: string;
-}
 
 /** Strip trailing slashes, preserving a bare root "/". */
 function norm(p: string): string {
@@ -25,58 +12,32 @@ export function isPrefix(parent: string, child: string): boolean {
   return a === b || b.startsWith(a + "/");
 }
 
-/** True when `cwd` is inside a real (non-main) worktree from `worktrees`. */
-export function cwdInWorktree(
-  cwd: string | null,
-  worktrees: { path: string; source: string }[],
-): boolean {
-  return !!cwd && worktrees.some((w) => w.source !== "main" && isPrefix(w.path, cwd));
-}
-
 /**
- * Resolve which working directory (and branch) a thread is operating in, by
- * matching its foreground cwd against the project's worktree list. Falls back
- * to the project root — which keeps the main-repo case byte-identical to the
- * pre-worktree behavior (zero regression).
+ * Attribute an edited file path to the most-specific environment it lives in.
+ * Longest path-prefix wins, so a worktree (which nests under the repo root)
+ * beats main. Returns the store `projectPath` for a main-repo match (keeping the
+ * touch key identical to `selectedEnvPath ?? projectPath`), the worktree root for
+ * a worktree match, or null when the path is non-absolute or outside every known
+ * env. Pure and total — never throws (a stray Bash command / Grep pattern that
+ * isn't an absolute path is rejected up front).
  */
-export function resolveWorktree(
-  thread: Thread | null | undefined,
+export function attributeEnv(
+  filePath: string | null,
   worktrees: WorktreeInfo[],
-  cwdByThreadId: Record<string, string | null>,
   projectPath: string | null,
-): ResolvedWorktree {
-  const fallback: ResolvedWorktree = {
-    workingDir: projectPath ?? "",
-    isWorktree: false,
-    branch: null,
-    detached: false,
-    source: "main",
-  };
-  if (!thread || !projectPath) return fallback;
+): string | null {
+  if (!filePath || !filePath.startsWith("/")) return null;
 
-  const cwd = cwdByThreadId[thread.id] ?? thread.lastKnownCwd ?? null;
-  if (!cwd) return fallback;
-
-  // Longest-prefix match across all worktrees (the main repo root is in the
-  // list too, so repo subdirs resolve to main and worktree subdirs resolve to
-  // the worktree).
   let best: WorktreeInfo | null = null;
   for (const wt of worktrees) {
-    if (isPrefix(wt.path, cwd) && (!best || norm(wt.path).length > norm(best.path).length)) {
+    if (isPrefix(wt.path, filePath) && (!best || norm(wt.path).length > norm(best.path).length)) {
       best = wt;
     }
   }
-  if (!best) return fallback;
+  if (best) return best.source === "main" ? projectPath : best.path;
 
-  const isMain = best.source === "main";
-  return {
-    // For the main repo keep the store's project path (avoids re-rooting churn
-    // from a differently-canonicalized git path); for worktrees use the
-    // worktree root so the tree shows the whole worktree even from a subdir.
-    workingDir: isMain ? projectPath : best.path,
-    isWorktree: !isMain,
-    branch: best.branch,
-    detached: best.detached,
-    source: best.source,
-  };
+  // No worktree matched (e.g. the list hasn't loaded yet) — attribute to main
+  // when the file is under the project root, else it's outside every known env.
+  if (projectPath && isPrefix(projectPath, filePath)) return projectPath;
+  return null;
 }

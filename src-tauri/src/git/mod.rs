@@ -221,6 +221,38 @@ pub async fn get_git_diff_stat(path: String) -> Result<(u32, u32), String> {
         }
     }
 
+    // Untracked files don't show up in `git diff HEAD`, but a brand-new file is
+    // uncommitted work all the same — count its lines as additions so a fresh
+    // file (e.g. in a just-created worktree) marks the env dirty. `--exclude-standard`
+    // honours .gitignore so ignored cruft (node_modules, build output) is skipped.
+    let untracked = Command::new("git")
+        .args(["ls-files", "--others", "--exclude-standard", "-z"])
+        .current_dir(repo_path)
+        .output();
+    if let Ok(out) = untracked {
+        if out.status.success() {
+            let list = String::from_utf8_lossy(&out.stdout);
+            for rel in list.split('\0').filter(|s| !s.is_empty()) {
+                let full = repo_path.join(rel);
+                let size = std::fs::metadata(&full).map(|m| m.len()).unwrap_or(0);
+                // Don't read large/binary blobs to count lines — just mark dirty.
+                if size > 1_000_000 {
+                    added = added.saturating_add(1);
+                    continue;
+                }
+                match std::fs::read(&full) {
+                    Ok(bytes) if !bytes.contains(&0) => {
+                        let nl = bytes.iter().filter(|&&b| b == b'\n').count() as u32;
+                        let trailing = u32::from(!bytes.is_empty() && *bytes.last().unwrap() != b'\n');
+                        added = added.saturating_add(nl + trailing);
+                    }
+                    // Binary or unreadable but present → still uncommitted work.
+                    _ => added = added.saturating_add(1),
+                }
+            }
+        }
+    }
+
     Ok((added, removed))
 }
 

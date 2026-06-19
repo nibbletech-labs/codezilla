@@ -28,6 +28,7 @@ const BETA_FEATURES_KEY = "betaFeatures";
 const AUTO_DISABLED_JOBS_KEY = "autoDisabledJobIds";
 const REPO_HEALTH_DISMISSALS_KEY = "repoHealthDismissals";
 const USAGE_CHART_VISIBILITY_KEY = "usageChartVisibility";
+const TOUCHED_ENVS_KEY = "touchedEnvsByThread";
 
 let pendingSave: ReturnType<typeof setTimeout> | null = null;
 let lastStore: Awaited<ReturnType<typeof load>> | null = null;
@@ -74,6 +75,8 @@ export function usePersistence() {
   const loadAutoDisabledJobIds = useAppStore((s) => s.loadAutoDisabledJobIds);
   const repoHealthDismissals = useAppStore((s) => s.repoHealthDismissals);
   const loadRepoHealthDismissals = useAppStore((s) => s.loadRepoHealthDismissals);
+  const touchedEnvsByThread = useAppStore((s) => s.touchedEnvsByThread);
+  const loadTouchedEnvs = useAppStore((s) => s.loadTouchedEnvs);
   const skillsSources = useSkillsPluginsStore((s) => s.sources);
   const skillsInstallations = useSkillsPluginsStore((s) => s.installations);
   const loadProjects = useAppStore((s) => s.loadProjects);
@@ -147,6 +150,13 @@ export function usePersistence() {
         if (savedRepoHealthDismissals) {
           loadRepoHealthDismissals(savedRepoHealthDismissals);
         }
+        // Restore per-thread uncommitted-work touch records so dormant/resumable
+        // threads keep their dot across restarts. The diff-stats watcher prunes
+        // any env that's since gone clean, so stale entries self-clear on launch.
+        const savedTouchedEnvs = await store.get<Record<string, Record<string, number>>>(TOUCHED_ENVS_KEY);
+        if (savedTouchedEnvs) {
+          loadTouchedEnvs(savedTouchedEnvs);
+        }
 
         // Always sync launchd agents with persisted jobs
         if (saved && saved.length > 0) {
@@ -203,7 +213,7 @@ export function usePersistence() {
       }
       initialized.current = true;
     })();
-  }, [loadProjects, loadExpandedPaths, loadThreads, loadScheduledJobs, loadLaunchPresets, loadBetaFeatures, loadUsageChartVisibility, loadAutoDisabledJobIds, loadBaseFontSize, loadAccentColorId, loadAppearanceMode, loadRememberWindowPosition, loadPanelVisibility]);
+  }, [loadProjects, loadExpandedPaths, loadThreads, loadScheduledJobs, loadLaunchPresets, loadBetaFeatures, loadUsageChartVisibility, loadAutoDisabledJobIds, loadRepoHealthDismissals, loadTouchedEnvs, loadBaseFontSize, loadAccentColorId, loadAppearanceMode, loadRememberWindowPosition, loadPanelVisibility]);
 
   // Flush pending saves on window close
   useEffect(() => {
@@ -240,6 +250,7 @@ export function usePersistence() {
         await store.set(USAGE_CHART_VISIBILITY_KEY, usageChartVisibility);
         await store.set(AUTO_DISABLED_JOBS_KEY, autoDisabledJobIds);
         await store.set(REPO_HEALTH_DISMISSALS_KEY, repoHealthDismissals);
+        await store.set(TOUCHED_ENVS_KEY, touchedEnvsByThread);
         await store.set(SKILLS_PLUGINS_KEY, { sources: skillsSources, installations: skillsInstallations });
         // Guard threads against HMR store resets wiping persisted data
         if (threads.length > 0 || threadsLoaded.current) {
@@ -253,7 +264,6 @@ export function usePersistence() {
             exitCode: t.exitCode,
             lastActivityAt: t.lastActivityAt,
             extraArgs: t.extraArgs,
-            lastKnownCwd: t.lastKnownCwd,
           }));
           await store.set(THREADS_KEY, persisted);
         }
@@ -262,7 +272,7 @@ export function usePersistence() {
         console.error("Failed to persist state:", e);
       }
     })();
-  }, [projects, expandedPaths, threads, scheduledJobs, launchPresets, betaFeatures, usageChartVisibility, autoDisabledJobIds, repoHealthDismissals, skillsSources, skillsInstallations, baseFontSize, accentColorId, appearanceMode, rememberWindowPosition, showLeftPanel, showRightPanel]);
+  }, [projects, expandedPaths, threads, scheduledJobs, launchPresets, betaFeatures, usageChartVisibility, autoDisabledJobIds, repoHealthDismissals, touchedEnvsByThread, skillsSources, skillsInstallations, baseFontSize, accentColorId, appearanceMode, rememberWindowPosition, showLeftPanel, showRightPanel]);
 
   // Sync Rust menu state (separate from persistence — these only need their specific dep)
   useEffect(() => {

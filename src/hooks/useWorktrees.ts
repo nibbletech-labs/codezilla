@@ -25,7 +25,9 @@ export function useWorktrees(projectPath: string | null): void {
       const list = await getGitWorktrees(projectPath);
       setWorktrees(list);
     } catch {
-      setWorktrees([]);
+      // Keep the prior worktree list on a transient git failure (e.g. during FS
+      // churn while a file is being created) rather than blanking it — blanking
+      // would make the WORKTREES rows + their +/- flicker out and back.
     } finally {
       inFlight.current = false;
     }

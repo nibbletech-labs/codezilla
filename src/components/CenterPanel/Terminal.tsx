@@ -25,6 +25,7 @@ import {
 } from "../../lib/constants";
 import { getTerminalTheme, DARK_PALETTE, LIGHT_PALETTE } from "../../lib/themes";
 import { useAppStore } from "../../store/appStore";
+import { attributeEnv } from "../../lib/worktree";
 import type { Thread, ThreadType, ScheduledJob } from "../../store/types";
 import { THREAD_NEW_LABELS } from "../../store/types";
 import ThreadIcon from "../LeftPanel/ThreadIcons";
@@ -390,6 +391,10 @@ function applyPtyActivityUpdate(
   state.updateTranscriptInfo(thread.id, next);
 }
 
+// Tools whose `lastToolTarget` is an actual file path (so a touch can be
+// attributed to an env). Other tools report a command / pattern / URL instead.
+const FILE_WRITE_TOOLS = new Set(["Write", "Edit", "NotebookEdit", "MultiEdit"]);
+
 /**
  * Apply a Heed state-file snapshot to per-thread transcript info. Heed runs the
  * activity reducer in its daemon, so this is a thin mapper: copy the
@@ -442,6 +447,35 @@ function applyHeedThreadState(payloads: HeedThreadPayload[]): void {
 
     const lastToolName = p.lastToolName ?? null;
     const lastToolTarget = p.lastToolTarget ?? null;
+
+    // Uncommitted-work attribution: when a file-writing tool fires on an absolute
+    // path, record the RAW path on this thread. Gate on the tool EVENT changing
+    // (name OR target) — not target alone — so an Edit that follows a Read of the
+    // same file (the Read already set lastToolTarget to that path) is still
+    // recorded. Attribution to a worktree/main happens at display time using the
+    // active project's worktrees, so it doesn't matter which project is active now.
+    const toolEventChanged =
+      lastToolName !== current.lastToolName || lastToolTarget !== current.lastToolTarget;
+    if (
+      toolEventChanged &&
+      lastToolTarget != null &&
+      lastToolTarget.startsWith("/") &&
+      FILE_WRITE_TOOLS.has(lastToolName ?? "")
+    ) {
+      state.recordThreadTouch(thread.id, lastToolTarget, Date.now());
+      // Live-follow: if the ACTIVE thread just edited, re-root the file panel to
+      // that edit's env so the worktree selection tracks it without re-selecting
+      // the thread. Only the active thread moves the selection — a background
+      // thread's edit must not yank the panel away. The active thread is in the
+      // active project, so state.worktrees is the right list to resolve against.
+      if (thread.id === state.activeThreadId) {
+        const projectPath = state.projects.find((pr) => pr.id === thread.projectId)?.path ?? null;
+        const env = projectPath ? attributeEnv(lastToolTarget, state.worktrees, projectPath) : null;
+        const nextEnv = env && env !== projectPath ? env : null;
+        if (nextEnv !== state.selectedEnvPath) state.setSelectedEnvPath(nextEnv);
+      }
+    }
+
     const planProgress = p.planProgress ?? null;
 
     // Skip threads whose Heed-derived state is unchanged. `lastEventTime` is

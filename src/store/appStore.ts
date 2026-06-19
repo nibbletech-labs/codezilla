@@ -4,7 +4,7 @@ import type { UsageSnapshot, UsageAgent } from "./usageTypes";
 import { THREAD_LABELS } from "./types";
 import type { TranscriptInfo } from "./transcriptTypes";
 import type { RepoHealth, WorktreeInfo } from "../lib/tauri";
-import { cwdInWorktree } from "../lib/worktree";
+import { attributeEnv } from "../lib/worktree";
 import type { AccentColorId, AppearanceMode } from "../lib/themes";
 
 const MAX_EXITED_THREADS_PER_PROJECT = 50;
@@ -35,7 +35,6 @@ interface AppState {
   filePicker: { candidates: string[]; position: { x: number; y: number }; line?: number; col?: number } | null;
   fileLinkMenu: { path: string; position: { x: number; y: number }; line?: number; col?: number } | null;
   transcriptInfo: Record<string, TranscriptInfo>;
-  cwdByThreadId: Record<string, string | null>; // runtime: live foreground cwd per thread (not persisted)
   worktrees: WorktreeInfo[];                     // runtime: worktrees of the active project (git source of truth)
   baseFontSize: number;
   accentColorId: AccentColorId;
@@ -61,8 +60,16 @@ interface AppState {
   updateTranscriptInfo: (threadId: string, info: TranscriptInfo) => void;
   updateTranscriptInfoBatch: (entries: Record<string, TranscriptInfo>) => void;
   clearTranscriptInfo: (threadId: string) => void;
-  setThreadCwd: (threadId: string, cwd: string | null) => void;
   setWorktrees: (worktrees: WorktreeInfo[]) => void;
+
+  // Worktree environment selector + uncommitted-work attribution (CZ-53).
+  selectedEnvPath: string | null;                                  // null = main (the active project root)
+  setSelectedEnvPath: (path: string | null) => void;
+  envDiffStats: Record<string, { added: number; removed: number }>; // per-env uncommitted diff totals, keyed by env path
+  setEnvDiffStats: (stats: Record<string, { added: number; removed: number }>) => void;
+  touchedEnvsByThread: Record<string, Record<string, number>>;      // threadId -> absolute file path -> lastTouchMs
+  recordThreadTouch: (threadId: string, filePath: string, ms: number) => void;
+  loadTouchedEnvs: (touched: Record<string, Record<string, number>>) => void;
 
   // Project actions
   addProject: (path: string, name: string) => void;
@@ -178,8 +185,10 @@ export const useAppStore = create<AppState>((set, get) => ({
   filePicker: null,
   fileLinkMenu: null,
   transcriptInfo: {},
-  cwdByThreadId: {},
   worktrees: [],
+  selectedEnvPath: null,
+  envDiffStats: {},
+  touchedEnvsByThread: {},
   baseFontSize: 14,
   accentColorId: "green",
   appearanceMode: "dark",
@@ -297,31 +306,6 @@ export const useAppStore = create<AppState>((set, get) => ({
     });
   },
 
-  // Record a thread's live foreground cwd (worktree awareness). Sticky: once a
-  // thread is attributed to a worktree, a later reading that isn't in any
-  // worktree (the agent idle at the repo root between commands) does NOT clear
-  // it — we keep the worktree until the agent is seen in a different worktree,
-  // or the worktree is removed from git (resolveWorktree then maps it to main
-  // because it no longer matches the live list). The changed cwd is mirrored
-  // into the persisted lastKnownCwd so an exited thread still resolves.
-  setThreadCwd: (threadId, cwd) => {
-    const s = get();
-    const prev = s.cwdByThreadId[threadId] ?? null;
-    let next = cwd;
-    if (!cwdInWorktree(cwd, s.worktrees) && cwdInWorktree(prev, s.worktrees)) {
-      next = prev;
-    }
-    if (next === prev) return;
-    const persistChanged =
-      next !== null && s.threads.some((t) => t.id === threadId && t.lastKnownCwd !== next);
-    set((state) => ({
-      cwdByThreadId: { ...state.cwdByThreadId, [threadId]: next },
-      threads: persistChanged
-        ? state.threads.map((t) => (t.id === threadId ? { ...t, lastKnownCwd: next } : t))
-        : state.threads,
-    }));
-  },
-
   // Replace the active project's worktree list. Skips the update when nothing
   // changed so consumers (TitleBar, RightPanel, ThreadItem) don't re-render.
   setWorktrees: (worktrees) => {
@@ -342,6 +326,39 @@ export const useAppStore = create<AppState>((set, get) => ({
       return;
     }
     set({ worktrees });
+  },
+
+  setSelectedEnvPath: (path) => set({ selectedEnvPath: path }),
+
+  // Record that a thread edited a file at `filePath` (an absolute path). We store
+  // the RAW path, not a resolved env — the path is attributed to a worktree/main
+  // at DISPLAY time using the active project's worktrees (correct because the user
+  // is then viewing that project), so attribution never depends on whichever
+  // project happened to be active at edit time. Idempotent per (thread, path).
+  recordThreadTouch: (threadId, filePath, ms) =>
+    set((s) => ({
+      touchedEnvsByThread: {
+        ...s.touchedEnvsByThread,
+        [threadId]: { ...(s.touchedEnvsByThread[threadId] ?? {}), [filePath]: ms },
+      },
+    })),
+
+  loadTouchedEnvs: (touched) => set({ touchedEnvsByThread: touched }),
+
+  // Replace the per-env diff totals. Skips the write when nothing changed so
+  // consumers don't re-render. (Touch records are raw file paths, attributed and
+  // dirtiness-gated at display time, so no env-based pruning is needed here.)
+  setEnvDiffStats: (stats) => {
+    set((s) => {
+      const prev = s.envDiffStats;
+      const nextKeys = Object.keys(stats);
+      const unchanged =
+        Object.keys(prev).length === nextKeys.length &&
+        nextKeys.every(
+          (k) => prev[k] && prev[k].added === stats[k].added && prev[k].removed === stats[k].removed,
+        );
+      return unchanged ? {} : { envDiffStats: stats };
+    });
   },
 
   addProject: (path, name) => {
@@ -422,12 +439,13 @@ export const useAppStore = create<AppState>((set, get) => ({
             : s.activeProjectId,
         activeThreadId: removedThreadActive ? null : s.activeThreadId,
         activeJobId: removedJobActive ? null : s.activeJobId,
+        selectedEnvPath: s.activeProjectId === projectId ? null : s.selectedEnvPath,
       };
     });
   },
 
   setActiveProject: (projectId) => {
-    set({ activeProjectId: projectId, activeThreadId: null, activeJobId: null });
+    set({ activeProjectId: projectId, activeThreadId: null, activeJobId: null, selectedEnvPath: null });
   },
 
   toggleProjectExpanded: (projectId) => {
@@ -461,7 +479,6 @@ export const useAppStore = create<AppState>((set, get) => ({
         resuming: false,
         lastActivityAt: Date.now(),
         extraArgs: extraArgs ?? null,
-        lastKnownCwd: null,
       };
 
       let newThreads = [...s.threads, thread];
@@ -499,6 +516,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         activeThreadId: thread.id,
         activeJobId: null,
         activeProjectId: projectId,
+        ...(s.activeProjectId !== projectId ? { selectedEnvPath: null } : {}),
         transcriptInfo: nextTranscriptInfo,
       };
     });
@@ -511,8 +529,16 @@ export const useAppStore = create<AppState>((set, get) => ({
       const nextTranscriptInfo = { ...s.transcriptInfo };
       delete nextTranscriptInfo[threadId];
 
+      // Drop any uncommitted-work touch records for the removed thread (avoids
+      // stale dots). Same reference when the thread had none — a no-op write.
+      let nextTouched = s.touchedEnvsByThread;
+      if (threadId in nextTouched) {
+        nextTouched = { ...s.touchedEnvsByThread };
+        delete nextTouched[threadId];
+      }
+
       if (s.activeThreadId !== threadId) {
-        return { threads: s.threads.filter((t) => t.id !== threadId), transcriptInfo: nextTranscriptInfo };
+        return { threads: s.threads.filter((t) => t.id !== threadId), transcriptInfo: nextTranscriptInfo, touchedEnvsByThread: nextTouched };
       }
 
       const deleted = s.threads.find((t) => t.id === threadId);
@@ -529,6 +555,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         threads: s.threads.filter((t) => t.id !== threadId),
         activeThreadId: next?.id ?? null,
         transcriptInfo: nextTranscriptInfo,
+        touchedEnvsByThread: nextTouched,
       };
     });
   },
@@ -536,6 +563,27 @@ export const useAppStore = create<AppState>((set, get) => ({
   setActiveThread: (threadId) => {
     const thread = get().threads.find((t) => t.id === threadId);
     if (!thread) return;
+    const prevProjectId = get().activeProjectId;
+    // Auto-select the env where this thread most recently edited a file: take its
+    // newest touched path and resolve it against the project's worktrees, so
+    // selecting a thread follows it to the worktree it last worked in (most recent
+    // wins if it spanned several). Falls back to main. If the thread has no
+    // recorded edits, reset to main only when the project changed, otherwise leave
+    // the current selection untouched. `undefined` = don't change selectedEnvPath.
+    const touched = get().touchedEnvsByThread[threadId];
+    let nextEnv: string | null | undefined;
+    if (touched && Object.keys(touched).length > 0) {
+      let bestPath: string | null = null;
+      let bestMs = -1;
+      for (const [p, ms] of Object.entries(touched)) {
+        if (ms > bestMs) { bestMs = ms; bestPath = p; }
+      }
+      const projectPath = get().projects.find((p) => p.id === thread.projectId)?.path ?? null;
+      const env = bestPath && projectPath ? attributeEnv(bestPath, get().worktrees, projectPath) : null;
+      nextEnv = env && env !== projectPath ? env : null;
+    } else if (thread.projectId !== prevProjectId) {
+      nextEnv = null;
+    }
     // Clear badge when switching to this thread (like marking email as read)
     const info = get().transcriptInfo[threadId];
     const transcriptUpdate: Record<string, TranscriptInfo> = {};
@@ -546,6 +594,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       activeThreadId: threadId,
       activeJobId: null,
       activeProjectId: thread.projectId,
+      ...(nextEnv !== undefined ? { selectedEnvPath: nextEnv } : {}),
       ...(Object.keys(transcriptUpdate).length > 0
         ? { transcriptInfo: { ...get().transcriptInfo, ...transcriptUpdate } }
         : {}),
@@ -742,6 +791,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       activeJobId: id,
       activeThreadId: null,
       activeProjectId: projectId,
+      ...(s.activeProjectId !== projectId ? { selectedEnvPath: null } : {}),
     }));
     return job;
   },
@@ -764,10 +814,12 @@ export const useAppStore = create<AppState>((set, get) => ({
   setActiveJob: (jobId) => {
     const job = get().scheduledJobs.find((j) => j.id === jobId);
     if (!job) return;
+    const prevProjectId = get().activeProjectId;
     set({
       activeJobId: jobId,
       activeThreadId: null,
       activeProjectId: job.projectId,
+      ...(job.projectId !== prevProjectId ? { selectedEnvPath: null } : {}),
     });
   },
 
@@ -903,7 +955,6 @@ export const useAppStore = create<AppState>((set, get) => ({
       resuming: false,
       lastActivityAt: pt.lastActivityAt ?? 0,
       extraArgs: pt.extraArgs ?? null,
-      lastKnownCwd: pt.lastKnownCwd ?? null,
     }));
     set({ threads });
   },

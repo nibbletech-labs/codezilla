@@ -15,7 +15,8 @@ export default function CommitPreview({ commitHash, onClose }: CommitPreviewProp
   const bodyRef = useRef<HTMLDivElement>(null);
 
   const activeProject = useAppStore((s) => s.getActiveProject());
-  const projectPath = activeProject?.path ?? null;
+  const selectedEnvPath = useAppStore((s) => s.selectedEnvPath);
+  const projectPath = selectedEnvPath ?? activeProject?.path ?? null;
 
   useEffect(() => {
     setInfo(null);

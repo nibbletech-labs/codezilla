@@ -12,7 +12,10 @@ export default defineConfig({
     host: host || false,
     hmr: host ? { protocol: "ws", host, port: 1421 } : undefined,
     watch: {
-      ignored: ["**/src-tauri/**"],
+      // Ignore src-tauri (Rust), and worktree checkouts + .git so that creating a
+      // git worktree under .claude/worktrees/ doesn't trigger a full Vite reload
+      // that wipes terminal state under `tauri dev`.
+      ignored: ["**/src-tauri/**", "**/.claude/worktrees/**", "**/.git/**"],
     },
   },
 });

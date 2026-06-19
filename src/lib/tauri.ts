@@ -200,15 +200,6 @@ export function getGitWorktrees(path: string): Promise<WorktreeInfo[]> {
   return invoke("get_git_worktrees", { path });
 }
 
-/**
- * Working directory of a thread's terminal, reflecting worktree activity. Pass
- * the project's worktree paths so the backend can attribute a root-launched
- * agent to a worktree it's working in via cd subshells. Null if unresolved.
- */
-export function getSessionCwd(sessionId: string, worktreePaths: string[]): Promise<string | null> {
-  return invoke("get_session_cwd", { sessionId, worktreePaths });
-}
-
 export interface FileDiffStat {
   path: string;
   added: number;

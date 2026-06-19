@@ -3,7 +3,6 @@ import { createPortal } from "react-dom";
 import Fuse from "fuse.js";
 import { listen } from "@tauri-apps/api/event";
 import { useAppStore } from "../../store/appStore";
-import { resolveWorktree } from "../../lib/worktree";
 import { useFileTree } from "../../hooks/useFileTree";
 import { useFileWatcher } from "../../hooks/useFileWatcher";
 import { useGitStatus } from "../../hooks/useGitStatus";
@@ -12,6 +11,7 @@ import { useAllFileDiffStats } from "../../hooks/useAllFileDiffStats";
 import { timeAgo } from "../../lib/timeAgo";
 import FileTreeNode from "./FileTreeNode";
 import FilterInput from "./FilterInput";
+import WorktreeList from "./WorktreeList";
 import FilePreview, { shouldUseNativePreview } from "../FilePreview/FilePreview";
 import CommitPreview from "../FilePreview/CommitPreview";
 import type { FileEntry } from "../../lib/tauri";
@@ -21,15 +21,13 @@ type ViewMode = "all" | "recent" | "changes";
 
 export default function RightPanel() {
   const activeProject = useAppStore((s) => s.getActiveProject());
-  const activeThread = useAppStore((s) => s.getActiveThread());
-  const worktrees = useAppStore((s) => s.worktrees);
-  const cwdByThreadId = useAppStore((s) => s.cwdByThreadId);
+  const selectedEnvPath = useAppStore((s) => s.selectedEnvPath);
   const projectId = activeProject?.id ?? null;
 
-  // The whole panel reflects the active thread's working directory: its
-  // worktree root when operating in one, else the project root (unchanged).
-  const wt = resolveWorktree(activeThread, worktrees, cwdByThreadId, activeProject?.path ?? null);
-  const projectPath = wt.workingDir || null;
+  // The whole panel reflects the selected environment: the chosen worktree, else
+  // the project root (main). `projectPath` (= effectiveRoot) threads through every
+  // hook and relative-path calc below unchanged.
+  const projectPath = selectedEnvPath ?? activeProject?.path ?? null;
 
   const { rootEntries, dirCache, expandedPaths, toggleExpand, refresh, isLoading } =
     useFileTree(projectId, projectPath);
@@ -323,6 +321,9 @@ export default function RightPanel() {
         <div style={styles.empty}>No project selected</div>
       ) : (
         <>
+          <div style={styles.sectionHeader}>Worktrees</div>
+          <WorktreeList />
+          <div style={styles.sectionHeader}>Files</div>
           <div style={styles.viewModeBar}>
             {(["all", "recent", "changes"] as ViewMode[]).map((mode) => (
               <button
@@ -545,6 +546,15 @@ const styles = {
     textOverflow: "ellipsis",
     whiteSpace: "nowrap" as const,
   },
+  sectionHeader: {
+    textTransform: "uppercase" as const,
+    fontSize: "var(--font-size-sm)",
+    letterSpacing: "0.5px",
+    color: "var(--text-secondary)",
+    fontWeight: 600,
+    padding: "8px 8px 4px",
+    flexShrink: 0,
+  } as React.CSSProperties,
   viewModeBar: {
     display: "flex",
     gap: "1px",
