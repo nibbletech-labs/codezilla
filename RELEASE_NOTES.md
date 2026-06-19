@@ -1,3 +1,20 @@
+## v0.4.0 — Worktree Support
+
+Codezilla now understands git worktrees. Switch between a project's worktrees, see what's changed in each, and tell at a glance which threads have uncommitted work — and where it lives.
+
+**New Features**
+
+- **Worktree environment selector** — the right panel now has a Worktrees section listing the main checkout and every worktree, each with its uncommitted-change count. Selecting one re-roots the whole panel — file tree, git status, and file/diff/commit previews — to that worktree.
+- **Uncommitted-work indicators** — sidebar threads now show a dot when they have uncommitted changes, attributed to the worktree (or main checkout) where the edits actually happened. They persist across restarts and show even on threads you haven't touched in a while.
+- **Threads follow their work** — selecting a thread jumps the panel to the worktree it most recently edited, and an active thread's live edits keep the panel tracking along as it moves between worktrees.
+- **Per-agent usage charts** — a new Usage Charts submenu in the View menu shows or hides the Claude and Codex usage charts independently. Hiding one stops polling it entirely; re-enabling reuses a recent snapshot or refetches.
+- **Usage pace marker** — the 5-hour and weekly usage gauges now show a tick marking how far through each window you are, so usage reads against the clock.
+
+**Fixes**
+
+- Threads no longer get stuck showing "Working" forever after their session has ended — a thread whose process is gone now correctly reads as idle.
+- Copy as prose no longer carries the vertical bar down the left edge of quoted text, so pasted blockquotes come through clean.
+
 ## v0.3.3 — Plan Usage Tracking
 
 Keep an eye on your subscription limits without leaving Codezilla. A new Usage panel in the sidebar shows, at a glance, how close you are to your Claude and Codex plan limits.
