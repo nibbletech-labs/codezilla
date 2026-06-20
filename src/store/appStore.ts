@@ -4,6 +4,7 @@ import type { UsageSnapshot, UsageAgent } from "./usageTypes";
 import { THREAD_LABELS } from "./types";
 import type { TranscriptInfo } from "./transcriptTypes";
 import type { RepoHealth, WorktreeInfo } from "../lib/tauri";
+import { getGitWorktrees } from "../lib/tauri";
 import { attributeEnv } from "../lib/worktree";
 import type { AccentColorId, AppearanceMode } from "../lib/themes";
 
@@ -564,41 +565,74 @@ export const useAppStore = create<AppState>((set, get) => ({
     const thread = get().threads.find((t) => t.id === threadId);
     if (!thread) return;
     const prevProjectId = get().activeProjectId;
+    const sameProject = thread.projectId === prevProjectId;
+
     // Auto-select the env where this thread most recently edited a file: take its
     // newest touched path and resolve it against the project's worktrees, so
     // selecting a thread follows it to the worktree it last worked in (most recent
-    // wins if it spanned several). Falls back to main. If the thread has no
-    // recorded edits, reset to main only when the project changed, otherwise leave
-    // the current selection untouched. `undefined` = don't change selectedEnvPath.
+    // wins if it spanned several). Falls back to main.
     const touched = get().touchedEnvsByThread[threadId];
-    let nextEnv: string | null | undefined;
-    if (touched && Object.keys(touched).length > 0) {
-      let bestPath: string | null = null;
+    let bestPath: string | null = null;
+    if (touched) {
       let bestMs = -1;
       for (const [p, ms] of Object.entries(touched)) {
         if (ms > bestMs) { bestMs = ms; bestPath = p; }
       }
-      const projectPath = get().projects.find((p) => p.id === thread.projectId)?.path ?? null;
-      const env = bestPath && projectPath ? attributeEnv(bestPath, get().worktrees, projectPath) : null;
-      nextEnv = env && env !== projectPath ? env : null;
-    } else if (thread.projectId !== prevProjectId) {
-      nextEnv = null;
     }
+    const projectPath = get().projects.find((p) => p.id === thread.projectId)?.path ?? null;
+    // Resolve a touched path to the follow-env (null = main / no change handled by caller).
+    const resolveEnv = (worktrees: WorktreeInfo[]): string | null => {
+      const env = bestPath && projectPath ? attributeEnv(bestPath, worktrees, projectPath) : null;
+      return env && env !== projectPath ? env : null;
+    };
+
     // Clear badge when switching to this thread (like marking email as read)
     const info = get().transcriptInfo[threadId];
     const transcriptUpdate: Record<string, TranscriptInfo> = {};
     if (info && info.badge != null) {
       transcriptUpdate[threadId] = { ...info, badge: null, badgeSince: null, badgeDismissedAt: Date.now() };
     }
+    const transcriptPatch = Object.keys(transcriptUpdate).length > 0
+      ? { transcriptInfo: { ...get().transcriptInfo, ...transcriptUpdate } }
+      : {};
+
+    if (sameProject) {
+      // Worktrees in the store already belong to this project, so resolve now. If
+      // the thread has no recorded edits, leave the current selection untouched
+      // (`undefined`); otherwise follow it (possibly back to main).
+      const nextEnv: string | null | undefined = bestPath ? resolveEnv(get().worktrees) : undefined;
+      set({
+        activeThreadId: threadId,
+        activeJobId: null,
+        activeProjectId: thread.projectId,
+        ...(nextEnv !== undefined ? { selectedEnvPath: nextEnv } : {}),
+        ...transcriptPatch,
+      });
+      return;
+    }
+
+    // Cross-project switch: the store still holds the PREVIOUS project's worktrees
+    // (useWorktrees only refetches after activeProjectId changes), so resolving
+    // against get().worktrees here would always miss and fall back to main. Activate
+    // immediately defaulting to main, then fetch the target project's worktrees and
+    // resolve the follow-env once they're known.
     set({
       activeThreadId: threadId,
       activeJobId: null,
       activeProjectId: thread.projectId,
-      ...(nextEnv !== undefined ? { selectedEnvPath: nextEnv } : {}),
-      ...(Object.keys(transcriptUpdate).length > 0
-        ? { transcriptInfo: { ...get().transcriptInfo, ...transcriptUpdate } }
-        : {}),
+      selectedEnvPath: null,
+      ...transcriptPatch,
     });
+    if (!bestPath || !projectPath) return;
+    void getGitWorktrees(projectPath)
+      .then((worktrees) => {
+        // The user may have navigated away during the fetch — only follow if this
+        // thread is still active and the user hasn't manually picked an env since.
+        if (get().activeThreadId !== threadId || get().selectedEnvPath !== null) return;
+        const nextEnv = resolveEnv(worktrees);
+        if (nextEnv !== get().selectedEnvPath) set({ selectedEnvPath: nextEnv });
+      })
+      .catch(() => { /* keep main on a transient git failure */ });
   },
 
   renameThread: (threadId, name) => {
