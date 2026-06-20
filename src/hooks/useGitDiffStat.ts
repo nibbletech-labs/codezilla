@@ -29,8 +29,10 @@ export function useGitDiffStat(projectPath: string | null): GitDiffStat {
           : { added, removed }
       ));
     } catch (err) {
+      // Keep the last-known value on a transient git failure (e.g. index.lock
+      // contention while another git process runs) rather than blanking the
+      // number — the stat reappears on the next clean read.
       console.error("Failed to fetch git diff stat:", err);
-      setStat((prev) => (prev === null ? prev : null));
     } finally {
       inFlight.current = false;
     }

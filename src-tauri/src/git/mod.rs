@@ -193,20 +193,41 @@ pub async fn get_git_status(path: String) -> Result<Vec<GitStatusEntry>, String>
 
 #[tauri::command]
 pub async fn get_git_diff_stat(path: String) -> Result<(u32, u32), String> {
+    use tokio::process::Command as AsyncCommand;
+    use tokio::time::{timeout, Duration};
+
+    // Cap each git invocation so a slow or locked repo can't stall the diff-stat
+    // fetch — a stall would otherwise leave the env's +/- numbers blank for its
+    // whole duration. kill_on_drop reaps the child if the timeout fires.
+    const GIT_TIMEOUT: Duration = Duration::from_secs(10);
+
     let canonical = crate::fs::canonicalize_path(&path)?;
     let repo_path = canonical.as_path();
     if !repo_path.is_dir() {
         return Err(format!("Not a directory: {}", path));
     }
 
-    let output = Command::new("git")
+    let mut diff_cmd = AsyncCommand::new("git");
+    diff_cmd
         .args(["diff", "--numstat", "HEAD"])
         .current_dir(repo_path)
-        .output()
+        .kill_on_drop(true);
+    let output = timeout(GIT_TIMEOUT, diff_cmd.output())
+        .await
+        .map_err(|_| format!("git diff timed out for {}", path))?
         .map_err(|e| format!("Failed to run git: {}", e))?;
 
+    // A non-zero exit is a genuine git error — most often index.lock contention
+    // while another git process runs (e.g. a worktree being created). Surface it
+    // as Err so callers keep their last-known stats instead of blanking to 0/0.
+    // `git diff` (without --exit-code) exits 0 whether or not the tree has changes,
+    // so this never fires merely because the env is clean.
     if !output.status.success() {
-        return Ok((0, 0));
+        return Err(format!(
+            "git diff failed for {}: {}",
+            path,
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
     }
 
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -225,11 +246,14 @@ pub async fn get_git_diff_stat(path: String) -> Result<(u32, u32), String> {
     // uncommitted work all the same — count its lines as additions so a fresh
     // file (e.g. in a just-created worktree) marks the env dirty. `--exclude-standard`
     // honours .gitignore so ignored cruft (node_modules, build output) is skipped.
-    let untracked = Command::new("git")
+    // Best-effort: a failure or timeout here just omits untracked lines, it never
+    // blanks the (already-known) tracked diff totals.
+    let mut untracked_cmd = AsyncCommand::new("git");
+    untracked_cmd
         .args(["ls-files", "--others", "--exclude-standard", "-z"])
         .current_dir(repo_path)
-        .output();
-    if let Ok(out) = untracked {
+        .kill_on_drop(true);
+    if let Ok(Ok(out)) = timeout(GIT_TIMEOUT, untracked_cmd.output()).await {
         if out.status.success() {
             let list = String::from_utf8_lossy(&out.stdout);
             for rel in list.split('\0').filter(|s| !s.is_empty()) {
