@@ -1,3 +1,16 @@
+## v0.4.1 — Worktree Fixes
+
+A follow-up to worktree support: thread-to-worktree tracking now works across projects, uncommitted-change counts stay steady, plus fixes to previews, terminal links, and Codex sessions.
+
+**Fixes**
+
+- **Threads follow their work across projects** — selecting a thread now jumps the panel to the worktree it last edited even when you're switching in from a different project, and the thread's uncommitted-work dot shows correctly. Previously it stayed on the main checkout.
+- **Steadier change counts** — a worktree's uncommitted +/− counts no longer blank out for stretches while a thread is doing git-heavy work (such as creating a worktree); they hold their last value instead.
+- **Selectable previews** — rendered Markdown and diff text in the file preview can now be selected and copied.
+- **Smarter clickable paths** — terminal output recognises more file paths as clickable links, including partial paths and ones prefixed by a status letter or word (e.g. "M src/app.ts", "Reading src/…").
+- **Resume Codex sessions after restart** — Codex threads can be resumed after restarting Codezilla; their usage figures also note when the numbers may be a turn behind.
+- **Cleaner copy as prose** — copying as prose strips more quote-bar variants from the left edge of quoted text.
+
 ## v0.4.0 — Worktree Support
 
 Codezilla now understands git worktrees. Switch between a project's worktrees, see what's changed in each, and tell at a glance which threads have uncommitted work — and where it lives.
