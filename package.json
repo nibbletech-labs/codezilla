@@ -9,6 +9,8 @@
     "preview": "vite preview",
     "tauri": "tauri",
     "test:thread-activity": "node --experimental-strip-types --test tests/thread-activity.test.ts",
+    "test:prose-copy": "node --experimental-strip-types --test tests/prose-copy.test.ts",
+    "test:file-path-link": "node --experimental-strip-types --test tests/file-path-link.test.ts",
     "replay:transcript": "node --experimental-strip-types scripts/replay-transcript.ts",
     "test:thread-activity:e2e": "node --experimental-strip-types scripts/e2e-thread-activity.ts"
   },
