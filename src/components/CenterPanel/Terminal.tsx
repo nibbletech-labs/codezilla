@@ -416,6 +416,20 @@ function applyHeedThreadState(payloads: HeedThreadPayload[]): void {
   for (const p of payloads) {
     const thread = state.threads.find((t) => t.id === p.ownerThreadId);
     if (!thread) continue;
+
+    // Capture Codex's native session id the moment Heed correlates the thread.
+    // Codex mints its own id (unlike Claude, whose id we supply at spawn), so it
+    // has to be captured back here — `nativeThreadId` is that id. Persistence
+    // already saves `codexThreadId`, so storing it now is what lets a later
+    // `codex resume <id>` work. Gate on a real change to avoid redundant writes.
+    if (
+      p.cli === "codex"
+      && isValidUUID(p.nativeThreadId)
+      && thread.codexThreadId !== p.nativeThreadId
+    ) {
+      state.setCodexThreadId(thread.id, p.nativeThreadId);
+    }
+
     const current =
       state.transcriptInfo[thread.id] ?? createInitialTranscriptInfo();
     // A thread Heed has declared gone is never "working" — its process is dead.

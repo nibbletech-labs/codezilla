@@ -95,6 +95,11 @@ export default function UsageDetailPopup({ agent, usage, anchor, onClose }: Usag
             Figures come from an unofficial Claude endpoint and may occasionally be unavailable.
           </div>
         )}
+        {agent === "codex" && (
+          <div style={styles.note}>
+            Figures are read from local Codex session files and may be stale until the next turn.
+          </div>
+        )}
       </div>
     </>
   );
