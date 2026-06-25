@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { parsePaths } from "../src/lib/parsePaths.ts";
+import { parsePaths, parseUnresolvedCandidates } from "../src/lib/parsePaths.ts";
 
 const PROJ = "/proj";
 
@@ -85,4 +85,64 @@ test("no match returns empty", () => {
 
 test("a path not in the index does not resolve", () => {
   assert.deepEqual(parsePaths("src/missing.ts", PROJ, new Set(["/proj/src/foo.ts"])), []);
+});
+
+// --- parseUnresolvedCandidates: disk-fallback candidates for paths the index
+//     doesn't know about (just-created or gitignored files). ---
+
+test("unresolved relative path becomes a root-relative disk candidate", () => {
+  const r = parseUnresolvedCandidates("docs/new.md", PROJ, new Set());
+  assert.equal(r.length, 1);
+  assert.equal(r[0].resolved, "/proj/docs/new.md");
+  assert.equal(r[0].candidates.length, 1);
+  assert.equal(r[0].startCol, 0);
+});
+
+test("unresolved absolute path is kept verbatim", () => {
+  const r = parseUnresolvedCandidates("/proj/docs/new.md", PROJ, new Set());
+  assert.equal(r.length, 1);
+  assert.equal(r[0].resolved, "/proj/docs/new.md");
+});
+
+test("an indexed path produces no unresolved candidate", () => {
+  const r = parseUnresolvedCandidates("src/foo.ts", PROJ, new Set(["/proj/src/foo.ts"]));
+  assert.deepEqual(r, []);
+});
+
+test("parsePaths and parseUnresolvedCandidates split the same line", () => {
+  // Bare filenames (no slash) are matched individually, unlike slashed paths
+  // which the space-in-segment regex can glue together. foo.ts is indexed,
+  // bar.ts is not.
+  const index = new Set(["/proj/foo.ts"]);
+  const line = "edit foo.ts and bar.ts";
+  assert.equal(parsePaths(line, PROJ, index).length, 1);
+  const u = parseUnresolvedCandidates(line, PROJ, index);
+  assert.equal(u.length, 1);
+  assert.equal(u[0].resolved, "/proj/bar.ts");
+});
+
+test("leading-word trim applies to unresolved candidates", () => {
+  const line = "Created docs/new.md";
+  const r = parseUnresolvedCandidates(line, PROJ, new Set());
+  assert.equal(r.length, 1);
+  assert.equal(r[0].resolved, "/proj/docs/new.md");
+  assert.equal(line.slice(r[0].startCol, r[0].endCol), "docs/new.md");
+});
+
+test(":line:col suffix is parsed on unresolved candidates", () => {
+  const r = parseUnresolvedCandidates("docs/new.md:10:3", PROJ, new Set());
+  assert.equal(r.length, 1);
+  assert.equal(r[0].resolved, "/proj/docs/new.md");
+  assert.equal(r[0].line, 10);
+  assert.equal(r[0].col, 3);
+});
+
+test("bare filename not in the index becomes a root-level disk candidate", () => {
+  const r = parseUnresolvedCandidates("see notes.md here", PROJ, new Set());
+  assert.equal(r.length, 1);
+  assert.equal(r[0].resolved, "/proj/notes.md");
+});
+
+test("no path-like text yields no unresolved candidates", () => {
+  assert.deepEqual(parseUnresolvedCandidates("nothing path-like here", PROJ, new Set()), []);
 });

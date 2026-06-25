@@ -77,15 +77,24 @@ function stripLeadingWords(pathStr: string): string {
   return tokens.slice(firstSlash).join(" ");
 }
 
-export function parsePaths(
+/** Single scan of a line, splitting matches into those that resolve against the
+ *  file index (`resolved`) and syntactically-valid paths that do NOT
+ *  (`unresolved`). The latter carry a concrete absolute path in `resolved` for
+ *  a downstream on-disk existence check (relative -> root + path, absolute as
+ *  is). The `resolved` list is identical to what the old single-pass parser
+ *  produced — callers depending on index-only behaviour are unaffected. */
+function scanLine(
   lineText: string,
-  projectPath: string,
+  root: string,
   fileIndex: Set<string>,
-): ParsedPath[] {
-  const results: ParsedPath[] = [];
-  const root = projectPath.endsWith("/") ? projectPath : projectPath + "/";
+): { resolved: ParsedPath[]; unresolved: ParsedPath[] } {
+  const resolvedResults: ParsedPath[] = [];
+  const unresolvedResults: ParsedPath[] = [];
 
-  // Track matched character ranges to avoid overlapping bare-filename matches
+  // Track matched character ranges to avoid overlapping bare-filename matches.
+  // Only resolved (index) paths cover ranges — matching the original parser, and
+  // safe because the bare-filename regex's `(?<![\/\w])` lookbehind already
+  // prevents it matching inside any slashed path.
   const coveredRanges: [number, number][] = [];
 
   let match: RegExpExecArray | null;
@@ -100,31 +109,49 @@ export function parsePaths(
     let startCol = match.index;
     const endCol = match.index + match[0].length;
 
+    // Concrete path + start column for the disk-fallback candidate, applying the
+    // same leading-word trim used for the index retry below.
+    let candidatePath = rawPath;
+    let candidateStart = startCol;
+
     // If the full capture didn't resolve, it may have a leading prose word glued
     // on (e.g. "Reading src/foo.ts"). Retry on the trimmed path and shift the
     // link's start column to the real path so the underline excludes the word.
     if (!resolved) {
       const trimmed = stripLeadingWords(rawPath);
       if (trimmed !== rawPath) {
+        const rawOffset = match[0].indexOf(rawPath);
+        const adjStart =
+          match.index + (rawOffset < 0 ? 0 : rawOffset) + (rawPath.length - trimmed.length);
+        candidatePath = trimmed;
+        candidateStart = adjStart;
         const retry = resolveAgainstIndex(trimmed, root, fileIndex);
         if (retry.resolved) {
           resolved = retry.resolved;
           candidates = retry.candidates;
-          const rawOffset = match[0].indexOf(rawPath);
-          startCol =
-            match.index + (rawOffset < 0 ? 0 : rawOffset) + (rawPath.length - trimmed.length);
+          startCol = adjStart;
         }
       }
     }
 
     if (resolved) {
       coveredRanges.push([startCol, endCol]);
-      results.push({
+      resolvedResults.push({
         resolved,
         candidates: candidates.length > 0 ? candidates : [resolved],
         line: lineNum,
         col: colNum,
         startCol,
+        endCol,
+      });
+    } else {
+      const abs = candidatePath.startsWith("/") ? candidatePath : root + candidatePath;
+      unresolvedResults.push({
+        resolved: abs,
+        candidates: [abs],
+        line: lineNum,
+        col: colNum,
+        startCol: candidateStart,
         endCol,
       });
     }
@@ -137,7 +164,7 @@ export function parsePaths(
     const start = match.index;
     const end = start + match[0].length;
 
-    // Skip if overlapping with an already-matched path
+    // Skip if overlapping with an already-matched (resolved) path
     if (coveredRanges.some(([s, e]) => start < e && end > s)) continue;
 
     const filename = match[1];
@@ -146,9 +173,19 @@ export function parsePaths(
 
     const candidates = findByFilename(filename, fileIndex);
     if (candidates.length > 0) {
-      results.push({
+      resolvedResults.push({
         resolved: candidates[0],
         candidates,
+        line: lineNum,
+        col: colNum,
+        startCol: start,
+        endCol: end,
+      });
+    } else {
+      const abs = root + filename;
+      unresolvedResults.push({
+        resolved: abs,
+        candidates: [abs],
         line: lineNum,
         col: colNum,
         startCol: start,
@@ -157,5 +194,30 @@ export function parsePaths(
     }
   }
 
-  return results;
+  return { resolved: resolvedResults, unresolved: unresolvedResults };
+}
+
+function rootOf(projectPath: string): string {
+  return projectPath.endsWith("/") ? projectPath : projectPath + "/";
+}
+
+/** Paths in the line that resolve against the file index. */
+export function parsePaths(
+  lineText: string,
+  projectPath: string,
+  fileIndex: Set<string>,
+): ParsedPath[] {
+  return scanLine(lineText, rootOf(projectPath), fileIndex).resolved;
+}
+
+/** Syntactically-valid paths in the line that do NOT resolve against the file
+ *  index. Each carries a concrete absolute path (`resolved`) for the caller to
+ *  verify on disk — the basis for making just-created or gitignored files (which
+ *  the index excludes) clickable. */
+export function parseUnresolvedCandidates(
+  lineText: string,
+  projectPath: string,
+  fileIndex: Set<string>,
+): ParsedPath[] {
+  return scanLine(lineText, rootOf(projectPath), fileIndex).unresolved;
 }
