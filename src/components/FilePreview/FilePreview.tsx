@@ -3,6 +3,7 @@ import { readFile, readFileBase64, getFileDiffStat, revealInFinder, writeFile } 
 import { normalizeExternalUrl, openExternalUrl } from "../../lib/externalLinks";
 import { sanitizeHtml } from "../../lib/sanitize";
 import { isEditableMarkdownFile, isMarkdownFile, renderMarkdown } from "../../lib/markdownRenderer";
+import { getMimeTypeFromPath, resolveMarkdownImageCandidates } from "../../lib/localMarkdownAssets";
 import { highlightWithHljs } from "../../lib/hljs";
 import { useAppStore } from "../../store/appStore";
 import { useGitStatus } from "../../hooks/useGitStatus";
@@ -46,24 +47,6 @@ function getFileCategory(filePath: string): FileCategory {
   if (IMAGE_EXTS.has(ext)) return "image";
   if (NATIVE_EXTS.has(ext)) return "native";
   return "text";
-}
-
-const MIME_MAP: Record<string, string> = {
-  png: "image/png",
-  jpg: "image/jpeg",
-  jpeg: "image/jpeg",
-  gif: "image/gif",
-  svg: "image/svg+xml",
-  webp: "image/webp",
-  bmp: "image/bmp",
-  ico: "image/x-icon",
-  tiff: "image/tiff",
-  tif: "image/tiff",
-};
-
-function getMimeType(filePath: string): string {
-  const ext = filePath.split(".").pop()?.toLowerCase() ?? "";
-  return MIME_MAP[ext] ?? "application/octet-stream";
 }
 
 export default function FilePreview({ filePath, line, initialMode = "preview", onClose }: FilePreviewProps) {
@@ -147,7 +130,7 @@ export default function FilePreview({ filePath, line, initialMode = "preview", o
     } else if (category === "image") {
       readFileBase64(filePath, projectPath)
         .then((b64) => {
-          const mime = getMimeType(filePath);
+          const mime = getMimeTypeFromPath(filePath);
           setImageDataUrl(`data:${mime};base64,${b64}`);
         })
         .catch((err) => setError(String(err)));
@@ -353,6 +336,50 @@ export default function FilePreview({ filePath, line, initialMode = "preview", o
     }
   }, []);
 
+  let renderedMarkdownHtml: string | null = null;
+  if (isMarkdown && content && viewMode === "rendered") {
+    renderedMarkdownHtml = renderMarkdown(content);
+  }
+
+  useEffect(() => {
+    if (viewMode !== "rendered" || !renderedMarkdownHtml || !projectPath || !bodyRef.current) return;
+
+    const previewBody = bodyRef.current;
+    let cancelled = false;
+
+    const resolveImages = async () => {
+      const images = Array.from(previewBody.querySelectorAll<HTMLImageElement>(".md-rendered img[src]"));
+
+      await Promise.all(images.map(async (img) => {
+        const src = img.getAttribute("src");
+        if (!src) return;
+
+        const candidates = resolveMarkdownImageCandidates(src, filePath, projectPath);
+        if (candidates.length === 0) return;
+
+        for (const candidate of candidates) {
+          try {
+            const b64 = await readFileBase64(candidate, projectPath);
+            if (cancelled || !previewBody.contains(img)) return;
+
+            img.dataset.codezillaResolvedSrc = candidate;
+            img.src = `data:${getMimeTypeFromPath(candidate)};base64,${b64}`;
+            return;
+          } catch {
+            // Try the next candidate. Root-relative site assets commonly live
+            // in either /public or the project root depending on framework.
+          }
+        }
+      }));
+    };
+
+    resolveImages();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [filePath, projectPath, renderedMarkdownHtml, viewMode]);
+
   const lang = getLangFromPath(filePath);
 
   // Use hljs for code highlighting — Shiki uses inline style="" attributes
@@ -362,11 +389,6 @@ export default function FilePreview({ filePath, line, initialMode = "preview", o
   if (content && lang) {
     const fallback = highlightWithHljs(content, lang);
     if (fallback) highlightedHtml = sanitizeHtml(fallback);
-  }
-
-  let renderedMarkdownHtml: string | null = null;
-  if (isMarkdown && content && viewMode === "rendered") {
-    renderedMarkdownHtml = renderMarkdown(content);
   }
 
   const isLoading =

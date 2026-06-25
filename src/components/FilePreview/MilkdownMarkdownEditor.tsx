@@ -6,6 +6,7 @@ import { linkTooltip } from "@milkdown/crepe/feature/link-tooltip";
 import { listItem } from "@milkdown/crepe/feature/list-item";
 import { placeholder } from "@milkdown/crepe/feature/placeholder";
 import { table } from "@milkdown/crepe/feature/table";
+import { topBar } from "@milkdown/crepe/feature/top-bar";
 import { toolbar } from "@milkdown/crepe/feature/toolbar";
 import "@milkdown/crepe/theme/common/prosemirror.css";
 import "@milkdown/crepe/theme/common/reset.css";
@@ -15,6 +16,7 @@ import "@milkdown/crepe/theme/common/link-tooltip.css";
 import "@milkdown/crepe/theme/common/list-item.css";
 import "@milkdown/crepe/theme/common/placeholder.css";
 import "@milkdown/crepe/theme/common/table.css";
+import "@milkdown/crepe/theme/common/top-bar.css";
 import "@milkdown/crepe/theme/common/toolbar.css";
 import "@milkdown/crepe/theme/frame-dark.css";
 import "../../styles/milkdownEditor.css";
@@ -68,6 +70,7 @@ const MilkdownMarkdownEditor = forwardRef<
       .addFeature(toolbar)
       .addFeature(codeMirror)
       .addFeature(table)
+      .addFeature(topBar)
       .addFeature(placeholder, {
         text: "Start writing...",
         mode: "doc",

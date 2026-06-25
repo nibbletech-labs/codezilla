@@ -22,7 +22,7 @@
 mod claude;
 mod codex;
 
-use log::info;
+use log::{info, warn};
 use serde::Serialize;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -95,6 +95,9 @@ pub struct UsageInner {
     /// no Claude endpoint calls / Codex disk reads happen for a hidden agent.
     claude_enabled: bool,
     codex_enabled: bool,
+    /// Shared across scheduler generations so React StrictMode/dev remounts do
+    /// not immediately double-hit the Claude endpoint.
+    claude_next_fetch_at: i64,
 }
 
 pub type UsageState = Arc<Mutex<UsageInner>>;
@@ -109,6 +112,7 @@ pub fn new_state() -> UsageState {
         generation: 0,
         claude_enabled: true,
         codex_enabled: true,
+        claude_next_fetch_at: 0,
     }))
 }
 
@@ -127,6 +131,15 @@ const TICK_SECS: u64 = 15;
 /// endpoint is undocumented and 429s aggressively under ~180s, so we poll above
 /// that floor. Primed immediately on start, then every 5 minutes.
 const CLAUDE_REFRESH_SECS: i64 = 300;
+/// How soon to retry after a Claude usage fetch fails. A failed first fetch used
+/// to leave the row unavailable for a full refresh interval.
+const CLAUDE_ERROR_RETRY_SECS: i64 = 30;
+/// 429s mean the endpoint is explicitly telling us to slow down.
+const CLAUDE_RATE_LIMIT_RETRY_SECS: i64 = 180;
+/// Preserve a recent good snapshot through transient endpoint/keychain failures.
+/// After this window, show the error so permanently-broken auth does not hide
+/// behind old numbers forever.
+const ERROR_CACHE_MAX_AGE_SECS: i64 = 60 * 60;
 /// How recent a hidden agent's cached snapshot must be to paint it instantly when
 /// its chart is re-enabled. Deliberately decoupled from the per-agent poll cadence
 /// (Codex ticks every 15s) so a quick off→on reuses the cache for *both* agents;
@@ -138,6 +151,38 @@ fn now_epoch() -> i64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0)
+}
+
+fn claude_next_refresh_secs(fetched: &AgentUsage) -> i64 {
+    if fetched.status == STATUS_ERROR {
+        if fetched
+            .error
+            .as_deref()
+            .map_or(false, |msg| msg.contains("429"))
+        {
+            return CLAUDE_RATE_LIMIT_RETRY_SECS;
+        }
+        CLAUDE_ERROR_RETRY_SECS
+    } else {
+        CLAUDE_REFRESH_SECS
+    }
+}
+
+fn merge_agent_usage(agent: &str, current: &mut AgentUsage, fetched: AgentUsage, now: i64) {
+    if fetched.status == STATUS_ERROR
+        && current.status == STATUS_OK
+        && current
+            .updated_at
+            .map_or(false, |t| now - t <= ERROR_CACHE_MAX_AGE_SECS)
+    {
+        warn!(
+            "usage: {agent} fetch failed, keeping cached value: {}",
+            fetched.error.as_deref().unwrap_or("unknown error")
+        );
+        return;
+    }
+
+    *current = fetched;
 }
 
 /// Epoch seconds of the most recent local midnight, used to bound "today"
@@ -176,26 +221,37 @@ pub fn start_usage_tracking(app: AppHandle, state: tauri::State<'_, UsageState>)
     info!("usage: scheduler starting (gen {})", my_generation);
 
     std::thread::spawn(move || {
-        let mut last_claude_at: i64 = 0;
         loop {
             // Bail if a stop/restart superseded us; read per-agent switches.
-            let (claude_enabled, codex_enabled) = {
-                let inner = match state_arc.lock() {
+            let now = now_epoch();
+            let (claude_enabled, codex_enabled, fetch_claude) = {
+                let mut inner = match state_arc.lock() {
                     Ok(g) => g,
                     Err(_) => break,
                 };
                 if !inner.running || inner.generation != my_generation {
                     break;
                 }
-                (inner.claude_enabled, inner.codex_enabled)
+
+                let fetch_claude = inner.claude_enabled && now >= inner.claude_next_fetch_at;
+                if fetch_claude {
+                    // Reserve the next slot before releasing the lock. If this
+                    // scheduler generation is superseded mid-request, the next
+                    // generation still avoids an immediate duplicate call.
+                    inner.claude_next_fetch_at = now + CLAUDE_ERROR_RETRY_SECS;
+                }
+
+                (inner.claude_enabled, inner.codex_enabled, fetch_claude)
             };
 
             // A disabled agent is skipped entirely — no disk read / endpoint hit.
-            let codex = if codex_enabled { Some(codex::fetch()) } else { None };
+            let codex = if codex_enabled {
+                Some(codex::fetch())
+            } else {
+                None
+            };
 
-            let now = now_epoch();
-            let claude = if claude_enabled && now - last_claude_at >= CLAUDE_REFRESH_SECS {
-                last_claude_at = now;
+            let claude = if claude_enabled && fetch_claude {
                 Some(claude::fetch(&user_agent))
             } else {
                 None
@@ -211,7 +267,8 @@ pub fn start_usage_tracking(app: AppHandle, state: tauri::State<'_, UsageState>)
                     inner.snapshot.codex = c;
                 }
                 if let Some(c) = claude {
-                    inner.snapshot.claude = c;
+                    inner.claude_next_fetch_at = now + claude_next_refresh_secs(&c);
+                    merge_agent_usage("claude", &mut inner.snapshot.claude, c, now);
                 }
                 let _ = app.emit("usage-updated", &inner.snapshot);
             }
@@ -271,6 +328,7 @@ pub fn set_usage_agent_enabled(
             inner.claude_enabled = enabled;
             if enabled && is_stale(&inner.snapshot.claude, REENABLE_CACHE_SECS) {
                 inner.snapshot.claude = AgentUsage::loading();
+                inner.claude_next_fetch_at = 0;
             }
         }
         "codex" => {
@@ -283,4 +341,95 @@ pub fn set_usage_agent_enabled(
     }
     let _ = app.emit("usage-updated", &inner.snapshot);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn usage(status: &str, updated_at: Option<i64>, error: Option<&str>) -> AgentUsage {
+        AgentUsage {
+            status: status.to_string(),
+            updated_at,
+            error: error.map(str::to_string),
+            five_hour_pct: if status == STATUS_OK {
+                Some(25.0)
+            } else {
+                None
+            },
+            weekly_pct: if status == STATUS_OK {
+                Some(50.0)
+            } else {
+                None
+            },
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn keeps_recent_good_snapshot_on_transient_error() {
+        let mut current = usage(STATUS_OK, Some(1_000), None);
+        let fetched = usage(
+            STATUS_ERROR,
+            None,
+            Some("Rate limited by usage endpoint (429)"),
+        );
+
+        merge_agent_usage("claude", &mut current, fetched, 1_030);
+
+        assert_eq!(current.status, STATUS_OK);
+        assert_eq!(current.updated_at, Some(1_000));
+        assert_eq!(current.five_hour_pct, Some(25.0));
+    }
+
+    #[test]
+    fn replaces_loading_snapshot_with_error() {
+        let mut current = usage(STATUS_LOADING, None, None);
+        let fetched = usage(STATUS_ERROR, None, Some("Request failed"));
+
+        merge_agent_usage("claude", &mut current, fetched, 1_030);
+
+        assert_eq!(current.status, STATUS_ERROR);
+        assert_eq!(current.error.as_deref(), Some("Request failed"));
+    }
+
+    #[test]
+    fn stale_good_snapshot_eventually_surfaces_error() {
+        let mut current = usage(STATUS_OK, Some(1_000), None);
+        let fetched = usage(STATUS_ERROR, None, Some("Token rejected"));
+
+        merge_agent_usage(
+            "claude",
+            &mut current,
+            fetched,
+            1_000 + ERROR_CACHE_MAX_AGE_SECS + 1,
+        );
+
+        assert_eq!(current.status, STATUS_ERROR);
+        assert_eq!(current.error.as_deref(), Some("Token rejected"));
+    }
+
+    #[test]
+    fn claude_errors_retry_quickly() {
+        assert_eq!(
+            claude_next_refresh_secs(&usage(STATUS_ERROR, None, Some("Request failed"))),
+            CLAUDE_ERROR_RETRY_SECS,
+        );
+        assert_eq!(
+            claude_next_refresh_secs(&usage(
+                STATUS_ERROR,
+                None,
+                Some("Rate limited by usage endpoint (429)")
+            )),
+            CLAUDE_RATE_LIMIT_RETRY_SECS,
+        );
+        assert_eq!(
+            claude_next_refresh_secs(&usage(STATUS_OK, Some(1_000), None)),
+            CLAUDE_REFRESH_SECS,
+        );
+        assert_eq!(
+            claude_next_refresh_secs(&usage(STATUS_NA, None, Some("Not signed in"))),
+            CLAUDE_REFRESH_SECS,
+        );
+    }
 }

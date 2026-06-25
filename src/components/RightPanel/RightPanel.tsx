@@ -154,12 +154,22 @@ export default function RightPanel() {
   // Keyboard handler: Space toggles preview, arrows navigate
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      const tag = (e.target as HTMLElement)?.tagName;
-      if (tag === "INPUT" || tag === "TEXTAREA") return;
+      const target = e.target as HTMLElement | null;
+      const tag = target?.tagName;
+      const isEditableTarget =
+        tag === "INPUT" ||
+        tag === "TEXTAREA" ||
+        tag === "SELECT" ||
+        Boolean(target?.isContentEditable) ||
+        Boolean(target?.closest("[contenteditable='true'], .milkdown"));
+      if (isEditableTarget) return;
+
+      const activePreview = previewFileRef.current;
+      if (activePreview?.kind === "file" && activePreview.mode === "edit") return;
 
       if (e.key === " ") {
         e.preventDefault();
-        if (previewFileRef.current) {
+        if (activePreview) {
           closePreviewAction();
         } else if (selectedFileRef.current) {
           const entry = visibleEntries.find((e) => e.path === selectedFileRef.current);
