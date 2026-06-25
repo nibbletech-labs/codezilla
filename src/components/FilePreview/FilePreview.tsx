@@ -1,21 +1,26 @@
-import { useEffect, useState, useCallback, useRef } from "react";
-import { open as openUrl } from "@tauri-apps/plugin-shell";
-import { readFile, readFileBase64, getFileDiffStat, revealInFinder } from "../../lib/tauri";
+import { lazy, Suspense, useEffect, useState, useCallback, useRef } from "react";
+import { readFile, readFileBase64, getFileDiffStat, revealInFinder, writeFile } from "../../lib/tauri";
+import { normalizeExternalUrl, openExternalUrl } from "../../lib/externalLinks";
 import { sanitizeHtml } from "../../lib/sanitize";
-import { isMarkdownFile, renderMarkdown } from "../../lib/markdownRenderer";
+import { isEditableMarkdownFile, isMarkdownFile, renderMarkdown } from "../../lib/markdownRenderer";
 import { highlightWithHljs } from "../../lib/hljs";
 import { useAppStore } from "../../store/appStore";
 import { useGitStatus } from "../../hooks/useGitStatus";
+import { resolveProjectRootForPath } from "../../lib/worktree";
 import DiffView from "./DiffView";
+import type { MilkdownMarkdownEditorHandle } from "./MilkdownMarkdownEditor";
+
+const MilkdownMarkdownEditor = lazy(() => import("./MilkdownMarkdownEditor"));
 
 interface FilePreviewProps {
   filePath: string;
   line?: number;
+  initialMode?: "preview" | "edit";
   onClose: () => void;
 }
 
 type FileCategory = "text" | "image" | "native";
-type ViewMode = "file" | "diff" | "rendered";
+type ViewMode = "file" | "diff" | "rendered" | "edit";
 type DiffLayout = "unified" | "side-by-side";
 
 const IMAGE_EXTS = new Set([
@@ -61,14 +66,25 @@ function getMimeType(filePath: string): string {
   return MIME_MAP[ext] ?? "application/octet-stream";
 }
 
-export default function FilePreview({ filePath, line, onClose }: FilePreviewProps) {
+export default function FilePreview({ filePath, line, initialMode = "preview", onClose }: FilePreviewProps) {
   const [content, setContent] = useState<string | null>(null);
   const [imageDataUrl, setImageDataUrl] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const isMarkdown = isMarkdownFile(filePath);
-  const [viewMode, setViewMode] = useState<ViewMode>(isMarkdown ? "rendered" : "file");
+  const canEditMarkdown = isEditableMarkdownFile(filePath);
+  const [viewMode, setViewMode] = useState<ViewMode>(
+    initialMode === "edit" && canEditMarkdown ? "edit" : isMarkdown ? "rendered" : "file",
+  );
   const [diffLayout, setDiffLayout] = useState<DiffLayout>("unified");
+  const [editBaseContent, setEditBaseContent] = useState<string | null>(null);
+  const [editDirty, setEditDirty] = useState(false);
+  const [editError, setEditError] = useState<string | null>(null);
+  const [editMessage, setEditMessage] = useState<string | null>(null);
+  const [isSaving, setIsSaving] = useState(false);
+  const [isReloading, setIsReloading] = useState(false);
+  const [editSessionId, setEditSessionId] = useState(0);
   const bodyRef = useRef<HTMLDivElement>(null);
+  const editorRef = useRef<MilkdownMarkdownEditorHandle>(null);
 
   const fileName = filePath.split("/").pop() ?? filePath;
   const category = getFileCategory(filePath);
@@ -77,7 +93,13 @@ export default function FilePreview({ filePath, line, onClose }: FilePreviewProp
   // reflects the chosen worktree when one is selected.
   const activeProject = useAppStore((s) => s.getActiveProject());
   const selectedEnvPath = useAppStore((s) => s.selectedEnvPath);
-  const projectPath = selectedEnvPath ?? activeProject?.path ?? null;
+  const worktrees = useAppStore((s) => s.worktrees);
+  const projectPath = resolveProjectRootForPath(
+    filePath,
+    activeProject?.path ?? null,
+    selectedEnvPath,
+    worktrees,
+  );
   const gitStatus = useGitStatus(projectPath);
   const fileGitStatus = gitStatus.get(filePath);
   const [fileDiffStat, setFileDiffStat] = useState<[number, number] | null>(null);
@@ -98,8 +120,15 @@ export default function FilePreview({ filePath, line, onClose }: FilePreviewProp
 
   // Reset view mode when file changes
   useEffect(() => {
-    setViewMode(isMarkdown ? "rendered" : "file");
-  }, [filePath, isMarkdown]);
+    setViewMode(initialMode === "edit" && canEditMarkdown ? "edit" : isMarkdown ? "rendered" : "file");
+    setEditBaseContent(null);
+    setEditDirty(false);
+    setEditError(null);
+    setEditMessage(null);
+    setIsSaving(false);
+    setIsReloading(false);
+    setEditSessionId((id) => id + 1);
+  }, [filePath, initialMode, isMarkdown, canEditMarkdown]);
 
   useEffect(() => {
     setContent(null);
@@ -125,6 +154,88 @@ export default function FilePreview({ filePath, line, onClose }: FilePreviewProp
     }
   }, [filePath, category, projectPath]);
 
+  useEffect(() => {
+    if (viewMode !== "edit" || content === null || editBaseContent !== null) return;
+    setEditBaseContent(content);
+    setEditDirty(false);
+    setEditError(null);
+    setEditMessage(null);
+    setEditSessionId((id) => id + 1);
+  }, [viewMode, content, editBaseContent]);
+
+  const enterEditMode = useCallback(() => {
+    if (!canEditMarkdown || content === null) return;
+    setEditBaseContent(content);
+    setEditDirty(false);
+    setEditError(null);
+    setEditMessage(null);
+    setEditSessionId((id) => id + 1);
+    setViewMode("edit");
+  }, [canEditMarkdown, content]);
+
+  const cancelEditMode = useCallback(() => {
+    setEditBaseContent(null);
+    setEditDirty(false);
+    setEditError(null);
+    setEditMessage(null);
+    setViewMode(isMarkdown ? "rendered" : "file");
+  }, [isMarkdown]);
+
+  const reloadEditContent = useCallback(async () => {
+    if (!projectPath) return;
+    setIsReloading(true);
+    setEditError(null);
+    setEditMessage(null);
+    try {
+      const latest = await readFile(filePath, projectPath);
+      setContent(latest);
+      setEditBaseContent(latest);
+      setEditDirty(false);
+      setEditSessionId((id) => id + 1);
+      setEditMessage("Reloaded latest file");
+    } catch (err) {
+      setEditError(String(err));
+    } finally {
+      setIsReloading(false);
+    }
+  }, [filePath, projectPath]);
+
+  const saveEditContent = useCallback(async () => {
+    if (!projectPath || !canEditMarkdown || content === null) return;
+    const baseContent = editBaseContent ?? content;
+    const nextContent = editorRef.current?.getMarkdown() ?? baseContent;
+
+    setIsSaving(true);
+    setEditError(null);
+    setEditMessage(null);
+    try {
+      const diskContent = await readFile(filePath, projectPath);
+      if (diskContent !== baseContent) {
+        setEditError("This file changed on disk. Reload before saving to avoid overwriting newer changes.");
+        return;
+      }
+
+      await writeFile(filePath, projectPath, nextContent);
+      setContent(nextContent);
+      setEditBaseContent(nextContent);
+      setEditDirty(false);
+      setEditMessage("Saved");
+      setViewMode("rendered");
+    } catch (err) {
+      setEditError(String(err));
+    } finally {
+      setIsSaving(false);
+    }
+  }, [canEditMarkdown, content, editBaseContent, filePath, projectPath]);
+
+  const requestClose = useCallback(() => {
+    if (viewMode === "edit" && editDirty) {
+      setEditError("Save or Cancel before closing this editor.");
+      return;
+    }
+    onClose();
+  }, [editDirty, onClose, viewMode]);
+
   // Scroll to target line after content renders
   useEffect(() => {
     if (!line || !bodyRef.current || viewMode !== "file") return;
@@ -144,10 +255,38 @@ export default function FilePreview({ filePath, line, onClose }: FilePreviewProp
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement | null;
+      const tag = target?.tagName;
+      const isTextInput =
+        tag === "INPUT" ||
+        tag === "TEXTAREA" ||
+        tag === "SELECT" ||
+        Boolean(target?.closest("[contenteditable='true'], .milkdown"));
+
+      if (viewMode === "edit") {
+        if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "s") {
+          e.preventDefault();
+          e.stopPropagation();
+          saveEditContent();
+          return;
+        }
+        if (e.key === "Escape") {
+          e.preventDefault();
+          e.stopPropagation();
+          if (editDirty) {
+            setEditError("Save or Cancel before closing this editor.");
+          } else {
+            cancelEditMode();
+          }
+          return;
+        }
+        return;
+      }
+
       if (e.key === "Escape" || e.key === " ") {
         e.preventDefault();
         e.stopPropagation();
-        onClose();
+        requestClose();
         return;
       }
       // Swallow Backspace/Delete so they don't leak through to the terminal behind the preview
@@ -158,8 +297,7 @@ export default function FilePreview({ filePath, line, onClose }: FilePreviewProp
       }
       // D toggles diff view
       if (e.key === "d" || e.key === "D") {
-        const tag = (e.target as HTMLElement)?.tagName;
-        if (tag === "INPUT" || tag === "TEXTAREA") return;
+        if (isTextInput) return;
         e.preventDefault();
         setViewMode((v) => {
           if (v === "diff") return isMarkdown ? "rendered" : "file";
@@ -169,8 +307,7 @@ export default function FilePreview({ filePath, line, onClose }: FilePreviewProp
       }
       // M toggles rendered/raw for markdown files
       if (e.key === "m" || e.key === "M") {
-        const tag = (e.target as HTMLElement)?.tagName;
-        if (tag === "INPUT" || tag === "TEXTAREA") return;
+        if (isTextInput) return;
         if (!isMarkdown) return;
         e.preventDefault();
         setViewMode((v) => (v === "rendered" ? "file" : "rendered"));
@@ -178,8 +315,7 @@ export default function FilePreview({ filePath, line, onClose }: FilePreviewProp
       }
       // S toggles diff layout (only in diff mode)
       if (e.key === "s" || e.key === "S") {
-        const tag = (e.target as HTMLElement)?.tagName;
-        if (tag === "INPUT" || tag === "TEXTAREA") return;
+        if (isTextInput) return;
         e.preventDefault();
         setViewMode((current) => {
           if (current === "diff") {
@@ -193,13 +329,13 @@ export default function FilePreview({ filePath, line, onClose }: FilePreviewProp
     // Use capture phase so we intercept before xterm's handler sends keys to PTY
     window.addEventListener("keydown", handleKeyDown, true);
     return () => window.removeEventListener("keydown", handleKeyDown, true);
-  }, [onClose, isMarkdown]);
+  }, [cancelEditMode, editDirty, isMarkdown, requestClose, saveEditContent, viewMode]);
 
   const handleBackdropClick = useCallback(
     (e: React.MouseEvent) => {
-      if (e.target === e.currentTarget) onClose();
+      if (e.target === e.currentTarget) requestClose();
     },
-    [onClose],
+    [requestClose],
   );
 
   const handleMarkdownClick = useCallback((e: React.MouseEvent) => {
@@ -212,8 +348,8 @@ export default function FilePreview({ filePath, line, onClose }: FilePreviewProp
       // Internal anchor — scroll within the preview body
       const target = bodyRef.current?.querySelector(decodeURIComponent(href));
       if (target) target.scrollIntoView({ behavior: "smooth" });
-    } else if (href.startsWith("http://") || href.startsWith("https://")) {
-      openUrl(href).catch(console.error);
+    } else if (normalizeExternalUrl(href)) {
+      openExternalUrl(href, e);
     }
   }, []);
 
@@ -247,6 +383,45 @@ export default function FilePreview({ filePath, line, onClose }: FilePreviewProp
     }
     if (isLoading) {
       return <div style={styles.loading}>Loading...</div>;
+    }
+
+    if (viewMode === "edit" && canEditMarkdown && content !== null) {
+      const editorContent = editBaseContent ?? content;
+      return (
+        <div style={styles.editorShell}>
+          {(editError || editMessage) && (
+            <div
+              style={{
+                ...styles.editBanner,
+                ...(editError ? styles.editBannerError : styles.editBannerInfo),
+              }}
+            >
+              <span>{editError ?? editMessage}</span>
+              {editError?.includes("changed on disk") && (
+                <button
+                  style={styles.inlineButton}
+                  onClick={reloadEditContent}
+                  disabled={isReloading || isSaving}
+                >
+                  {isReloading ? "Reloading..." : "Reload"}
+                </button>
+              )}
+            </div>
+          )}
+          <Suspense fallback={<div style={styles.loading}>Loading editor...</div>}>
+            <MilkdownMarkdownEditor
+              key={editSessionId}
+              ref={editorRef}
+              value={editorContent}
+              onChange={(markdown) => {
+                setEditDirty(markdown !== editorContent);
+                if (editError && !editError.includes("changed on disk")) setEditError(null);
+                if (editMessage) setEditMessage(null);
+              }}
+            />
+          </Suspense>
+        </div>
+      );
     }
 
     if (viewMode === "rendered" && renderedMarkdownHtml) {
@@ -333,7 +508,11 @@ export default function FilePreview({ filePath, line, onClose }: FilePreviewProp
           </div>
           <div style={styles.headerRight}>
             <span style={styles.hint}>
-              {viewMode === "diff" ? (
+              {viewMode === "edit" ? (
+                <>
+                  {editDirty ? "Unsaved changes" : isSaving ? "Saving..." : "Editing"}
+                </>
+              ) : viewMode === "diff" ? (
                 <>
                   <kbd style={styles.kbd}>D</kbd> File
                   {" "}
@@ -353,6 +532,34 @@ export default function FilePreview({ filePath, line, onClose }: FilePreviewProp
                 </>
               )}
             </span>
+            {viewMode === "edit" ? (
+              <>
+                <button
+                  style={styles.secondaryButton}
+                  onClick={cancelEditMode}
+                  disabled={isSaving || isReloading}
+                >
+                  Cancel
+                </button>
+                <button
+                  style={{
+                    ...styles.primaryButton,
+                    ...(!editDirty || isSaving || isReloading ? styles.primaryButtonDisabled : {}),
+                  }}
+                  onClick={saveEditContent}
+                  disabled={!editDirty || isSaving || isReloading}
+                  title="Save Markdown"
+                >
+                  {isSaving ? "Saving..." : "Save"}
+                </button>
+              </>
+            ) : (
+              canEditMarkdown && content !== null && (
+                <button style={styles.secondaryButton} onClick={enterEditMode}>
+                  Edit
+                </button>
+              )
+            )}
             <button
               style={styles.closeButton}
               onClick={() => projectPath && revealInFinder(filePath, projectPath)}
@@ -362,7 +569,7 @@ export default function FilePreview({ filePath, line, onClose }: FilePreviewProp
                 <path d="M1.5 2A1.5 1.5 0 0 0 0 3.5v9A1.5 1.5 0 0 0 1.5 14h13a1.5 1.5 0 0 0 1.5-1.5V5.5A1.5 1.5 0 0 0 14.5 4H8.21l-1.6-1.6A1.5 1.5 0 0 0 5.55 2H1.5z" />
               </svg>
             </button>
-            <button style={styles.closeButton} onClick={onClose}>
+            <button style={styles.closeButton} onClick={requestClose}>
               &times;
             </button>
           </div>
@@ -504,12 +711,72 @@ const styles = {
     padding: "0 4px",
     lineHeight: 1,
   } as React.CSSProperties,
+  secondaryButton: {
+    background: "var(--bg-hover)",
+    border: "1px solid var(--border-default)",
+    color: "var(--text-primary)",
+    fontSize: "12px",
+    cursor: "pointer",
+    padding: "3px 9px",
+    borderRadius: "4px",
+    lineHeight: "16px",
+  } as React.CSSProperties,
+  primaryButton: {
+    background: "var(--accent)",
+    border: "1px solid var(--accent)",
+    color: "#fff",
+    fontSize: "12px",
+    cursor: "pointer",
+    padding: "3px 10px",
+    borderRadius: "4px",
+    lineHeight: "16px",
+    fontWeight: 600,
+  } as React.CSSProperties,
+  primaryButtonDisabled: {
+    opacity: 0.55,
+    cursor: "default",
+  } as React.CSSProperties,
   body: {
     flex: 1,
     overflowY: "auto" as const,
     overflowX: "hidden" as const,
     padding: 0,
     position: "relative" as const,
+  } as React.CSSProperties,
+  editorShell: {
+    height: "100%",
+    display: "flex",
+    flexDirection: "column" as const,
+    background: "var(--bg-primary)",
+  } as React.CSSProperties,
+  editBanner: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: "12px",
+    padding: "8px 16px",
+    borderBottom: "1px solid var(--border-default)",
+    fontSize: "12px",
+    flexShrink: 0,
+  } as React.CSSProperties,
+  editBannerError: {
+    color: "#f48771",
+    background: "rgba(244, 135, 113, 0.08)",
+  } as React.CSSProperties,
+  editBannerInfo: {
+    color: "var(--text-secondary)",
+    background: "var(--bg-panel)",
+  } as React.CSSProperties,
+  inlineButton: {
+    background: "var(--bg-hover)",
+    border: "1px solid var(--border-default)",
+    color: "var(--text-primary)",
+    fontSize: "12px",
+    cursor: "pointer",
+    padding: "3px 8px",
+    borderRadius: "4px",
+    lineHeight: "16px",
+    flexShrink: 0,
   } as React.CSSProperties,
   mediaContainer: {
     display: "flex",

@@ -2,6 +2,8 @@ import { useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 import { useAppStore } from "../store/appStore";
 import { revealInFinder, openInDefaultApp } from "../lib/tauri";
+import { isEditableMarkdownFile } from "../lib/markdownRenderer";
+import { resolveProjectRootForPath } from "../lib/worktree";
 
 export function FileLinkMenu() {
   const menu = useAppStore((s) => s.fileLinkMenu);
@@ -9,7 +11,8 @@ export function FileLinkMenu() {
   const openPreview = useAppStore((s) => s.openPreview);
   const selectFileInTree = useAppStore((s) => s.selectFileInTree);
   const activeProject = useAppStore((s) => s.getActiveProject());
-  const projectPath = activeProject?.path ?? undefined;
+  const selectedEnvPath = useAppStore((s) => s.selectedEnvPath);
+  const worktrees = useAppStore((s) => s.worktrees);
   const menuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -24,6 +27,12 @@ export function FileLinkMenu() {
   if (!menu) return null;
 
   const { path, position, line } = menu;
+  const projectPath = resolveProjectRootForPath(
+    path,
+    activeProject?.path ?? null,
+    selectedEnvPath,
+    worktrees,
+  ) ?? undefined;
 
   const items = [
     {
@@ -39,6 +48,24 @@ export function FileLinkMenu() {
         closeMenu();
       },
     },
+    ...(isEditableMarkdownFile(path)
+      ? [
+          {
+            label: "Edit",
+            icon: (
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+                <path d="M11.013 1.427a1.75 1.75 0 0 1 2.475 0l1.085 1.085a1.75 1.75 0 0 1 0 2.475l-7.25 7.25a1.75 1.75 0 0 1-.76.44l-3.251.946a.75.75 0 0 1-.933-.933l.946-3.25a1.75 1.75 0 0 1 .44-.761l7.25-7.25Zm1.414 1.061a.25.25 0 0 0-.354 0l-7.25 7.25a.25.25 0 0 0-.063.108l-.558 1.918 1.918-.558a.25.25 0 0 0 .108-.063l7.25-7.25a.25.25 0 0 0 0-.354l-1.051-1.051Z" />
+                <path d="M2.75 3.5a.25.25 0 0 0-.25.25v9.5c0 .138.112.25.25.25h9.5a.25.25 0 0 0 .25-.25V9A.75.75 0 0 1 14 9v4.25A1.75 1.75 0 0 1 12.25 15h-9.5A1.75 1.75 0 0 1 1 13.25v-9.5A1.75 1.75 0 0 1 2.75 2H7a.75.75 0 0 1 0 1.5H2.75Z" />
+              </svg>
+            ),
+            action: () => {
+              selectFileInTree(path);
+              openPreview(path, undefined, "edit");
+              closeMenu();
+            },
+          },
+        ]
+      : []),
     {
       label: "Open",
       icon: (

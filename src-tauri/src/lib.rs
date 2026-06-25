@@ -617,6 +617,7 @@ pub fn run() {
             fs::scan_all_files,
             fs::get_recent_files,
             fs::read_file,
+            fs::write_file,
             fs::read_file_base64,
             fs::preview_file,
             fs::reveal_in_finder,

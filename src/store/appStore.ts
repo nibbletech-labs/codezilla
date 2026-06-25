@@ -49,7 +49,7 @@ interface AppState {
   presetsManagerOpen: boolean;
 
   // Preview / selection actions
-  openPreview: (path: string, line?: number) => void;
+  openPreview: (path: string, line?: number, mode?: "preview" | "edit") => void;
   openCommitPreview: (hash: string) => void;
   closePreview: () => void;
   selectFileInTree: (path: string) => void;
@@ -218,8 +218,8 @@ export const useAppStore = create<AppState>((set, get) => ({
   repoHealth: {},
   repoHealthDismissals: {},
 
-  openPreview: (path, line) => {
-    set({ previewFile: { kind: "file", path, line } });
+  openPreview: (path, line, mode = "preview") => {
+    set({ previewFile: { kind: "file", path, line, mode } });
   },
 
   openCommitPreview: (hash) => {

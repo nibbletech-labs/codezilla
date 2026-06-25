@@ -7,6 +7,11 @@ export function isMarkdownFile(filePath: string): boolean {
   return ext === "md" || ext === "mdx" || ext === "markdown";
 }
 
+export function isEditableMarkdownFile(filePath: string): boolean {
+  const ext = filePath.split(".").pop()?.toLowerCase();
+  return ext === "md";
+}
+
 // Shiki is not used here because its output relies on inline style=""
 // attributes which are blocked by Tauri's CSP nonce policy. hljs uses
 // CSS classes instead, which work with external stylesheets.

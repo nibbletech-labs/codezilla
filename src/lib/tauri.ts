@@ -135,6 +135,10 @@ export function readFile(path: string, projectRoot: string): Promise<string> {
   return invoke("read_file", { path, projectRoot });
 }
 
+export function writeFile(path: string, projectRoot: string, content: string): Promise<void> {
+  return invoke("write_file", { path, projectRoot, content });
+}
+
 export function readFileBase64(path: string, projectRoot: string): Promise<string> {
   return invoke("read_file_base64", { path, projectRoot });
 }

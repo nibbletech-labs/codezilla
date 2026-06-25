@@ -3,6 +3,7 @@ import { html as diff2htmlHtml } from "diff2html";
 import { getGitDiff } from "../../lib/tauri";
 import { sanitizeHtml } from "../../lib/sanitize";
 import { useAppStore } from "../../store/appStore";
+import { resolveProjectRootForPath } from "../../lib/worktree";
 
 interface DiffViewProps {
   filePath: string;
@@ -16,7 +17,13 @@ export default function DiffView({ filePath, layout }: DiffViewProps) {
 
   const activeProject = useAppStore((s) => s.getActiveProject());
   const selectedEnvPath = useAppStore((s) => s.selectedEnvPath);
-  const projectPath = selectedEnvPath ?? activeProject?.path ?? null;
+  const worktrees = useAppStore((s) => s.worktrees);
+  const projectPath = resolveProjectRootForPath(
+    filePath,
+    activeProject?.path ?? null,
+    selectedEnvPath,
+    worktrees,
+  );
 
   useEffect(() => {
     setDiffHtml(null);

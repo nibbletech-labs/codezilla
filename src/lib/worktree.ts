@@ -41,3 +41,25 @@ export function attributeEnv(
   if (projectPath && isPrefix(projectPath, filePath)) return projectPath;
   return null;
 }
+
+export function resolveProjectRootForPath(
+  filePath: string,
+  activeProjectPath: string | null,
+  selectedEnvPath: string | null,
+  worktrees: WorktreeInfo[],
+): string | null {
+  if (!filePath.startsWith("/")) return selectedEnvPath ?? activeProjectPath;
+
+  const candidates = new Set<string>();
+  if (selectedEnvPath) candidates.add(selectedEnvPath);
+  for (const worktree of worktrees) candidates.add(worktree.path);
+  if (activeProjectPath) candidates.add(activeProjectPath);
+
+  return (
+    Array.from(candidates)
+      .filter((candidate) => isPrefix(candidate, filePath))
+      .sort((a, b) => norm(b).length - norm(a).length)[0] ??
+    selectedEnvPath ??
+    activeProjectPath
+  );
+}

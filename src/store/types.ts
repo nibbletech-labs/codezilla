@@ -1,5 +1,5 @@
 export type PreviewTarget =
-  | { kind: "file"; path: string; line?: number }
+  | { kind: "file"; path: string; line?: number; mode?: "preview" | "edit" }
   | { kind: "commit"; hash: string };
 
 export type ThreadType = "claude" | "codex" | "shell";

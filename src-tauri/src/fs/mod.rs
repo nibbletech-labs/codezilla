@@ -206,6 +206,22 @@ pub fn read_file(path: String, project_root: String) -> Result<String, String> {
     })
 }
 
+#[tauri::command]
+pub fn write_file(path: String, project_root: String, content: String) -> Result<(), String> {
+    let file_path = canonicalize_path(&path)?;
+    let canonical_root = canonicalize_path(&project_root)?;
+    validate_within_root(&file_path, &canonical_root)?;
+
+    if !file_path.is_file() {
+        return Err(format!("Not a file: {}", path));
+    }
+
+    std::fs::write(&file_path, content).map_err(|e| {
+        error!("Failed to write file {}: {}", file_path.display(), e);
+        format!("Failed to write file: {}", e)
+    })
+}
+
 const MAX_IMAGE_SIZE: u64 = 50 * 1024 * 1024; // 50 MB
 
 #[tauri::command]
@@ -293,4 +309,75 @@ pub fn open_in_default_app(path: String, project_root: String) -> Result<(), Str
         .map_err(|e| format!("Failed to open file: {}", e))?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::write_file;
+    use std::fs;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn test_root(name: &str) -> std::path::PathBuf {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join(format!("codezilla_fs_{}_{}", name, unique))
+    }
+
+    #[test]
+    fn write_file_writes_inside_project_root() {
+        let root = test_root("inside");
+        fs::create_dir_all(&root).unwrap();
+        let file = root.join("notes.md");
+        fs::write(&file, "before").unwrap();
+
+        write_file(
+            file.to_string_lossy().to_string(),
+            root.to_string_lossy().to_string(),
+            "after".to_string(),
+        )
+        .unwrap();
+
+        assert_eq!(fs::read_to_string(&file).unwrap(), "after");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn write_file_rejects_paths_outside_project_root() {
+        let root = test_root("root");
+        let outside = test_root("outside");
+        fs::create_dir_all(&root).unwrap();
+        fs::create_dir_all(&outside).unwrap();
+        let file = outside.join("notes.md");
+        fs::write(&file, "before").unwrap();
+
+        let err = write_file(
+            file.to_string_lossy().to_string(),
+            root.to_string_lossy().to_string(),
+            "after".to_string(),
+        )
+        .unwrap_err();
+
+        assert!(err.contains("outside project root"));
+        assert_eq!(fs::read_to_string(&file).unwrap(), "before");
+        let _ = fs::remove_dir_all(root);
+        let _ = fs::remove_dir_all(outside);
+    }
+
+    #[test]
+    fn write_file_rejects_directories() {
+        let root = test_root("directory");
+        fs::create_dir_all(&root).unwrap();
+
+        let err = write_file(
+            root.to_string_lossy().to_string(),
+            root.to_string_lossy().to_string(),
+            "after".to_string(),
+        )
+        .unwrap_err();
+
+        assert!(err.contains("Not a file"));
+        let _ = fs::remove_dir_all(root);
+    }
 }

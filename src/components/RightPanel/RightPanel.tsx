@@ -498,6 +498,7 @@ export default function RightPanel() {
             <FilePreview
               filePath={previewFile.path}
               line={previewFile.line}
+              initialMode={previewFile.mode}
               onClose={closePreviewAction}
             />
           ),
