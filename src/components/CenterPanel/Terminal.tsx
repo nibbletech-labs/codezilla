@@ -4,7 +4,6 @@ import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebglAddon } from "@xterm/addon-webgl";
 import { WebLinksAddon } from "@xterm/addon-web-links";
-import { open as openUrl } from "@tauri-apps/plugin-shell";
 import { Channel } from "@tauri-apps/api/core";
 import {
   spawnPty,
@@ -45,6 +44,7 @@ import {
 import { createFilePathLinkProviderForTerminal } from "../../lib/filePathLinkProvider";
 import { createCommitHashLinkProviderForTerminal } from "../../lib/commitHashLinkProvider";
 import { collapseProseWraps } from "../../lib/proseCopy";
+import { openExternalUrl } from "../../lib/externalLinks";
 import { createInitialTranscriptInfo } from "../../store/transcriptTypes";
 import type { RuntimeStateSource } from "../../store/transcriptTypes";
 import { deriveCoreRuntimeStatus } from "../../lib/threadActivityCore.ts";
@@ -1229,17 +1229,22 @@ function createTerminalInstance(
   const palette = isDark ? DARK_PALETTE : LIGHT_PALETTE;
   const dynamicTheme = getTerminalTheme(palette, isDark);
 
+  const openTerminalLink = (event: MouseEvent, uri: string) => {
+    openExternalUrl(uri, event);
+  };
+
   const terminal = new Terminal({
     ...TERMINAL_CONFIG,
     fontSize: storeState.baseFontSize,
     theme: dynamicTheme,
+    linkHandler: {
+      activate: openTerminalLink,
+    },
   });
 
   const fitAddon = new FitAddon();
   terminal.loadAddon(fitAddon);
-  terminal.loadAddon(new WebLinksAddon((_event, uri) => {
-    openUrl(uri);
-  }));
+  terminal.loadAddon(new WebLinksAddon(openTerminalLink));
   terminal.open(container);
 
   // Let key combos with 3+ modifiers pass through to macOS so global

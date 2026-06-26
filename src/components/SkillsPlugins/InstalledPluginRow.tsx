@@ -3,7 +3,7 @@ import type { Installation } from "../../store/skillsPluginsTypes";
 import { styles } from "./styles";
 import { TypeBadge } from "./TypeBadge";
 import { ScopeIcon } from "./ScopeIcon";
-import { open } from "@tauri-apps/plugin-shell";
+import { openExternalUrl } from "../../lib/externalLinks";
 
 export function InstalledPluginRow({
   plugin,
@@ -67,7 +67,7 @@ export function InstalledPluginRow({
               style={{ cursor: "pointer", textDecoration: "none" }}
               onMouseEnter={(e) => (e.currentTarget.style.textDecoration = "underline")}
               onMouseLeave={(e) => (e.currentTarget.style.textDecoration = "none")}
-              onClick={() => open(sourceUrl)}
+              onClick={(e) => openExternalUrl(sourceUrl, e)}
             >
               {sourceLabel}
             </span>

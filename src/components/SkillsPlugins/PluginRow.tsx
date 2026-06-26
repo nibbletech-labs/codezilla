@@ -1,6 +1,6 @@
 import { useState } from "react";
-import { open } from "@tauri-apps/plugin-shell";
 import type { ScannedItem } from "../../store/skillsPluginsTypes";
+import { openExternalUrl } from "../../lib/externalLinks";
 import { styles } from "./styles";
 import { TypeBadge } from "./TypeBadge";
 import { ScopeIcon } from "./ScopeIcon";
@@ -50,8 +50,7 @@ export function PluginRow({
                   onMouseEnter={(e) => (e.currentTarget.style.textDecoration = "underline")}
                   onMouseLeave={(e) => (e.currentTarget.style.textDecoration = "none")}
                   onClick={(e) => {
-                    e.stopPropagation();
-                    open(repoUrl);
+                    openExternalUrl(repoUrl, e);
                   }}
                 >
                   {plugin.marketplace}
