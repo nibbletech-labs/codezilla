@@ -36,7 +36,10 @@ import PresetsManager from "../LaunchPresets/PresetsManager";
 import BetaFeaturesManager from "../BetaFeaturesManager";
 import {
   clearActivity,
+  clearInterrupt,
+  isInterrupted,
   isOutputActivitySuppressed,
+  recordInterrupt,
   recordOutput,
   suppressOutputActivity,
 } from "../../lib/activityTracker";
@@ -397,6 +400,36 @@ function applyPtyActivityUpdate(
 const FILE_WRITE_TOOLS = new Set(["Write", "Edit", "NotebookEdit", "MultiEdit"]);
 
 /**
+ * Settle a hook-authoritative thread to idle in response to a local Ctrl+C
+ * interrupt. Heed gets no hook event for an interrupt, so without this it can
+ * leave the thread frozen at "working" and the spinner never stops. Returns true
+ * iff it actually flipped a working thread — the caller uses that to arm the
+ * interrupt marker only for genuine interrupts (a Ctrl+C at an idle prompt, or on
+ * a PTY-only thread, is a no-op and must not synthesize a "done" badge). Mirrors
+ * the working -> idle turn-boundary badge handling in `applyHeedThreadState`.
+ */
+function markInterruptedThreadIdle(threadId: string): boolean {
+  const state = useAppStore.getState();
+  const current = state.transcriptInfo[threadId];
+  if (
+    !current
+    || current.hookAuthoritative !== true
+    || current.activityState !== "working"
+  ) {
+    return false;
+  }
+  const showBadge = current.badge !== "done" && current.badgeDismissedAt == null;
+  state.updateTranscriptInfo(threadId, {
+    ...current,
+    activityState: "idle",
+    badge: showBadge ? "done" : current.badge,
+    badgeSince: showBadge ? Date.now() : current.badgeSince,
+    lastEventTime: Date.now(),
+  });
+  return true;
+}
+
+/**
  * Apply a Heed state-file snapshot to per-thread transcript info. Heed runs the
  * activity reducer in its daemon, so this is a thin mapper: copy the
  * pre-computed fields onto `transcriptInfo` (matched to a Codezilla thread by
@@ -436,9 +469,22 @@ function applyHeedThreadState(payloads: HeedThreadPayload[]): void {
     // Heed can leave activity frozen at its last value (e.g. killed mid-turn), so
     // coerce gone -> idle here rather than trusting the stale field.
     const isGone = p.liveness === "gone";
-    const activityState: ThreadActivityState = isGone
+    let activityState: ThreadActivityState = isGone
       ? "idle"
       : (p.activityState as ThreadActivityState);
+
+    // Interrupt override: a local Ctrl+C cancelled the turn, but Heed has no hook
+    // signal for an interrupt and can keep reporting "working". Coerce that stale
+    // "working" to idle while the marker is armed. Any non-working state from Heed
+    // means it has caught up on its own, so disarm and pass it through. The marker
+    // is otherwise disarmed by the user's next submitted prompt (see onData).
+    if (!isGone && isInterrupted(thread.id)) {
+      if (activityState === "working") {
+        activityState = "idle";
+      } else {
+        clearInterrupt(thread.id);
+      }
+    }
 
     // Surface the "done" badge on a clean working -> idle transition, and reset
     // it when a new turn starts working again. The reset also clears
@@ -1697,11 +1743,24 @@ function createTerminalInstance(
 
   // Wire input
   terminal.onData((data: string) => {
-    if (data.includes("\x03")) lastCtrlCAt = Date.now();
+    if (data.includes("\x03")) {
+      lastCtrlCAt = Date.now();
+      // A Ctrl+C interrupt is local to Codezilla — it never reaches Heed as a
+      // hook event, so a hook-authoritative thread can stay frozen at "working".
+      // Settle it to idle now (stopping the spinner immediately), and arm the
+      // interrupt marker only if it was genuinely working so the Heed mapper keeps
+      // ignoring stale "working" snapshots until the user starts a fresh turn.
+      if (markInterruptedThreadIdle(thread.id)) {
+        recordInterrupt(thread.id);
+      }
+    }
     const submittedInput = data.includes("\r") || data.includes("\n");
     if (submittedInput) {
       // User-entered text should count as activity even before PTY output arrives.
       useAppStore.getState().touchThread(thread.id);
+      // A submitted prompt starts a fresh turn — disarm any interrupt marker so
+      // Heed's "working" is honored again for the new turn.
+      clearInterrupt(thread.id);
     }
     if (!data.includes("\r") && !data.includes("\n")) {
       inputEchoSuppressUntil = Date.now() + INPUT_ECHO_SUPPRESS_MS;
