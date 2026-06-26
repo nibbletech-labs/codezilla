@@ -2,7 +2,6 @@ import { useState } from "react";
 import type { AgentUsage, UsageAgent } from "../../store/usageTypes";
 import UsageGauge from "./UsageGauge";
 import {
-  formatResetCountdown,
   windowElapsedPct,
   FIVE_HOUR_SECONDS,
   WEEKLY_SECONDS,
@@ -28,7 +27,6 @@ export default function UsageRow({ agent, usage, onClick }: UsageRowProps) {
   const [hovered, setHovered] = useState(false);
   const status = usage?.status ?? "loading";
   const isOk = status === "ok";
-  const reset = isOk ? formatResetCountdown(usage?.five_hour_resets_at ?? null) : "";
 
   // Compact right-hand text for non-ok states.
   const statusLabel =
@@ -48,9 +46,7 @@ export default function UsageRow({ agent, usage, onClick }: UsageRowProps) {
     >
       <div style={styles.topline}>
         <span style={styles.name}>{AGENT_LABELS[agent]}</span>
-        {isOk
-          ? reset && <span style={styles.reset}>5h resets {reset}</span>
-          : statusLabel && <span style={styles.reset}>{statusLabel}</span>}
+        {!isOk && statusLabel && <span style={styles.reset}>{statusLabel}</span>}
       </div>
       {isOk && (
         <div style={styles.gauges}>
