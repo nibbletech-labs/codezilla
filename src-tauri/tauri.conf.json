@@ -2,7 +2,7 @@
   "$schema": "https://raw.githubusercontent.com/nicedoc/schemas-tauri-v2/refs/heads/main/tauri.conf.json.schema.json",
   "productName": "Codezilla",
   "identifier": "com.nibbletech.codezilla",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1420",

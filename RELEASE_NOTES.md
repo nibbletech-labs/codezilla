@@ -1,3 +1,20 @@
+## v0.4.2 — Markdown Editing and File Tree Fixes
+
+This point release adds in-app Markdown editing and tightens a few rough edges around previews, terminal links, usage display, and local-only folders in the file tree.
+
+**New Features**
+
+- **Rich Markdown editing** — Markdown files can now be edited in Codezilla's preview panel with a Milkdown-powered editor.
+
+**Fixes**
+
+- **Markdown previews load local assets more reliably** — relative images and local references in Markdown previews resolve through Codezilla's asset handling instead of breaking or leaking file paths.
+- **Ignored local folders stay visible in All files** — the All file tree now shows local workspace projections such as Haven's `Haven/` folder even when they are listed in `.git/info/exclude`, while still hiding `.git` and OS junk files.
+- **More terminal paths are clickable** — file links now work for newly-created files and files hidden from Git by ignore rules.
+- **Interrupted threads settle correctly** — stopping a running command with Ctrl+C no longer leaves the thread spinning as if it were still working.
+- **Usage sidebar is quieter** — the 5-hour reset countdown text is removed from the compact usage row.
+- **External links route through the shared opener** — links from terminals and the skills/plugins UI now use the same external-link path.
+
 ## v0.4.1 — Worktree Fixes
 
 A follow-up to worktree support: thread-to-worktree tracking now works across projects, uncommitted-change counts stay steady, plus fixes to previews, terminal links, and Codex sessions.
