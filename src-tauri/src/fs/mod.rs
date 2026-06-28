@@ -57,7 +57,12 @@ pub fn read_directory(path: String, project_root: String) -> Result<Vec<FileEntr
     let mut entries: Vec<FileEntry> = WalkBuilder::new(root)
         .max_depth(Some(1))
         .hidden(false)
-        .git_ignore(false) // show all files; git status colours indicate ignored/untracked
+        // The All-files tree is a filesystem view. Git status colours still
+        // indicate ignored/untracked files, but ignore rules must not hide them.
+        .ignore(false)
+        .git_ignore(false)
+        .git_global(false)
+        .git_exclude(false)
         .filter_entry(|entry| {
             let name = entry.file_name();
             if name == ".git" || is_os_hidden(name) {
