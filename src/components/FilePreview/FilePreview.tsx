@@ -2,16 +2,17 @@ import { lazy, Suspense, useEffect, useState, useCallback, useRef } from "react"
 import { readFile, readFileBase64, getFileDiffStat, revealInFinder, writeFile } from "../../lib/tauri";
 import { normalizeExternalUrl, openExternalUrl } from "../../lib/externalLinks";
 import { sanitizeHtml } from "../../lib/sanitize";
-import { isEditableMarkdownFile, isMarkdownFile, renderMarkdown } from "../../lib/markdownRenderer";
+import { isMarkdownFile, renderMarkdown } from "../../lib/markdownRenderer";
 import { getMimeTypeFromPath, resolveMarkdownImageCandidates } from "../../lib/localMarkdownAssets";
 import { highlightWithHljs } from "../../lib/hljs";
 import { useAppStore } from "../../store/appStore";
+import { useResolvedAppearance } from "../../hooks/useResolvedAppearance";
 import { useGitStatus } from "../../hooks/useGitStatus";
 import { resolveProjectRootForPath } from "../../lib/worktree";
 import DiffView from "./DiffView";
-import type { MilkdownMarkdownEditorHandle } from "./MilkdownMarkdownEditor";
+import type { MarkdownSourceEditorHandle } from "./MarkdownSourceEditor";
 
-const MilkdownMarkdownEditor = lazy(() => import("./MilkdownMarkdownEditor"));
+const MarkdownSourceEditor = lazy(() => import("./MarkdownSourceEditor"));
 
 interface FilePreviewProps {
   filePath: string;
@@ -21,7 +22,9 @@ interface FilePreviewProps {
 }
 
 type FileCategory = "text" | "image" | "native";
-type ViewMode = "file" | "diff" | "rendered" | "edit";
+// "rendered" = read-only rich-text preview; "source" = editable raw markdown;
+// "file" = read-only highlighted source for non-markdown text files.
+type ViewMode = "file" | "diff" | "rendered" | "source";
 type DiffLayout = "unified" | "side-by-side";
 
 const IMAGE_EXTS = new Set([
@@ -54,20 +57,28 @@ export default function FilePreview({ filePath, line, initialMode = "preview", o
   const [imageDataUrl, setImageDataUrl] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const isMarkdown = isMarkdownFile(filePath);
-  const canEditMarkdown = isEditableMarkdownFile(filePath);
+  // All markdown files are editable now — raw source editing has none of the
+  // round-trip fragility that previously limited editing to plain `.md`.
+  const canEditMarkdown = isMarkdown;
   const [viewMode, setViewMode] = useState<ViewMode>(
-    initialMode === "edit" && canEditMarkdown ? "edit" : isMarkdown ? "rendered" : "file",
+    initialMode === "edit" && canEditMarkdown ? "source" : isMarkdown ? "rendered" : "file",
   );
   const [diffLayout, setDiffLayout] = useState<DiffLayout>("unified");
-  const [editBaseContent, setEditBaseContent] = useState<string | null>(null);
+  // Live editor buffer. Null until the source view has been opened for this
+  // file; once set it is the source of truth for the rendered preview too.
+  const [draft, setDraft] = useState<string | null>(null);
   const [editDirty, setEditDirty] = useState(false);
   const [editError, setEditError] = useState<string | null>(null);
   const [editMessage, setEditMessage] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [isReloading, setIsReloading] = useState(false);
   const [editSessionId, setEditSessionId] = useState(0);
+  // When set, a switch/close was requested while there were unsaved edits; the
+  // pending destination is held until the user resolves the prompt.
+  const [pendingExit, setPendingExit] = useState<{ kind: "close" } | { kind: "view"; target: ViewMode } | null>(null);
   const bodyRef = useRef<HTMLDivElement>(null);
-  const editorRef = useRef<MilkdownMarkdownEditorHandle>(null);
+  const editorRef = useRef<MarkdownSourceEditorHandle>(null);
+  const appearance = useResolvedAppearance();
 
   const fileName = filePath.split("/").pop() ?? filePath;
   const category = getFileCategory(filePath);
@@ -87,30 +98,42 @@ export default function FilePreview({ filePath, line, initialMode = "preview", o
   const fileGitStatus = gitStatus.get(filePath);
   const [fileDiffStat, setFileDiffStat] = useState<[number, number] | null>(null);
 
-  // Fetch per-file diff stats
+  // Fetch the per-file +/- diff stat. Exposed as a callback so a save can
+  // refresh it immediately rather than waiting on the next git-status poll
+  // (which never fires the effect below when the status stays "Modified").
+  const refreshDiffStat = useCallback(async () => {
+    if (!projectPath) {
+      setFileDiffStat(null);
+      return;
+    }
+    const root = projectPath.endsWith("/") ? projectPath : projectPath + "/";
+    const relPath = filePath.startsWith(root) ? filePath.slice(root.length) : filePath;
+    try {
+      const stat = await getFileDiffStat(projectPath, relPath);
+      setFileDiffStat(stat[0] > 0 || stat[1] > 0 ? stat : null);
+    } catch {
+      // Leave the previous value in place on a transient git failure.
+    }
+  }, [filePath, projectPath]);
+
+  // Fetch per-file diff stats when the file or its git status changes
   useEffect(() => {
     setFileDiffStat(null);
     if (!projectPath || !fileGitStatus) return;
-    // Get relative path for git
-    const root = projectPath.endsWith("/") ? projectPath : projectPath + "/";
-    const relPath = filePath.startsWith(root) ? filePath.slice(root.length) : filePath;
-    getFileDiffStat(projectPath, relPath)
-      .then((stat) => {
-        if (stat[0] > 0 || stat[1] > 0) setFileDiffStat(stat);
-      })
-      .catch(() => {});
-  }, [filePath, projectPath, fileGitStatus]);
+    refreshDiffStat();
+  }, [filePath, projectPath, fileGitStatus, refreshDiffStat]);
 
   // Reset view mode when file changes
   useEffect(() => {
-    setViewMode(initialMode === "edit" && canEditMarkdown ? "edit" : isMarkdown ? "rendered" : "file");
-    setEditBaseContent(null);
+    setViewMode(initialMode === "edit" && canEditMarkdown ? "source" : isMarkdown ? "rendered" : "file");
+    setDraft(null);
     setEditDirty(false);
     setEditError(null);
     setEditMessage(null);
     setIsSaving(false);
     setIsReloading(false);
     setEditSessionId((id) => id + 1);
+    setPendingExit(null);
   }, [filePath, initialMode, isMarkdown, canEditMarkdown]);
 
   useEffect(() => {
@@ -137,32 +160,49 @@ export default function FilePreview({ filePath, line, initialMode = "preview", o
     }
   }, [filePath, category, projectPath]);
 
+  // Seed the editor buffer the first time the source view opens for a file.
   useEffect(() => {
-    if (viewMode !== "edit" || content === null || editBaseContent !== null) return;
-    setEditBaseContent(content);
+    if (viewMode !== "source" || content === null || draft !== null) return;
+    setDraft(content);
     setEditDirty(false);
     setEditError(null);
     setEditMessage(null);
     setEditSessionId((id) => id + 1);
-  }, [viewMode, content, editBaseContent]);
+  }, [viewMode, content, draft]);
 
-  const enterEditMode = useCallback(() => {
+  const openSourceView = useCallback(() => {
     if (!canEditMarkdown || content === null) return;
-    setEditBaseContent(content);
-    setEditDirty(false);
+    setDraft((d) => (d === null ? content : d));
     setEditError(null);
     setEditMessage(null);
-    setEditSessionId((id) => id + 1);
-    setViewMode("edit");
+    setViewMode("source");
   }, [canEditMarkdown, content]);
 
-  const cancelEditMode = useCallback(() => {
-    setEditBaseContent(null);
+  // Throw away unsaved edits, resetting the buffer to the saved content. Stays
+  // in the current view.
+  const revertEdits = useCallback(() => {
+    if (content === null) return;
+    setDraft(content);
     setEditDirty(false);
     setEditError(null);
     setEditMessage(null);
-    setViewMode(isMarkdown ? "rendered" : "file");
-  }, [isMarkdown]);
+    setEditSessionId((id) => id + 1);
+  }, [content]);
+
+  // Free movement between views. Switching out of the source view keeps the
+  // draft intact (the rendered view previews it live), so no prompt is needed
+  // here — unsaved work is only ever at risk when the file itself closes.
+  const switchView = useCallback(
+    (target: ViewMode) => {
+      if (target === viewMode) return;
+      if (target === "source") {
+        openSourceView();
+        return;
+      }
+      setViewMode(target);
+    },
+    [viewMode, openSourceView],
+  );
 
   const reloadEditContent = useCallback(async () => {
     if (!projectPath) return;
@@ -172,7 +212,7 @@ export default function FilePreview({ filePath, line, initialMode = "preview", o
     try {
       const latest = await readFile(filePath, projectPath);
       setContent(latest);
-      setEditBaseContent(latest);
+      setDraft(latest);
       setEditDirty(false);
       setEditSessionId((id) => id + 1);
       setEditMessage("Reloaded latest file");
@@ -183,41 +223,69 @@ export default function FilePreview({ filePath, line, initialMode = "preview", o
     }
   }, [filePath, projectPath]);
 
-  const saveEditContent = useCallback(async () => {
-    if (!projectPath || !canEditMarkdown || content === null) return;
-    const baseContent = editBaseContent ?? content;
-    const nextContent = editorRef.current?.getMarkdown() ?? baseContent;
+  const saveEditContent = useCallback(async (): Promise<boolean> => {
+    if (!projectPath || !canEditMarkdown || content === null) return false;
+    const nextContent = editorRef.current?.getMarkdown() ?? draft ?? content;
 
     setIsSaving(true);
     setEditError(null);
     setEditMessage(null);
     try {
       const diskContent = await readFile(filePath, projectPath);
-      if (diskContent !== baseContent) {
+      if (diskContent !== content) {
         setEditError("This file changed on disk. Reload before saving to avoid overwriting newer changes.");
-        return;
+        return false;
       }
 
       await writeFile(filePath, projectPath, nextContent);
       setContent(nextContent);
-      setEditBaseContent(nextContent);
+      setDraft(nextContent);
       setEditDirty(false);
-      setEditMessage("Saved");
-      setViewMode("rendered");
+      // No "Saved" banner — it would insert a row and shift the editor down.
+      // The Save button already reflects the saved state.
+      // Reflect the new line counts immediately instead of waiting on the poll.
+      refreshDiffStat();
+      return true;
     } catch (err) {
       setEditError(String(err));
+      return false;
     } finally {
       setIsSaving(false);
     }
-  }, [canEditMarkdown, content, editBaseContent, filePath, projectPath]);
+  }, [canEditMarkdown, content, draft, filePath, projectPath, refreshDiffStat]);
 
   const requestClose = useCallback(() => {
-    if (viewMode === "edit" && editDirty) {
-      setEditError("Save or Cancel before closing this editor.");
+    if (editDirty) {
+      setPendingExit({ kind: "close" });
       return;
     }
     onClose();
-  }, [editDirty, onClose, viewMode]);
+  }, [editDirty, onClose]);
+
+  // Resolve the unsaved-changes prompt. "save" persists then continues to the
+  // pending destination; "discard" drops the draft and continues.
+  const resolvePendingExit = useCallback(
+    async (choice: "save" | "discard") => {
+      const exit = pendingExit;
+      if (!exit) return;
+      if (choice === "save") {
+        const ok = await saveEditContent();
+        if (!ok) return; // keep the prompt open so the error is visible
+      }
+      setPendingExit(null);
+      if (choice === "discard") {
+        setDraft(content);
+        setEditDirty(false);
+        setEditSessionId((id) => id + 1);
+      }
+      if (exit.kind === "close") {
+        onClose();
+      } else {
+        setViewMode(exit.target);
+      }
+    },
+    [pendingExit, saveEditContent, content, onClose],
+  );
 
   // Scroll to target line after content renders
   useEffect(() => {
@@ -244,9 +312,9 @@ export default function FilePreview({ filePath, line, initialMode = "preview", o
         tag === "INPUT" ||
         tag === "TEXTAREA" ||
         tag === "SELECT" ||
-        Boolean(target?.closest("[contenteditable='true'], .milkdown"));
+        Boolean(target?.closest("[contenteditable='true'], .cm-editor"));
 
-      if (viewMode === "edit") {
+      if (viewMode === "source") {
         if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "s") {
           e.preventDefault();
           e.stopPropagation();
@@ -256,11 +324,7 @@ export default function FilePreview({ filePath, line, initialMode = "preview", o
         if (e.key === "Escape") {
           e.preventDefault();
           e.stopPropagation();
-          if (editDirty) {
-            setEditError("Save or Cancel before closing this editor.");
-          } else {
-            cancelEditMode();
-          }
+          requestClose();
           return;
         }
         return;
@@ -282,18 +346,15 @@ export default function FilePreview({ filePath, line, initialMode = "preview", o
       if (e.key === "d" || e.key === "D") {
         if (isTextInput) return;
         e.preventDefault();
-        setViewMode((v) => {
-          if (v === "diff") return isMarkdown ? "rendered" : "file";
-          return "diff";
-        });
+        switchView(viewMode === "diff" ? (isMarkdown ? "rendered" : "file") : "diff");
         return;
       }
-      // M toggles rendered/raw for markdown files
+      // M toggles between the rendered preview and the editable source view
       if (e.key === "m" || e.key === "M") {
         if (isTextInput) return;
         if (!isMarkdown) return;
         e.preventDefault();
-        setViewMode((v) => (v === "rendered" ? "file" : "rendered"));
+        switchView(viewMode === "rendered" ? "source" : "rendered");
         return;
       }
       // S toggles diff layout (only in diff mode)
@@ -312,7 +373,7 @@ export default function FilePreview({ filePath, line, initialMode = "preview", o
     // Use capture phase so we intercept before xterm's handler sends keys to PTY
     window.addEventListener("keydown", handleKeyDown, true);
     return () => window.removeEventListener("keydown", handleKeyDown, true);
-  }, [cancelEditMode, editDirty, isMarkdown, requestClose, saveEditContent, viewMode]);
+  }, [switchView, isMarkdown, requestClose, saveEditContent, viewMode]);
 
   const handleBackdropClick = useCallback(
     (e: React.MouseEvent) => {
@@ -336,9 +397,12 @@ export default function FilePreview({ filePath, line, initialMode = "preview", o
     }
   }, []);
 
+  // Preview the live buffer when it exists so unsaved edits show in the
+  // rendered view; fall back to the saved content otherwise.
+  const previewSource = draft ?? content;
   let renderedMarkdownHtml: string | null = null;
-  if (isMarkdown && content && viewMode === "rendered") {
-    renderedMarkdownHtml = renderMarkdown(content);
+  if (isMarkdown && previewSource && viewMode === "rendered") {
+    renderedMarkdownHtml = renderMarkdown(previewSource);
   }
 
   useEffect(() => {
@@ -407,8 +471,8 @@ export default function FilePreview({ filePath, line, initialMode = "preview", o
       return <div style={styles.loading}>Loading...</div>;
     }
 
-    if (viewMode === "edit" && canEditMarkdown && content !== null) {
-      const editorContent = editBaseContent ?? content;
+    if (viewMode === "source" && canEditMarkdown && content !== null) {
+      const editorContent = draft ?? content;
       return (
         <div style={styles.editorShell}>
           {(editError || editMessage) && (
@@ -431,15 +495,18 @@ export default function FilePreview({ filePath, line, initialMode = "preview", o
             </div>
           )}
           <Suspense fallback={<div style={styles.loading}>Loading editor...</div>}>
-            <MilkdownMarkdownEditor
+            <MarkdownSourceEditor
               key={editSessionId}
               ref={editorRef}
               value={editorContent}
+              appearance={appearance}
               onChange={(markdown) => {
-                setEditDirty(markdown !== editorContent);
+                setDraft(markdown);
+                setEditDirty(markdown !== content);
                 if (editError && !editError.includes("changed on disk")) setEditError(null);
                 if (editMessage) setEditMessage(null);
               }}
+              onSave={saveEditContent}
             />
           </Suspense>
         </div>
@@ -492,6 +559,14 @@ export default function FilePreview({ filePath, line, initialMode = "preview", o
             : { label: fileGitStatus, color: "#ccc" }
     : null;
 
+  // The always-available view switcher. Markdown gets all three surfaces;
+  // other text files get source + diff; binary/media gets none.
+  const viewSegments: Array<[ViewMode, string]> = isMarkdown
+    ? [["rendered", "Rendered"], ["source", "Markdown"], ["diff", "Diff"]]
+    : category === "text"
+      ? [["file", "File"], ["diff", "Diff"]]
+      : [];
+
   return (
     <div style={styles.backdrop} onClick={handleBackdropClick}>
       <style>{`
@@ -528,59 +603,60 @@ export default function FilePreview({ filePath, line, initialMode = "preview", o
               </span>
             )}
           </div>
+          <div style={styles.headerCenter}>
+            {viewSegments.length > 0 && (
+              <div style={styles.segmented} role="tablist">
+                {viewSegments.map(([mode, label]) => {
+                  const active = viewMode === mode;
+                  const showDirty = mode === "source" && editDirty;
+                  return (
+                    <button
+                      key={mode}
+                      role="tab"
+                      aria-selected={active}
+                      style={{
+                        ...styles.segmentedBtn,
+                        ...(active ? styles.segmentedBtnActive : {}),
+                      }}
+                      onClick={() => switchView(mode)}
+                    >
+                      {label}
+                      {showDirty && <span style={styles.dirtyDot} aria-label="unsaved changes" />}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
           <div style={styles.headerRight}>
-            <span style={styles.hint}>
-              {viewMode === "edit" ? (
-                <>
-                  {editDirty ? "Unsaved changes" : isSaving ? "Saving..." : "Editing"}
-                </>
-              ) : viewMode === "diff" ? (
-                <>
-                  <kbd style={styles.kbd}>D</kbd> File
-                  {" "}
-                  <kbd style={styles.kbd}>S</kbd> {diffLayout === "unified" ? "Split" : "Unified"}
-                  {isMarkdown && <>{" "}<kbd style={styles.kbd}>M</kbd> Rendered</>}
-                </>
-              ) : viewMode === "rendered" ? (
-                <>
-                  <kbd style={styles.kbd}>M</kbd> Raw
-                  {" "}
-                  <kbd style={styles.kbd}>D</kbd> Diff
-                </>
-              ) : (
-                <>
-                  <kbd style={styles.kbd}>D</kbd> Diff
-                  {isMarkdown && <>{" "}<kbd style={styles.kbd}>M</kbd> Rendered</>}
-                </>
-              )}
-            </span>
-            {viewMode === "edit" ? (
+            {viewMode === "diff" && (
+              <span style={styles.hint}>
+                <kbd style={styles.kbd}>S</kbd> {diffLayout === "unified" ? "Split" : "Unified"}
+              </span>
+            )}
+            {viewMode === "source" && (
               <>
-                <button
-                  style={styles.secondaryButton}
-                  onClick={cancelEditMode}
-                  disabled={isSaving || isReloading}
-                >
-                  Cancel
-                </button>
+                {editDirty && (
+                  <button
+                    style={styles.secondaryButton}
+                    onClick={revertEdits}
+                    disabled={isSaving || isReloading}
+                  >
+                    Revert
+                  </button>
+                )}
                 <button
                   style={{
                     ...styles.primaryButton,
                     ...(!editDirty || isSaving || isReloading ? styles.primaryButtonDisabled : {}),
                   }}
-                  onClick={saveEditContent}
+                  onClick={() => saveEditContent()}
                   disabled={!editDirty || isSaving || isReloading}
                   title="Save Markdown"
                 >
-                  {isSaving ? "Saving..." : "Save"}
+                  {isSaving ? "Saving..." : editDirty ? "Save" : "Saved"}
                 </button>
               </>
-            ) : (
-              canEditMarkdown && content !== null && (
-                <button style={styles.secondaryButton} onClick={enterEditMode}>
-                  Edit
-                </button>
-              )
             )}
             <button
               style={styles.closeButton}
@@ -598,6 +674,47 @@ export default function FilePreview({ filePath, line, initialMode = "preview", o
         </div>
 
         <div ref={bodyRef} style={styles.body}>{renderBody()}</div>
+
+        {pendingExit && (
+          <div style={styles.confirmOverlay} onClick={() => setPendingExit(null)}>
+            <div style={styles.confirmCard} onClick={(e) => e.stopPropagation()}>
+              <div style={styles.confirmTitle}>Unsaved changes</div>
+              <div style={styles.confirmBody}>
+                You have unsaved edits to <strong>{fileName}</strong>.
+                {pendingExit.kind === "close"
+                  ? " Save them before closing?"
+                  : " Save them before switching view?"}
+              </div>
+              {editError && <div style={styles.confirmError}>{editError}</div>}
+              <div style={styles.confirmButtons}>
+                <button
+                  style={styles.secondaryButton}
+                  onClick={() => setPendingExit(null)}
+                  disabled={isSaving}
+                >
+                  Cancel
+                </button>
+                <button
+                  style={styles.secondaryButton}
+                  onClick={() => resolvePendingExit("discard")}
+                  disabled={isSaving}
+                >
+                  Discard
+                </button>
+                <button
+                  style={{
+                    ...styles.primaryButton,
+                    ...(isSaving ? styles.primaryButtonDisabled : {}),
+                  }}
+                  onClick={() => resolvePendingExit("save")}
+                  disabled={isSaving}
+                >
+                  {isSaving ? "Saving..." : "Save"}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -672,9 +789,10 @@ const styles = {
     animation: "preview-modal-in 0.15s ease-out",
   } as React.CSSProperties,
   header: {
-    display: "flex",
+    display: "grid",
+    gridTemplateColumns: "1fr auto 1fr",
     alignItems: "center",
-    justifyContent: "space-between",
+    gap: "12px",
     padding: "6px 16px",
     borderBottom: "1px solid var(--border-default)",
     backgroundColor: "var(--bg-panel)",
@@ -687,11 +805,17 @@ const styles = {
     overflow: "hidden",
     minWidth: 0,
   } as React.CSSProperties,
+  headerCenter: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+  } as React.CSSProperties,
   headerRight: {
     display: "flex",
     alignItems: "center",
+    justifyContent: "flex-end",
     gap: "12px",
-    flexShrink: 0,
+    minWidth: 0,
   } as React.CSSProperties,
   fileName: {
     color: "var(--text-primary)",
@@ -746,7 +870,7 @@ const styles = {
   primaryButton: {
     background: "var(--accent)",
     border: "1px solid var(--accent)",
-    color: "#fff",
+    color: "var(--text-on-accent)",
     fontSize: "12px",
     cursor: "pointer",
     padding: "3px 10px",
@@ -757,6 +881,83 @@ const styles = {
   primaryButtonDisabled: {
     opacity: 0.55,
     cursor: "default",
+  } as React.CSSProperties,
+  segmented: {
+    display: "inline-flex",
+    background: "var(--bg-panel)",
+    border: "1px solid var(--border-default)",
+    borderRadius: "6px",
+    padding: "2px",
+    gap: "2px",
+  } as React.CSSProperties,
+  segmentedBtn: {
+    position: "relative" as const,
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
+    minWidth: "74px",
+    background: "transparent",
+    border: "none",
+    color: "var(--text-secondary)",
+    fontSize: "12px",
+    cursor: "pointer",
+    padding: "3px 14px",
+    borderRadius: "4px",
+    lineHeight: "16px",
+  } as React.CSSProperties,
+  segmentedBtnActive: {
+    background: "var(--bg-hover)",
+    color: "var(--text-primary)",
+  } as React.CSSProperties,
+  dirtyDot: {
+    position: "absolute" as const,
+    right: "6px",
+    top: "50%",
+    transform: "translateY(-50%)",
+    width: "6px",
+    height: "6px",
+    borderRadius: "50%",
+    background: "var(--accent)",
+    display: "inline-block",
+  } as React.CSSProperties,
+  confirmOverlay: {
+    position: "absolute" as const,
+    inset: 0,
+    background: "rgba(0, 0, 0, 0.45)",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    zIndex: 10,
+  } as React.CSSProperties,
+  confirmCard: {
+    width: "min(420px, 80%)",
+    background: "var(--bg-elevated)",
+    border: "1px solid var(--border-default)",
+    borderRadius: "10px",
+    padding: "20px",
+    boxShadow: "0 12px 40px rgba(0, 0, 0, 0.4)",
+  } as React.CSSProperties,
+  confirmTitle: {
+    fontSize: "14px",
+    fontWeight: 600,
+    color: "var(--text-primary)",
+    marginBottom: "8px",
+  } as React.CSSProperties,
+  confirmBody: {
+    fontSize: "13px",
+    color: "var(--text-secondary)",
+    lineHeight: 1.5,
+  } as React.CSSProperties,
+  confirmError: {
+    fontSize: "12px",
+    color: "#f48771",
+    marginTop: "10px",
+  } as React.CSSProperties,
+  confirmButtons: {
+    display: "flex",
+    justifyContent: "flex-end",
+    gap: "8px",
+    marginTop: "18px",
   } as React.CSSProperties,
   body: {
     flex: 1,

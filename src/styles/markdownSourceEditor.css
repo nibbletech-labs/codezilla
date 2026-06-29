@@ -1,0 +1,53 @@
+/* Raw markdown source editor (CodeMirror 6), themed to the app's variables. */
+.codezilla-md-source {
+  height: 100%;
+  overflow: hidden;
+  background: var(--bg-primary);
+}
+
+.codezilla-md-source .cm-editor {
+  height: 100%;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+}
+
+.codezilla-md-source .cm-editor.cm-focused {
+  outline: none;
+}
+
+.codezilla-md-source .cm-scroller {
+  overflow: auto;
+}
+
+.codezilla-md-source .cm-gutters {
+  background: var(--bg-primary);
+  color: var(--text-secondary);
+  border-right: 1px solid var(--border-default);
+}
+
+.codezilla-md-source .cm-activeLineGutter {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.codezilla-md-source .cm-activeLine {
+  background: color-mix(in srgb, var(--bg-hover) 45%, transparent);
+}
+
+.codezilla-md-source .cm-cursor {
+  border-left-color: var(--text-primary);
+}
+
+.codezilla-md-source .cm-selectionBackground,
+.codezilla-md-source .cm-content ::selection {
+  background: color-mix(in srgb, var(--accent) 35%, transparent) !important;
+}
+
+.codezilla-md-source .cm-focused .cm-selectionBackground {
+  background: color-mix(in srgb, var(--accent) 45%, transparent) !important;
+}
+
+.codezilla-md-source .cm-matchingBracket {
+  background: color-mix(in srgb, var(--accent) 30%, transparent);
+  color: inherit !important;
+}

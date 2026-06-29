@@ -184,3 +184,77 @@
 
 .file-preview-markdown .md-rendered details { margin-bottom: 16px; }
 .file-preview-markdown .md-rendered summary { cursor: pointer; font-weight: 600; }
+
+/* Front matter metadata panel (property-list card). */
+.file-preview-markdown .md-rendered .fm-panel {
+  margin: 0 0 26px;
+  padding: 6px 0;
+  border: 1px solid var(--border-default);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--bg-panel) 55%, transparent);
+  font-size: 13.5px;
+  line-height: 1.5;
+}
+
+.file-preview-markdown .md-rendered .fm-row {
+  display: grid;
+  grid-template-columns: minmax(120px, 200px) 1fr;
+  gap: 16px;
+  padding: 6px 16px;
+  align-items: baseline;
+}
+
+.file-preview-markdown .md-rendered .fm-row + .fm-row {
+  border-top: 1px solid color-mix(in srgb, var(--border-default) 55%, transparent);
+}
+
+.file-preview-markdown .md-rendered .fm-key {
+  color: var(--text-secondary);
+  font-weight: 500;
+  word-break: break-word;
+}
+
+.file-preview-markdown .md-rendered .fm-value {
+  color: var(--text-primary);
+  word-break: break-word;
+  white-space: pre-wrap;
+}
+
+/* Nested objects/arrays: key sits above an indented group of child rows. */
+.file-preview-markdown .md-rendered .fm-row-nested {
+  display: block;
+  padding-bottom: 8px;
+}
+
+.file-preview-markdown .md-rendered .fm-row-nested > .fm-key {
+  display: block;
+  margin-bottom: 4px;
+}
+
+.file-preview-markdown .md-rendered .fm-nested {
+  margin-left: 14px;
+  border-left: 2px solid color-mix(in srgb, var(--border-default) 70%, transparent);
+}
+
+.file-preview-markdown .md-rendered .fm-nested .fm-row {
+  padding-top: 4px;
+  padding-bottom: 4px;
+}
+
+.file-preview-markdown .md-rendered .fm-nested .fm-row:first-child { padding-top: 0; }
+.file-preview-markdown .md-rendered .fm-nested > .fm-value {
+  padding: 2px 16px;
+}
+
+/* Fallback when the YAML can't be parsed — show the raw block, not a rule sandwich. */
+.file-preview-markdown .md-rendered .fm-panel-raw {
+  padding: 0;
+  background: var(--bg-panel);
+}
+
+.file-preview-markdown .md-rendered .fm-raw {
+  margin: 0;
+  background: none;
+  font-size: 12.5px;
+  color: var(--text-secondary);
+}

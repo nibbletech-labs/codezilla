@@ -161,7 +161,7 @@ export default function RightPanel() {
         tag === "TEXTAREA" ||
         tag === "SELECT" ||
         Boolean(target?.isContentEditable) ||
-        Boolean(target?.closest("[contenteditable='true'], .milkdown"));
+        Boolean(target?.closest("[contenteditable='true'], .cm-editor"));
       if (isEditableTarget) return;
 
       const activePreview = previewFileRef.current;
