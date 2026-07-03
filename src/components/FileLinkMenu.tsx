@@ -1,7 +1,7 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { useAppStore } from "../store/appStore";
-import { revealInFinder, openInDefaultApp } from "../lib/tauri";
+import { revealInFinder, openInDefaultApp, writePty } from "../lib/tauri";
 import { isEditableMarkdownFile } from "../lib/markdownRenderer";
 import { resolveProjectRootForPath } from "../lib/worktree";
 
@@ -11,6 +11,7 @@ export function FileLinkMenu() {
   const openPreview = useAppStore((s) => s.openPreview);
   const selectFileInTree = useAppStore((s) => s.selectFileInTree);
   const activeProject = useAppStore((s) => s.getActiveProject());
+  const activeThread = useAppStore((s) => s.getActiveThread());
   const selectedEnvPath = useAppStore((s) => s.selectedEnvPath);
   const worktrees = useAppStore((s) => s.worktrees);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -34,7 +35,24 @@ export function FileLinkMenu() {
     worktrees,
   ) ?? undefined;
 
-  const items = [
+  // Path to send to the terminal: project-relative when we can resolve it,
+  // otherwise the path as-is (terminal links may already be relative).
+  const insertPath =
+    projectPath && path.startsWith(projectPath + "/")
+      ? path.slice(projectPath.length + 1)
+      : path;
+  // "Current terminal" = the active thread, independent of what was clicked.
+  // Only writable while it has a live PTY session.
+  const canInsert = activeThread?.state === "running" && !!activeThread.sessionId;
+
+  type MenuItem = {
+    label: string;
+    icon: ReactNode;
+    action: () => void;
+    disabled?: boolean;
+  };
+
+  const items: MenuItem[] = [
     {
       label: "Preview",
       icon: (
@@ -104,6 +122,23 @@ export function FileLinkMenu() {
         closeMenu();
       },
     },
+    {
+      label: "Insert into terminal",
+      icon: (
+        <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+          <rect x="1" y="2.75" width="14" height="10.5" rx="1.25" />
+          <path d="M4 6l2.25 2L4 10" />
+          <path d="M8.5 10.25H11.5" />
+        </svg>
+      ),
+      disabled: !canInsert,
+      action: () => {
+        if (canInsert && activeThread?.sessionId) {
+          writePty(activeThread.sessionId, insertPath + " ").catch(console.error);
+        }
+        closeMenu();
+      },
+    },
   ];
 
   const menuHeight = items.length * 32 + 8;
@@ -139,16 +174,18 @@ export function FileLinkMenu() {
               gap: "8px",
               padding: "6px 12px",
               fontSize: "var(--font-size)",
-              color: "var(--text-primary)",
-              cursor: "pointer",
+              color: item.disabled ? "var(--text-hint)" : "var(--text-primary)",
+              cursor: item.disabled ? "default" : "pointer",
+              opacity: item.disabled ? 0.5 : 1,
             }}
-            onMouseEnter={(e) =>
-              (e.currentTarget.style.backgroundColor = "var(--bg-hover)")
-            }
+            onMouseEnter={(e) => {
+              if (!item.disabled)
+                e.currentTarget.style.backgroundColor = "var(--bg-hover)";
+            }}
             onMouseLeave={(e) =>
               (e.currentTarget.style.backgroundColor = "transparent")
             }
-            onClick={item.action}
+            onClick={item.disabled ? undefined : item.action}
           >
             {item.icon}
             {item.label}
