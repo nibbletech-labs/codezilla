@@ -25,6 +25,37 @@ fn is_os_hidden(name: &OsStr) -> bool {
     HIDDEN_NAMES.iter().any(|&h| s == h) || s.starts_with("._")
 }
 
+/// Dependency / build-output directories that are almost always huge and never
+/// worth indexing. The file-search index deliberately ignores .gitignore (so
+/// gitignored-but-real files like a raw image or a local .env are findable), so
+/// we skip these by name instead — otherwise a single scan pulls in tens of
+/// thousands of node_modules / target artifacts.
+const BUILD_DIR_NAMES: &[&str] = &[
+    "node_modules",
+    "target",
+    "dist",
+    "build",
+    "out",
+    ".next",
+    ".nuxt",
+    ".svelte-kit",
+    ".turbo",
+    ".cache",
+    ".venv",
+    "venv",
+    "__pycache__",
+    ".mypy_cache",
+    ".pytest_cache",
+    ".gradle",
+    "Pods",
+    "DerivedData",
+];
+
+fn is_build_dir(name: &OsStr) -> bool {
+    let s = name.to_string_lossy();
+    BUILD_DIR_NAMES.iter().any(|&d| s == d)
+}
+
 pub fn canonicalize_path(raw: &str) -> Result<std::path::PathBuf, String> {
     std::path::Path::new(raw)
         .canonicalize()
@@ -182,8 +213,13 @@ pub fn get_recent_files(path: String, project_root: String, limit: usize) -> Res
     Ok(entries)
 }
 
-/// Recursively scan all files in a directory, respecting .gitignore.
-/// Returns just the absolute paths (no directories) for building a file index.
+/// Recursively scan all files in a directory for the file-search index.
+///
+/// This intentionally does NOT respect .gitignore — gitignored-but-real files
+/// (a raw image, a local .env, a locally-excluded folder) must be findable.
+/// Instead it skips only `.git`, OS junk, and well-known build/dependency
+/// directories (see `BUILD_DIR_NAMES`) so the index stays small and fast.
+/// Returns just the absolute paths (no directories).
 #[tauri::command]
 pub fn scan_all_files(path: String, project_root: String) -> Result<Vec<String>, String> {
     let canonical = resolve_in_root(&path, &project_root)?;
@@ -194,9 +230,18 @@ pub fn scan_all_files(path: String, project_root: String) -> Result<Vec<String>,
 
     let files: Vec<String> = WalkBuilder::new(root)
         .hidden(false)
+        // Filesystem view, not a git view: don't let ignore rules hide files.
+        .ignore(false)
+        .git_ignore(false)
+        .git_global(false)
+        .git_exclude(false)
         .filter_entry(|entry| {
             let name = entry.file_name();
-            name != ".git" && !is_os_hidden(name)
+            if name == ".git" || is_os_hidden(name) {
+                return false;
+            }
+            // Prune build/dependency dirs so we never descend into them.
+            !(entry.file_type().is_some_and(|t| t.is_dir()) && is_build_dir(name))
         })
         .build()
         .filter_map(|result| result.ok())
