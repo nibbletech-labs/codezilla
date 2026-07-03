@@ -4,6 +4,7 @@ use ignore::WalkBuilder;
 use log::error;
 use serde::Serialize;
 use std::ffi::OsStr;
+use std::path::{Component, Path, PathBuf};
 
 /// macOS system files that should never appear in the file explorer.
 const HIDDEN_NAMES: &[&str] = &[
@@ -37,6 +38,42 @@ pub fn validate_within_root(path: &std::path::Path, root: &std::path::Path) -> R
     Ok(())
 }
 
+/// Resolve `.` and `..` components purely lexically, WITHOUT touching the
+/// filesystem or following symlinks. `..` is clamped at the path root so it can
+/// never climb above it.
+///
+/// This is deliberately different from `canonicalize_path`, which follows
+/// symlinks to their real target. Using the lexical form for the containment
+/// check lets us honour symlinks the user has intentionally placed inside their
+/// project (e.g. Haven roadmap/backlog files synced in) while still rejecting
+/// `..` traversal escapes.
+fn normalize_lexical(path: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for comp in path.components() {
+        match comp {
+            Component::ParentDir => {
+                // Only pop a real path segment; never climb past root/prefix.
+                if matches!(out.components().next_back(), Some(Component::Normal(_))) {
+                    out.pop();
+                }
+            }
+            Component::CurDir => {}
+            other => out.push(other.as_os_str()),
+        }
+    }
+    out
+}
+
+/// Validate that `path` is lexically contained within `project_root` (symlinks
+/// are NOT followed) and return the normalized path to use for the actual IO.
+/// The OS still resolves any symlink when the returned path is opened.
+fn resolve_in_root(path: &str, project_root: &str) -> Result<PathBuf, String> {
+    let norm_path = normalize_lexical(Path::new(path));
+    let norm_root = normalize_lexical(Path::new(project_root));
+    validate_within_root(&norm_path, &norm_root)?;
+    Ok(norm_path)
+}
+
 #[derive(Serialize, Clone)]
 pub struct FileEntry {
     pub name: String,
@@ -46,9 +83,7 @@ pub struct FileEntry {
 
 #[tauri::command]
 pub fn read_directory(path: String, project_root: String) -> Result<Vec<FileEntry>, String> {
-    let canonical = canonicalize_path(&path)?;
-    let canonical_root = canonicalize_path(&project_root)?;
-    validate_within_root(&canonical, &canonical_root)?;
+    let canonical = resolve_in_root(&path, &project_root)?;
     let root = canonical.as_path();
     if !root.is_dir() {
         return Err(format!("Not a directory: {}", path));
@@ -108,9 +143,7 @@ pub struct RecentFileEntry {
 /// Respects .gitignore. Limited to `limit` entries.
 #[tauri::command]
 pub fn get_recent_files(path: String, project_root: String, limit: usize) -> Result<Vec<RecentFileEntry>, String> {
-    let canonical = canonicalize_path(&path)?;
-    let canonical_root = canonicalize_path(&project_root)?;
-    validate_within_root(&canonical, &canonical_root)?;
+    let canonical = resolve_in_root(&path, &project_root)?;
     let root = canonical.as_path();
     if !root.is_dir() {
         return Err(format!("Not a directory: {}", path));
@@ -153,9 +186,7 @@ pub fn get_recent_files(path: String, project_root: String, limit: usize) -> Res
 /// Returns just the absolute paths (no directories) for building a file index.
 #[tauri::command]
 pub fn scan_all_files(path: String, project_root: String) -> Result<Vec<String>, String> {
-    let canonical = canonicalize_path(&path)?;
-    let canonical_root = canonicalize_path(&project_root)?;
-    validate_within_root(&canonical, &canonical_root)?;
+    let canonical = resolve_in_root(&path, &project_root)?;
     let root = canonical.as_path();
     if !root.is_dir() {
         return Err(format!("Not a directory: {}", path));
@@ -185,9 +216,7 @@ const MAX_FILE_SIZE: u64 = 512 * 1024;
 
 #[tauri::command]
 pub fn read_file(path: String, project_root: String) -> Result<String, String> {
-    let file_path = canonicalize_path(&path)?;
-    let canonical_root = canonicalize_path(&project_root)?;
-    validate_within_root(&file_path, &canonical_root)?;
+    let file_path = resolve_in_root(&path, &project_root)?;
 
     if !file_path.is_file() {
         return Err(format!("Not a file: {}", path));
@@ -213,9 +242,7 @@ pub fn read_file(path: String, project_root: String) -> Result<String, String> {
 
 #[tauri::command]
 pub fn write_file(path: String, project_root: String, content: String) -> Result<(), String> {
-    let file_path = canonicalize_path(&path)?;
-    let canonical_root = canonicalize_path(&project_root)?;
-    validate_within_root(&file_path, &canonical_root)?;
+    let file_path = resolve_in_root(&path, &project_root)?;
 
     if !file_path.is_file() {
         return Err(format!("Not a file: {}", path));
@@ -231,9 +258,7 @@ const MAX_IMAGE_SIZE: u64 = 50 * 1024 * 1024; // 50 MB
 
 #[tauri::command]
 pub fn read_file_base64(path: String, project_root: String) -> Result<String, String> {
-    let file_path = canonicalize_path(&path)?;
-    let canonical_root = canonicalize_path(&project_root)?;
-    validate_within_root(&file_path, &canonical_root)?;
+    let file_path = resolve_in_root(&path, &project_root)?;
 
     if !file_path.is_file() {
         return Err(format!("Not a file: {}", path));
@@ -259,9 +284,7 @@ pub fn read_file_base64(path: String, project_root: String) -> Result<String, St
 
 #[tauri::command]
 pub fn preview_file(path: String, project_root: String) -> Result<(), String> {
-    let file_path = canonicalize_path(&path)?;
-    let canonical_root = canonicalize_path(&project_root)?;
-    validate_within_root(&file_path, &canonical_root)?;
+    let file_path = resolve_in_root(&path, &project_root)?;
 
     if !file_path.exists() {
         return Err(format!("File not found: {}", path));
@@ -281,9 +304,7 @@ pub fn preview_file(path: String, project_root: String) -> Result<(), String> {
 
 #[tauri::command]
 pub fn reveal_in_finder(path: String, project_root: String) -> Result<(), String> {
-    let file_path = canonicalize_path(&path)?;
-    let canonical_root = canonicalize_path(&project_root)?;
-    validate_within_root(&file_path, &canonical_root)?;
+    let file_path = resolve_in_root(&path, &project_root)?;
 
     if !file_path.exists() {
         return Err(format!("Path not found: {}", path));
@@ -300,9 +321,7 @@ pub fn reveal_in_finder(path: String, project_root: String) -> Result<(), String
 
 #[tauri::command]
 pub fn open_in_default_app(path: String, project_root: String) -> Result<(), String> {
-    let file_path = canonicalize_path(&path)?;
-    let canonical_root = canonicalize_path(&project_root)?;
-    validate_within_root(&file_path, &canonical_root)?;
+    let file_path = resolve_in_root(&path, &project_root)?;
 
     if !file_path.exists() {
         return Err(format!("Path not found: {}", path));
@@ -383,6 +402,52 @@ mod tests {
         .unwrap_err();
 
         assert!(err.contains("Not a file"));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    // A symlink placed inside the project that points outside it (e.g. a Haven
+    // file synced in) must be writable through — the IO follows the link to the
+    // real target even though the target lives outside the root.
+    #[test]
+    fn write_file_follows_symlink_inside_root() {
+        use std::os::unix::fs::symlink;
+        let root = test_root("symroot");
+        let outside = test_root("symtarget");
+        fs::create_dir_all(&root).unwrap();
+        fs::create_dir_all(&outside).unwrap();
+        let target = outside.join("backlog.md");
+        fs::write(&target, "before").unwrap();
+        let link = root.join("backlog.md");
+        symlink(&target, &link).unwrap();
+
+        write_file(
+            link.to_string_lossy().to_string(),
+            root.to_string_lossy().to_string(),
+            "after".to_string(),
+        )
+        .unwrap();
+
+        assert_eq!(fs::read_to_string(&target).unwrap(), "after");
+        let _ = fs::remove_dir_all(root);
+        let _ = fs::remove_dir_all(outside);
+    }
+
+    // `..` traversal must still be rejected — the lexical check collapses the
+    // parent-dir components and sees the path leave the root.
+    #[test]
+    fn write_file_rejects_parent_dir_traversal() {
+        let root = test_root("traversal");
+        fs::create_dir_all(&root).unwrap();
+
+        let escape = format!("{}/../../etc/passwd", root.to_string_lossy());
+        let err = write_file(
+            escape,
+            root.to_string_lossy().to_string(),
+            "after".to_string(),
+        )
+        .unwrap_err();
+
+        assert!(err.contains("outside project root"));
         let _ = fs::remove_dir_all(root);
     }
 }
