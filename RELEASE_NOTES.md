@@ -1,3 +1,19 @@
+## v0.4.3 — Live Worktree Stats and Raw Markdown Editing
+
+Worktree change counts now update live wherever the work happens, the usage chart stays fresh without tripping rate limits, and Markdown editing switches to a raw-source editor with a cleaner rendered view.
+
+**New Features**
+
+- **Raw Markdown editing** — the Markdown editor is now a syntax-highlighted source editor that follows the app's light/dark appearance, with a pinned Rendered / Markdown / Diff switcher and lossless movement between views. Front matter renders as a tidy metadata card, and every Markdown file type is editable, not just `.md`.
+- **Insert into terminal** — right-click any file and insert its path straight into the active thread's terminal.
+
+**Fixes**
+
+- **Worktree change counts update live everywhere** — every worktree's +/− now refreshes the moment files change, whichever environment is selected, including Codex and manually created worktrees. An agent's edits show up within a second, new worktrees appear as soon as they're used, and counts no longer freeze on a stale mid-burst value.
+- **Snappier, lighter git refreshes** — file changes in one worktree no longer trigger git work for all the others, and heavy agent sessions cause far less background churn.
+- **Usage chart stays fresh without hitting rate limits** — the chart refreshes right after a Claude turn finishes, slows right down when you're idle, respects the endpoint's back-off instructions, and running two copies of the app no longer doubles the traffic. When the numbers are genuinely behind, the row now says "as of Xm" instead of pretending to be current.
+- **File search finds ignored files** — real-but-gitignored files (a local `.env`, a raw image, a locally excluded folder) now appear in search results.
+
 ## v0.4.2 — Markdown Editing and File Tree Fixes
 
 This point release adds in-app Markdown editing and tightens a few rough edges around previews, terminal links, usage display, and local-only folders in the file tree.
