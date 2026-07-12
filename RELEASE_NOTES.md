@@ -13,6 +13,7 @@ Worktree change counts now update live wherever the work happens, the usage char
 - **Snappier, lighter git refreshes** — file changes in one worktree no longer trigger git work for all the others, and heavy agent sessions cause far less background churn.
 - **Usage chart stays fresh without hitting rate limits** — the chart refreshes right after a Claude turn finishes, slows right down when you're idle, respects the endpoint's back-off instructions, and running two copies of the app no longer doubles the traffic. When the numbers are genuinely behind, the row now says "as of Xm" instead of pretending to be current.
 - **File search finds ignored files** — real-but-gitignored files (a local `.env`, a raw image, a locally excluded folder) now appear in search results.
+- **Codex gauges show the right limit windows** — the 5-hour and weekly gauges now identify Codex's limit windows by their actual length, fixing a "5h resets in 5d" mix-up after OpenAI reshuffled how limits are reported. Codex usage also now admits its age when Codex hasn't run for a while, instead of posing as current.
 
 ## v0.4.2 — Markdown Editing and File Tree Fixes
 
