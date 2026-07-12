@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { getRecentFiles, type RecentFileEntry } from "../lib/tauri";
+import { isPrefix } from "../lib/worktree";
 
 export function useRecentFiles(
   projectPath: string | null,
@@ -29,10 +30,12 @@ export function useRecentFiles(
     else setEntries([]);
   }, [enabled, fetchEntries]);
 
-  // Re-fetch on fs-change
+  // Re-fetch on fs-change (only for dirs under this root — the watcher covers
+  // every env root, and another env's churn can't change this list)
   useEffect(() => {
     if (!projectPath || !enabled) return;
-    const unlisten = listen<string[]>("fs-change", () => {
+    const unlisten = listen<string[]>("fs-change", (event) => {
+      if (!event.payload.some((dir) => isPrefix(projectPath, dir))) return;
       if (refreshTimer.current) clearTimeout(refreshTimer.current);
       refreshTimer.current = setTimeout(fetchEntries, 500);
     });

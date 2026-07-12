@@ -28,7 +28,10 @@ fn is_excluded(path: &std::path::Path) -> bool {
 pub type WatcherState = Arc<Mutex<Option<FileWatcher>>>;
 
 impl FileWatcher {
-    pub fn start(path: &str, app_handle: AppHandle) -> Result<Self, String> {
+    /// Watch every root in `paths` recursively with a single watcher. Roots
+    /// nested under another root must be filtered out by the caller — the
+    /// recursive watch on the outer root already covers them.
+    pub fn start(paths: &[String], app_handle: AppHandle) -> Result<Self, String> {
         let (event_tx, event_rx) = mpsc::channel::<Event>();
         let (stop_tx, stop_rx) = mpsc::channel::<()>();
 
@@ -42,9 +45,23 @@ impl FileWatcher {
         )
         .map_err(|e| format!("Failed to create watcher: {}", e))?;
 
-        watcher
-            .watch(std::path::Path::new(path), RecursiveMode::Recursive)
-            .map_err(|e| format!("Failed to watch path: {}", e))?;
+        // Per-root tolerance: one unwatchable root (e.g. a worktree pruned
+        // between validation and here) must not take down watching for every
+        // other env. Only fail if NO root could be watched.
+        let mut watched = 0usize;
+        let mut last_err = String::new();
+        for path in paths {
+            match watcher.watch(std::path::Path::new(path), RecursiveMode::Recursive) {
+                Ok(()) => watched += 1,
+                Err(e) => {
+                    log::warn!("Failed to watch {}: {}", path, e);
+                    last_err = format!("Failed to watch {}: {}", path, e);
+                }
+            }
+        }
+        if watched == 0 {
+            return Err(last_err);
+        }
 
         // Debounce thread: collect events for 300ms, then emit unique parent dirs
         std::thread::spawn(move || {
@@ -120,30 +137,43 @@ impl FileWatcher {
     }
 }
 
+/// Replace the watched root set. The frontend calls this with the active
+/// project root plus every worktree path whenever either changes, so every
+/// environment gets push-based `fs-change` coverage — including Codex and
+/// manual worktrees living outside the project root. Roots that don't resolve
+/// (e.g. a just-pruned worktree) are skipped, and roots nested under another
+/// root are dropped since the outer recursive watch already covers them.
+/// An empty list (no project open) just drops the watcher.
 #[tauri::command]
-pub fn start_watching(
-    path: String,
-    project_root: String,
+pub fn set_watch_roots(
+    roots: Vec<String>,
     app_handle: AppHandle,
     state: tauri::State<'_, WatcherState>,
 ) -> Result<(), String> {
-    let canonical = super::canonicalize_path(&path)?;
-    let canonical_root = super::canonicalize_path(&project_root)?;
-    super::validate_within_root(&canonical, &canonical_root)?;
-    let path = canonical.to_string_lossy().to_string();
+    let mut resolved: Vec<PathBuf> = Vec::new();
+    for root in &roots {
+        if let Ok(canonical) = super::canonicalize_path(root) {
+            if canonical.is_dir() && !resolved.contains(&canonical) {
+                resolved.push(canonical);
+            }
+        }
+    }
+    let outermost: Vec<String> = resolved
+        .iter()
+        .filter(|p| !resolved.iter().any(|other| *p != other && p.starts_with(other)))
+        .map(|p| p.to_string_lossy().to_string())
+        .collect();
+
     let mut guard = state.lock().map_err(|e| format!("Lock error: {}", e))?;
 
     // Stop existing watcher by dropping it
     *guard = None;
 
-    let watcher = FileWatcher::start(&path, app_handle)?;
+    if outermost.is_empty() {
+        return Ok(());
+    }
+    let watcher = FileWatcher::start(&outermost, app_handle)?;
     *guard = Some(watcher);
     Ok(())
 }
 
-#[tauri::command]
-pub fn stop_watching(state: tauri::State<'_, WatcherState>) -> Result<(), String> {
-    let mut guard = state.lock().map_err(|e| format!("Lock error: {}", e))?;
-    *guard = None;
-    Ok(())
-}

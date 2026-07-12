@@ -68,6 +68,8 @@ interface AppState {
   setSelectedEnvPath: (path: string | null) => void;
   envDiffStats: Record<string, { added: number; removed: number }>; // per-env uncommitted diff totals, keyed by env path
   setEnvDiffStats: (stats: Record<string, { added: number; removed: number }>) => void;
+  mergeEnvDiffStats: (partial: Record<string, { added: number; removed: number }>) => void;
+  pruneEnvDiffStats: (validPaths: string[]) => void;
   touchedEnvsByThread: Record<string, Record<string, number>>;      // threadId -> absolute file path -> lastTouchMs
   recordThreadTouch: (threadId: string, filePath: string, ms: number) => void;
   loadTouchedEnvs: (touched: Record<string, Record<string, number>>) => void;
@@ -359,6 +361,33 @@ export const useAppStore = create<AppState>((set, get) => ({
           (k) => prev[k] && prev[k].added === stats[k].added && prev[k].removed === stats[k].removed,
         );
       return unchanged ? {} : { envDiffStats: stats };
+    });
+  },
+
+  // Merge some envs' diff totals without touching the others — lets each env's
+  // row update the moment its own git call resolves instead of waiting for the
+  // slowest env in the batch. Skips the write when every merged value matches.
+  mergeEnvDiffStats: (partial) => {
+    set((s) => {
+      const prev = s.envDiffStats;
+      const keys = Object.keys(partial);
+      const unchanged = keys.every(
+        (k) => prev[k] && prev[k].added === partial[k].added && prev[k].removed === partial[k].removed,
+      );
+      return unchanged ? {} : { envDiffStats: { ...prev, ...partial } };
+    });
+  },
+
+  // Drop stats for envs that no longer exist (worktree removed / project
+  // switched) while leaving live envs' values in place.
+  pruneEnvDiffStats: (validPaths) => {
+    set((s) => {
+      const valid = new Set(validPaths);
+      const stale = Object.keys(s.envDiffStats).filter((k) => !valid.has(k));
+      if (stale.length === 0) return {};
+      const next = { ...s.envDiffStats };
+      for (const k of stale) delete next[k];
+      return { envDiffStats: next };
     });
   },
 

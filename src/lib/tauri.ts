@@ -159,12 +159,10 @@ export function openInDefaultApp(path: string, projectRoot: string): Promise<voi
   return invoke("open_in_default_app", { path, projectRoot });
 }
 
-export function startWatching(path: string, projectRoot: string): Promise<void> {
-  return invoke("start_watching", { path, projectRoot });
-}
-
-export function stopWatching(): Promise<void> {
-  return invoke("stop_watching");
+/** Replace the watched root set (project root + all worktree paths). Empty
+ * array drops the watcher. Nested/duplicate/missing roots are handled backend-side. */
+export function setWatchRoots(roots: string[]): Promise<void> {
+  return invoke("set_watch_roots", { roots });
 }
 
 // Git
@@ -400,4 +398,14 @@ export function getUsageSnapshot(): Promise<UsageSnapshot> {
 /** Enable/disable backend polling for a single agent (hidden chart → no polling). */
 export function setUsageAgentEnabled(agent: "claude" | "codex", enabled: boolean): Promise<void> {
   return invoke("set_usage_agent_enabled", { agent, enabled });
+}
+
+/** Heartbeat: this agent's threads are active — keeps the fast poll cadence. */
+export function reportUsageActivity(agent: "claude" | "codex"): Promise<void> {
+  return invoke("report_usage_activity", { agent });
+}
+
+/** Push: refresh this agent's usage soon (floored backend-side at 60s spacing). */
+export function requestUsageRefresh(agent: "claude" | "codex"): Promise<void> {
+  return invoke("request_usage_refresh", { agent });
 }

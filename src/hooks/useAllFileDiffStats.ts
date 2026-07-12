@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { getAllFileDiffStats, type FileDiffStat } from "../lib/tauri";
+import { isPrefix } from "../lib/worktree";
 
 export function useAllFileDiffStats(
   projectPath: string | null,
@@ -29,7 +30,9 @@ export function useAllFileDiffStats(
 
   useEffect(() => {
     if (!projectPath || !enabled) return;
-    const unlisten = listen<string[]>("fs-change", () => {
+    const unlisten = listen<string[]>("fs-change", (event) => {
+      // Only dirs under this root matter — another env's churn can't change it.
+      if (!event.payload.some((dir) => isPrefix(projectPath, dir))) return;
       if (refreshTimer.current) clearTimeout(refreshTimer.current);
       refreshTimer.current = setTimeout(fetchStats, 500);
     });

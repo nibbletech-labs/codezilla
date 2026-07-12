@@ -16,6 +16,7 @@ import FilePreview, { shouldUseNativePreview } from "../FilePreview/FilePreview"
 import CommitPreview from "../FilePreview/CommitPreview";
 import type { FileEntry } from "../../lib/tauri";
 import { previewFile as nativePreview, scanAllFiles } from "../../lib/tauri";
+import { isPrefix } from "../../lib/worktree";
 
 type ViewMode = "all" | "recent" | "changes";
 
@@ -80,11 +81,13 @@ export default function RightPanel() {
       .catch((err) => console.error("Failed to scan files:", err));
   }, [projectPath, setFileIndex]);
 
-  // Keep fileIndex fresh: rescan (debounced) when files change on disk
+  // Keep fileIndex fresh: rescan (debounced) when files change on disk under
+  // this root — churn in another env's root can't alter this index.
   useEffect(() => {
     if (!projectPath) return;
     let timer: ReturnType<typeof setTimeout> | null = null;
-    const unlisten = listen<string[]>("fs-change", () => {
+    const unlisten = listen<string[]>("fs-change", (event) => {
+      if (!event.payload.some((dir) => isPrefix(projectPath, dir))) return;
       if (timer) clearTimeout(timer);
       timer = setTimeout(() => {
         scanAllFiles(projectPath, projectPath)

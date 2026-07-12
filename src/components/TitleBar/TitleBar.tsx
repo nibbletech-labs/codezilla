@@ -3,6 +3,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useAppStore } from "../../store/appStore";
 import { useWorktrees } from "../../hooks/useWorktrees";
 import { useWorktreeDiffStats } from "../../hooks/useWorktreeDiffStats";
+import { useWatchRoots } from "../../hooks/useWatchRoots";
 import { getLeftPanelWidth } from "../../lib/constants";
 import TitleBarDropdown from "./TitleBarDropdown";
 import ProjectIconComponent from "../ProjectIcon";
@@ -21,8 +22,10 @@ export default function TitleBar() {
   const projectPath = project?.path ?? null;
 
   // Drive the worktree watchers from the always-mounted title bar: enumerate the
-  // project's worktrees and keep each env's uncommitted +/- totals fresh.
+  // project's worktrees, keep the fs watcher covering every env root, and keep
+  // each env's uncommitted +/- totals fresh.
   useWorktrees(projectPath);
+  useWatchRoots();
   useWorktreeDiffStats();
 
   const leftPanelWidth = getLeftPanelWidth(baseFontSize);

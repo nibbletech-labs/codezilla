@@ -1,7 +1,12 @@
 import { useEffect, useRef } from "react";
 import { listen } from "@tauri-apps/api/event";
-import { startWatching, stopWatching } from "../lib/tauri";
 
+/**
+ * Refreshes the file tree from `fs-change` events. Watching itself is owned by
+ * useWatchRoots (mounted in TitleBar), which keeps the backend watcher covering
+ * the project root and every worktree — this hook only consumes the events,
+ * refreshing the tree root and any expanded directories that changed.
+ */
 export function useFileWatcher(
   projectPath: string | null,
   expandedPaths: Set<string>,
@@ -17,21 +22,6 @@ export function useFileWatcher(
   useEffect(() => {
     refreshRef.current = refresh;
   }, [refresh]);
-
-  // Start/stop watcher when project changes
-  useEffect(() => {
-    if (!projectPath) return;
-
-    startWatching(projectPath, projectPath).catch((err) =>
-      console.error("Failed to start watcher:", err),
-    );
-
-    return () => {
-      stopWatching().catch((err) =>
-        console.error("Failed to stop watcher:", err),
-      );
-    };
-  }, [projectPath]);
 
   // Listen for fs-change events
   useEffect(() => {

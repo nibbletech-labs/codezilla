@@ -29,10 +29,21 @@ fn now_epoch() -> i64 {
 
 /// An unsuccessful fetch, tagged so the UI can tell "nothing to track here"
 /// (`Na` — API-key billing, not signed in, non-macOS) from a real failure
-/// (`Err` — 429/401/HTTP, Keychain denied, response shape changed).
+/// (`Err` — 401/HTTP, Keychain denied, response shape changed). A 429 is its
+/// own variant carrying the endpoint's `Retry-After` (seconds) when present,
+/// so the scheduler can honor it instead of guessing a backoff.
 enum Unavail {
     Na(String),
     Err(String),
+    RateLimited { retry_after_secs: Option<i64> },
+}
+
+/// A fetch attempt plus the scheduling hints the plain `AgentUsage` can't
+/// carry (it's the UI payload — retry mechanics don't belong in it).
+pub struct FetchOutcome {
+    pub usage: AgentUsage,
+    pub rate_limited: bool,
+    pub retry_after_secs: Option<i64>,
 }
 
 fn na(msg: &str) -> AgentUsage {
@@ -109,7 +120,12 @@ fn fetch_usage(token: &str, user_agent: &str) -> Result<Value, Unavail> {
 
     let status = resp.status();
     if status.as_u16() == 429 {
-        return Err(Unavail::Err("Rate limited by usage endpoint (429)".to_string()));
+        let retry_after_secs = resp
+            .headers()
+            .get("retry-after")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|s| s.trim().parse::<i64>().ok());
+        return Err(Unavail::RateLimited { retry_after_secs });
     }
     if status.as_u16() == 401 {
         return Err(Unavail::Err(
@@ -126,19 +142,40 @@ fn fetch_usage(token: &str, user_agent: &str) -> Result<Value, Unavail> {
         .map_err(|e| Unavail::Err(format!("Bad usage response: {e}")))
 }
 
-fn from_unavail(u: Unavail) -> AgentUsage {
+fn from_unavail(u: Unavail) -> FetchOutcome {
     match u {
-        Unavail::Na(m) => na(&m),
-        Unavail::Err(m) => err(&m),
+        Unavail::Na(m) => FetchOutcome {
+            usage: na(&m),
+            rate_limited: false,
+            retry_after_secs: None,
+        },
+        Unavail::Err(m) => FetchOutcome {
+            usage: err(&m),
+            rate_limited: false,
+            retry_after_secs: None,
+        },
+        Unavail::RateLimited { retry_after_secs } => FetchOutcome {
+            usage: err("Rate limited by usage endpoint (429)"),
+            rate_limited: true,
+            retry_after_secs,
+        },
+    }
+}
+
+fn ok_outcome(usage: AgentUsage) -> FetchOutcome {
+    FetchOutcome {
+        usage,
+        rate_limited: false,
+        retry_after_secs: None,
     }
 }
 
 /// Read the current Claude plan usage. Never panics; a miss returns a row tagged
 /// `na` (nothing to track) or `error` (transient failure), with the reason in
-/// the detail popup.
-pub fn fetch(user_agent: &str) -> AgentUsage {
+/// the detail popup, plus scheduling hints for the caller.
+pub fn fetch(user_agent: &str) -> FetchOutcome {
     if !cfg!(target_os = "macos") {
-        return na("Claude plan usage is available on macOS only");
+        return ok_outcome(na("Claude plan usage is available on macOS only"));
     }
 
     let creds = match read_credentials() {
@@ -154,7 +191,7 @@ pub fn fetch(user_agent: &str) -> AgentUsage {
     let weekly_pct = body["seven_day"]["utilization"].as_f64();
 
     if five_hour_pct.is_none() && weekly_pct.is_none() {
-        return err("Usage endpoint returned no recognizable data");
+        return ok_outcome(err("Usage endpoint returned no recognizable data"));
     }
 
     // Extra usage (spend beyond plan limits), only when the account enables it.
@@ -166,7 +203,7 @@ pub fn fetch(user_agent: &str) -> AgentUsage {
         (None, None)
     };
 
-    AgentUsage {
+    ok_outcome(AgentUsage {
         status: STATUS_OK.to_string(),
         five_hour_pct,
         five_hour_resets_at: body["five_hour"]["resets_at"]
@@ -184,14 +221,31 @@ pub fn fetch(user_agent: &str) -> AgentUsage {
         extra_usage_used_credits,
         updated_at: Some(now_epoch()),
         error: None,
-    }
+    })
 }
 
 // --- tokens_today: sum message.usage across today's transcripts ---
 
+/// Per-file token-sum cache keyed by (mtime, size, midnight boundary). Only
+/// the transcript currently being appended to changes between refreshes —
+/// re-parsing every other multi-megabyte JSONL each poll was pure waste. The
+/// midnight key invalidates everything when "today" rolls over.
+struct TokenCacheEntry {
+    mtime: i64,
+    size: u64,
+    midnight: i64,
+    sum: u64,
+}
+
+static TOKEN_SUMS: std::sync::LazyLock<
+    std::sync::Mutex<std::collections::HashMap<PathBuf, TokenCacheEntry>>,
+> = std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+
+const TOKEN_CACHE_CAP: usize = 4_096;
+
 /// Sum input/output/cache tokens from `~/.claude/projects/**.jsonl` entries
 /// timestamped since local midnight. Best-effort; returns None if HOME is unset
-/// or nothing today.
+/// or nothing today. Unchanged files are served from [`TOKEN_SUMS`].
 fn tokens_today() -> Option<u64> {
     let home = std::env::var("HOME").ok()?;
     let root = PathBuf::from(home).join(".claude").join("projects");
@@ -205,10 +259,45 @@ fn tokens_today() -> Option<u64> {
 
     let mut total: u64 = 0;
     for path in files {
-        if file_mtime_secs(&path) < midnight {
+        let Ok(meta) = std::fs::metadata(&path) else {
+            continue;
+        };
+        let mtime = meta
+            .modified()
+            .ok()
+            .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+        if mtime < midnight {
             continue;
         }
-        total += sum_usage_since(&path, midnight);
+        let size = meta.len();
+
+        if let Ok(cache) = TOKEN_SUMS.lock() {
+            if let Some(e) = cache.get(&path) {
+                if e.mtime == mtime && e.size == size && e.midnight == midnight {
+                    total += e.sum;
+                    continue;
+                }
+            }
+        }
+
+        let sum = sum_usage_since(&path, midnight);
+        total += sum;
+        if let Ok(mut cache) = TOKEN_SUMS.lock() {
+            if cache.len() >= TOKEN_CACHE_CAP {
+                cache.clear();
+            }
+            cache.insert(
+                path,
+                TokenCacheEntry {
+                    mtime,
+                    size,
+                    midnight,
+                    sum,
+                },
+            );
+        }
     }
     if total > 0 {
         Some(total)
@@ -232,15 +321,6 @@ fn collect_jsonl(dir: &Path, depth: u8, out: &mut Vec<PathBuf>) {
             out.push(path);
         }
     }
-}
-
-fn file_mtime_secs(path: &Path) -> i64 {
-    std::fs::metadata(path)
-        .and_then(|m| m.modified())
-        .ok()
-        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0)
 }
 
 fn sum_usage_since(path: &Path, midnight: i64) -> u64 {

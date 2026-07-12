@@ -17,6 +17,7 @@ import {
   type PtyOutputData,
   type PtyExitData,
   type HeedThreadPayload,
+  requestUsageRefresh,
 } from "../../lib/tauri";
 import {
   TERMINAL_CONFIG,
@@ -25,6 +26,7 @@ import {
 import { getTerminalTheme, DARK_PALETTE, LIGHT_PALETTE } from "../../lib/themes";
 import { useAppStore } from "../../store/appStore";
 import { attributeEnv } from "../../lib/worktree";
+import { requestEnvDiffRefresh, requestWorktreeListRefresh } from "../../lib/refreshBus";
 import type { Thread, ThreadType, ScheduledJob } from "../../store/types";
 import { THREAD_NEW_LABELS } from "../../store/types";
 import ThreadIcon from "../LeftPanel/ThreadIcons";
@@ -486,6 +488,18 @@ function applyHeedThreadState(payloads: HeedThreadPayload[]): void {
       }
     }
 
+    // A Claude turn just finished — its usage numbers just moved, so this is
+    // the perfect moment to refresh the chart. The backend floors these
+    // requests at 60s spacing (and any 429 penalty), so bursts are safe.
+    if (
+      activityState === "idle"
+      && !isGone
+      && current.activityState === "working"
+      && thread.type === "claude"
+    ) {
+      requestUsageRefresh("claude").catch(() => { /* best-effort */ });
+    }
+
     // Surface the "done" badge on a clean working -> idle transition, and reset
     // it when a new turn starts working again. The reset also clears
     // `badgeDismissedAt` — it's set when the user clicks the thread to dismiss a
@@ -531,14 +545,22 @@ function applyHeedThreadState(payloads: HeedThreadPayload[]): void {
       FILE_WRITE_TOOLS.has(lastToolName ?? "")
     ) {
       state.recordThreadTouch(thread.id, lastToolTarget, Date.now());
+      const projectPath = state.projects.find((pr) => pr.id === thread.projectId)?.path ?? null;
+      const env = projectPath ? attributeEnv(lastToolTarget, state.worktrees, projectPath) : null;
+      // Push-refresh the touched env's diff stats: this fires the moment the
+      // write tool reports, ahead of any fs-change debounce, and works for envs
+      // wherever they live on disk. A write that attributes to NO known env
+      // usually means a just-created worktree — nudge the list instead. Both
+      // only make sense for the active project (state.worktrees is its list).
+      if (thread.projectId === state.activeProjectId) {
+        if (env) requestEnvDiffRefresh(env);
+        else requestWorktreeListRefresh();
+      }
       // Live-follow: if the ACTIVE thread just edited, re-root the file panel to
       // that edit's env so the worktree selection tracks it without re-selecting
       // the thread. Only the active thread moves the selection — a background
-      // thread's edit must not yank the panel away. The active thread is in the
-      // active project, so state.worktrees is the right list to resolve against.
+      // thread's edit must not yank the panel away.
       if (thread.id === state.activeThreadId) {
-        const projectPath = state.projects.find((pr) => pr.id === thread.projectId)?.path ?? null;
-        const env = projectPath ? attributeEnv(lastToolTarget, state.worktrees, projectPath) : null;
         const nextEnv = env && env !== projectPath ? env : null;
         if (nextEnv !== state.selectedEnvPath) state.setSelectedEnvPath(nextEnv);
       }

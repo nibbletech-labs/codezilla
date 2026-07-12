@@ -1,11 +1,36 @@
 pub mod types;
 
 use log::error;
-use std::process::Command;
+use std::path::Path;
+use std::process::Output;
+
 use types::{
     CommitFileStat, CommitInfo, FileDiffStat, GitFileStatus, GitStatusEntry, RepoHealth,
     SuspiciousTrackedDir, WorktreeInfo,
 };
+
+/// Hard cap on any single git invocation. A slow or locked repo must never
+/// stall a UI refresh (or pile up hung children) for longer than this.
+const GIT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// Run `git <args>` in `repo` on the async runtime with `GIT_TIMEOUT` applied.
+/// Returns the raw Output — callers interpret the exit status themselves, since
+/// some git commands exit non-zero on success (e.g. `diff --no-index`).
+/// kill_on_drop reaps the child if the timeout fires.
+async fn run_git(repo: &Path, args: &[&str]) -> Result<Output, String> {
+    let mut cmd = tokio::process::Command::new("git");
+    cmd.args(args).current_dir(repo).kill_on_drop(true);
+    tokio::time::timeout(GIT_TIMEOUT, cmd.output())
+        .await
+        .map_err(|_| {
+            format!(
+                "git {} timed out in {}",
+                args.first().unwrap_or(&""),
+                repo.display()
+            )
+        })?
+        .map_err(|e| format!("Failed to run git: {}", e))
+}
 
 fn parse_status(xy: &str) -> Option<GitFileStatus> {
     let bytes = xy.as_bytes();
@@ -43,13 +68,11 @@ pub async fn get_git_branch(path: String) -> Result<String, String> {
         return Err(format!("Not a directory: {}", path));
     }
 
-    let output = Command::new("git")
-        .args(["rev-parse", "--abbrev-ref", "HEAD"])
-        .current_dir(repo_path)
-        .output()
+    let output = run_git(repo_path, &["rev-parse", "--abbrev-ref", "HEAD"])
+        .await
         .map_err(|e| {
             error!("Failed to run git rev-parse: {}", e);
-            format!("Failed to run git: {}", e)
+            e
         })?;
 
     if !output.status.success() {
@@ -87,11 +110,7 @@ pub async fn get_git_worktrees(path: String) -> Result<Vec<WorktreeInfo>, String
         return Err(format!("Not a directory: {}", path));
     }
 
-    let output = Command::new("git")
-        .args(["worktree", "list", "--porcelain"])
-        .current_dir(repo_path)
-        .output()
-        .map_err(|e| format!("Failed to run git: {}", e))?;
+    let output = run_git(repo_path, &["worktree", "list", "--porcelain"]).await?;
 
     if !output.status.success() {
         // Not a git repo (or no worktree support) — surface nothing.
@@ -155,11 +174,7 @@ pub async fn get_git_status(path: String) -> Result<Vec<GitStatusEntry>, String>
         return Err(format!("Not a directory: {}", path));
     }
 
-    let output = Command::new("git")
-        .args(["status", "--porcelain=v1", "-uall"])
-        .current_dir(repo_path)
-        .output()
-        .map_err(|e| format!("Failed to run git: {}", e))?;
+    let output = run_git(repo_path, &["status", "--porcelain=v1", "-uall"]).await?;
 
     if !output.status.success() {
         return Ok(vec![]);
@@ -193,29 +208,13 @@ pub async fn get_git_status(path: String) -> Result<Vec<GitStatusEntry>, String>
 
 #[tauri::command]
 pub async fn get_git_diff_stat(path: String) -> Result<(u32, u32), String> {
-    use tokio::process::Command as AsyncCommand;
-    use tokio::time::{timeout, Duration};
-
-    // Cap each git invocation so a slow or locked repo can't stall the diff-stat
-    // fetch — a stall would otherwise leave the env's +/- numbers blank for its
-    // whole duration. kill_on_drop reaps the child if the timeout fires.
-    const GIT_TIMEOUT: Duration = Duration::from_secs(10);
-
     let canonical = crate::fs::canonicalize_path(&path)?;
     let repo_path = canonical.as_path();
     if !repo_path.is_dir() {
         return Err(format!("Not a directory: {}", path));
     }
 
-    let mut diff_cmd = AsyncCommand::new("git");
-    diff_cmd
-        .args(["diff", "--numstat", "HEAD"])
-        .current_dir(repo_path)
-        .kill_on_drop(true);
-    let output = timeout(GIT_TIMEOUT, diff_cmd.output())
-        .await
-        .map_err(|_| format!("git diff timed out for {}", path))?
-        .map_err(|e| format!("Failed to run git: {}", e))?;
+    let output = run_git(repo_path, &["diff", "--numstat", "HEAD"]).await?;
 
     // A non-zero exit is a genuine git error — most often index.lock contention
     // while another git process runs (e.g. a worktree being created). Surface it
@@ -248,36 +247,83 @@ pub async fn get_git_diff_stat(path: String) -> Result<(u32, u32), String> {
     // honours .gitignore so ignored cruft (node_modules, build output) is skipped.
     // Best-effort: a failure or timeout here just omits untracked lines, it never
     // blanks the (already-known) tracked diff totals.
-    let mut untracked_cmd = AsyncCommand::new("git");
-    untracked_cmd
-        .args(["ls-files", "--others", "--exclude-standard", "-z"])
-        .current_dir(repo_path)
-        .kill_on_drop(true);
-    if let Ok(Ok(out)) = timeout(GIT_TIMEOUT, untracked_cmd.output()).await {
+    if let Ok(out) = run_git(repo_path, &["ls-files", "--others", "--exclude-standard", "-z"]).await
+    {
         if out.status.success() {
-            let list = String::from_utf8_lossy(&out.stdout);
-            for rel in list.split('\0').filter(|s| !s.is_empty()) {
-                let full = repo_path.join(rel);
-                let size = std::fs::metadata(&full).map(|m| m.len()).unwrap_or(0);
-                // Don't read large/binary blobs to count lines — just mark dirty.
-                if size > 1_000_000 {
-                    added = added.saturating_add(1);
-                    continue;
+            let repo = repo_path.to_path_buf();
+            // The per-file reads are blocking IO — keep them off the async runtime.
+            let counted = tokio::task::spawn_blocking(move || {
+                let list = String::from_utf8_lossy(&out.stdout);
+                let mut sum: u32 = 0;
+                for rel in list.split('\0').filter(|s| !s.is_empty()) {
+                    sum = sum.saturating_add(untracked_added_lines(&repo.join(rel)));
                 }
-                match std::fs::read(&full) {
-                    Ok(bytes) if !bytes.contains(&0) => {
-                        let nl = bytes.iter().filter(|&&b| b == b'\n').count() as u32;
-                        let trailing = u32::from(!bytes.is_empty() && *bytes.last().unwrap() != b'\n');
-                        added = added.saturating_add(nl + trailing);
-                    }
-                    // Binary or unreadable but present → still uncommitted work.
-                    _ => added = added.saturating_add(1),
+                sum
+            })
+            .await
+            .unwrap_or(0);
+            added = added.saturating_add(counted);
+        }
+    }
+
+    Ok((added, removed))
+}
+
+/// Cache of untracked-file line counts keyed by absolute path, validated by
+/// (mtime, size). Untracked files are re-enumerated on every diff-stat refresh
+/// — for every env, every few seconds while agents work — and re-reading
+/// unchanged blobs each time is the dominant cost for repos carrying chunky
+/// untracked files.
+static UNTRACKED_LINES: std::sync::LazyLock<
+    std::sync::Mutex<std::collections::HashMap<std::path::PathBuf, (std::time::SystemTime, u64, u32)>>,
+> = std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+
+/// Entries for since-deleted or since-tracked files linger until this cap
+/// clears the map wholesale — crude, but the map rebuilds in one refresh.
+const UNTRACKED_CACHE_CAP: usize = 16_384;
+
+/// Line count an untracked file contributes to the env's `added` total.
+/// Large or binary blobs aren't read — they count as 1 (dirty marker).
+fn untracked_added_lines(full: &Path) -> u32 {
+    let Ok(meta) = std::fs::metadata(full) else {
+        // Vanished between `ls-files` and here (agents churn fast) — not work.
+        return 0;
+    };
+    let size = meta.len();
+    if size > 1_000_000 {
+        return 1;
+    }
+    let mtime = meta.modified().ok();
+
+    if let Some(m) = mtime {
+        if let Ok(cache) = UNTRACKED_LINES.lock() {
+            if let Some(&(cm, cs, lines)) = cache.get(full) {
+                if cm == m && cs == size {
+                    return lines;
                 }
             }
         }
     }
 
-    Ok((added, removed))
+    let lines = match std::fs::read(full) {
+        Ok(bytes) if !bytes.contains(&0) => {
+            let nl = bytes.iter().filter(|&&b| b == b'\n').count() as u32;
+            let trailing = u32::from(!bytes.is_empty() && *bytes.last().unwrap() != b'\n');
+            nl + trailing
+        }
+        // Binary or unreadable but present → still uncommitted work.
+        _ => 1,
+    };
+
+    if let Some(m) = mtime {
+        if let Ok(mut cache) = UNTRACKED_LINES.lock() {
+            if cache.len() >= UNTRACKED_CACHE_CAP {
+                cache.clear();
+            }
+            cache.insert(full.to_path_buf(), (m, size, lines));
+        }
+    }
+    lines
 }
 
 #[tauri::command]
@@ -288,11 +334,7 @@ pub async fn get_file_diff_stat(repo_path: String, file_path: String) -> Result<
         return Err(format!("Not a directory: {}", repo_path));
     }
 
-    let output = Command::new("git")
-        .args(["diff", "--numstat", "HEAD", "--", &file_path])
-        .current_dir(repo)
-        .output()
-        .map_err(|e| format!("Failed to run git: {}", e))?;
+    let output = run_git(repo, &["diff", "--numstat", "HEAD", "--", &file_path]).await?;
 
     if !output.status.success() {
         return Ok((0, 0));
@@ -322,11 +364,7 @@ pub async fn get_git_diff(repo_path: String, file_path: String) -> Result<String
     }
 
     // Try normal diff first (tracked files)
-    let output = Command::new("git")
-        .args(["diff", "HEAD", "--", &file_path])
-        .current_dir(repo)
-        .output()
-        .map_err(|e| format!("Failed to run git: {}", e))?;
+    let output = run_git(repo, &["diff", "HEAD", "--", &file_path]).await?;
 
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
 
@@ -335,19 +373,11 @@ pub async fn get_git_diff(repo_path: String, file_path: String) -> Result<String
     }
 
     // If empty, check if file is untracked and show as new file diff
-    let status_output = Command::new("git")
-        .args(["status", "--porcelain", "--", &file_path])
-        .current_dir(repo)
-        .output()
-        .map_err(|e| format!("Failed to run git: {}", e))?;
+    let status_output = run_git(repo, &["status", "--porcelain", "--", &file_path]).await?;
 
     let status_str = String::from_utf8_lossy(&status_output.stdout);
     if status_str.starts_with("??") {
-        let untracked = Command::new("git")
-            .args(["diff", "--no-index", "/dev/null", &file_path])
-            .current_dir(repo)
-            .output()
-            .map_err(|e| format!("Failed to run git: {}", e))?;
+        let untracked = run_git(repo, &["diff", "--no-index", "/dev/null", &file_path]).await?;
 
         // git diff --no-index exits with 1 when there are differences, that's expected
         return Ok(String::from_utf8_lossy(&untracked.stdout).to_string());
@@ -369,11 +399,7 @@ pub async fn get_all_file_diff_stats(path: String) -> Result<Vec<FileDiffStat>, 
     let mut stats: Vec<FileDiffStat> = Vec::new();
 
     // Get diff stats for tracked files
-    let output = Command::new("git")
-        .args(["diff", "--numstat", "HEAD"])
-        .current_dir(repo_path)
-        .output()
-        .map_err(|e| format!("Failed to run git: {}", e))?;
+    let output = run_git(repo_path, &["diff", "--numstat", "HEAD"]).await?;
 
     if output.status.success() {
         let stdout = String::from_utf8_lossy(&output.stdout);
@@ -391,27 +417,20 @@ pub async fn get_all_file_diff_stats(path: String) -> Result<Vec<FileDiffStat>, 
         }
     }
 
-    // Get untracked files and count their lines
-    let status_output = Command::new("git")
-        .args(["status", "--porcelain=v1", "-uall"])
-        .current_dir(repo_path)
-        .output()
-        .map_err(|e| format!("Failed to run git: {}", e))?;
+    // Get untracked files and count their lines (through the mtime+size cache,
+    // so repeated Changes-view refreshes don't re-read unchanged blobs)
+    let status_output = run_git(repo_path, &["status", "--porcelain=v1", "-uall"]).await?;
 
     if status_output.status.success() {
         let stdout = String::from_utf8_lossy(&status_output.stdout);
         for line in stdout.lines() {
             if line.starts_with("??") && line.len() > 3 {
                 let file_path = &line[3..];
-                // Count lines in untracked file
                 let full_path = repo_path.join(file_path);
                 if full_path.is_file() {
-                    let line_count = std::fs::read_to_string(&full_path)
-                        .map(|c| c.lines().count() as u32)
-                        .unwrap_or(0);
                     stats.push(FileDiffStat {
                         path: file_path.to_string(),
-                        added: line_count,
+                        added: untracked_added_lines(&full_path),
                         removed: 0,
                     });
                 }
@@ -458,11 +477,7 @@ pub async fn diagnose_repo_health(path: String) -> Result<RepoHealth, String> {
     }
 
     let started = std::time::Instant::now();
-    let status_output = Command::new("git")
-        .args(["status", "--porcelain=v1", "-uall"])
-        .current_dir(repo_path)
-        .output()
-        .map_err(|e| format!("Failed to run git: {}", e))?;
+    let status_output = run_git(repo_path, &["status", "--porcelain=v1", "-uall"]).await?;
     let status_duration_ms = started.elapsed().as_millis() as u64;
 
     if !status_output.status.success() {
@@ -470,11 +485,7 @@ pub async fn diagnose_repo_health(path: String) -> Result<RepoHealth, String> {
     }
     let dirty_count = String::from_utf8_lossy(&status_output.stdout).lines().count() as u32;
 
-    let ls_output = Command::new("git")
-        .args(["ls-files"])
-        .current_dir(repo_path)
-        .output()
-        .map_err(|e| format!("Failed to run git: {}", e))?;
+    let ls_output = run_git(repo_path, &["ls-files"]).await?;
 
     let mut tracked_count: u32 = 0;
     let mut groups: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
@@ -533,11 +544,7 @@ pub async fn get_commit_info(repo_path: String, commit_ref: String) -> Result<Co
         return Err(format!("Not a directory: {}", repo_path));
     }
 
-    let output = Command::new("git")
-        .args(["log", "-1", "--format=%H%n%an%n%aI%n%s%n%b", &commit_ref])
-        .current_dir(repo)
-        .output()
-        .map_err(|e| format!("Failed to run git: {}", e))?;
+    let output = run_git(repo, &["log", "-1", "--format=%H%n%an%n%aI%n%s%n%b", &commit_ref]).await?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -561,11 +568,7 @@ pub async fn get_commit_info(repo_path: String, commit_ref: String) -> Result<Co
     };
 
     // Get per-file stats via --numstat
-    let numstat_output = Command::new("git")
-        .args(["show", "--numstat", "--format=", &commit_ref])
-        .current_dir(repo)
-        .output()
-        .map_err(|e| format!("Failed to run git: {}", e))?;
+    let numstat_output = run_git(repo, &["show", "--numstat", "--format=", &commit_ref]).await?;
 
     let mut file_stats: Vec<CommitFileStat> = Vec::new();
     let mut additions: u32 = 0;
@@ -614,11 +617,7 @@ pub async fn get_commit_diff(repo_path: String, commit_ref: String) -> Result<St
         return Err(format!("Not a directory: {}", repo_path));
     }
 
-    let output = Command::new("git")
-        .args(["show", "--format=", &commit_ref])
-        .current_dir(repo)
-        .output()
-        .map_err(|e| format!("Failed to run git: {}", e))?;
+    let output = run_git(repo, &["show", "--format=", &commit_ref]).await?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);

@@ -1,7 +1,9 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { getGitStatus, type GitFileStatus } from "../lib/tauri";
 import { useAppStore } from "../store/appStore";
+import { singleFlight } from "../lib/singleFlight";
+import { isPrefix } from "../lib/worktree";
 
 const STATUS_PRIORITY: Record<GitFileStatus, number> = {
   Conflicted: 6,
@@ -27,47 +29,46 @@ export function useGitStatus(projectPath: string | null): GitStatusMap {
   const [statusMap, setStatusMap] = useState<GitStatusMap>(new Map());
   const prevPath = useRef<string | null>(null);
   const refreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const inFlight = useRef(false);
 
-  const fetchStatus = useCallback(async () => {
-    if (!projectPath) {
-      setStatusMap((prev) => (prev.size === 0 ? prev : new Map()));
-      return;
-    }
-
-    // On slow repos one git call can outlive the refresh debounce; never stack them.
-    if (inFlight.current) return;
-    inFlight.current = true;
-    try {
-      const startedAt = performance.now();
-      const entries = await getGitStatus(projectPath);
-      useAppStore.getState().reportGitTiming(projectPath, performance.now() - startedAt);
-      const map: GitStatusMap = new Map();
-      const root = projectPath.endsWith("/") ? projectPath : projectPath + "/";
-
-      for (const entry of entries) {
-        const absPath = root + entry.path;
-        map.set(absPath, entry.status);
-
-        // Folder rollup: propagate status to every ancestor
-        const parts = entry.path.split("/");
-        for (let i = 1; i < parts.length; i++) {
-          const dirAbsolute = root + parts.slice(0, i).join("/");
-          const existing = map.get(dirAbsolute);
-          if (!existing || STATUS_PRIORITY[entry.status] > STATUS_PRIORITY[existing]) {
-            map.set(dirAbsolute, entry.status);
-          }
+  // singleFlight: on slow repos one git call can outlive the refresh debounce —
+  // never stack them, but rerun once for a refresh requested mid-fetch.
+  const fetchStatus = useMemo(
+    () =>
+      singleFlight(async () => {
+        if (!projectPath) {
+          setStatusMap((prev) => (prev.size === 0 ? prev : new Map()));
+          return;
         }
-      }
+        try {
+          const startedAt = performance.now();
+          const entries = await getGitStatus(projectPath);
+          useAppStore.getState().reportGitTiming(projectPath, performance.now() - startedAt);
+          const map: GitStatusMap = new Map();
+          const root = projectPath.endsWith("/") ? projectPath : projectPath + "/";
 
-      setStatusMap((prev) => (mapsEqual(prev, map) ? prev : map));
-    } catch (err) {
-      console.error("Failed to fetch git status:", err);
-      setStatusMap((prev) => (prev.size === 0 ? prev : new Map()));
-    } finally {
-      inFlight.current = false;
-    }
-  }, [projectPath]);
+          for (const entry of entries) {
+            const absPath = root + entry.path;
+            map.set(absPath, entry.status);
+
+            // Folder rollup: propagate status to every ancestor
+            const parts = entry.path.split("/");
+            for (let i = 1; i < parts.length; i++) {
+              const dirAbsolute = root + parts.slice(0, i).join("/");
+              const existing = map.get(dirAbsolute);
+              if (!existing || STATUS_PRIORITY[entry.status] > STATUS_PRIORITY[existing]) {
+                map.set(dirAbsolute, entry.status);
+              }
+            }
+          }
+
+          setStatusMap((prev) => (mapsEqual(prev, map) ? prev : map));
+        } catch (err) {
+          console.error("Failed to fetch git status:", err);
+          setStatusMap((prev) => (prev.size === 0 ? prev : new Map()));
+        }
+      }),
+    [projectPath],
+  );
 
   const scheduleFetchStatus = useCallback((delayMs = 350) => {
     if (refreshTimer.current) clearTimeout(refreshTimer.current);
@@ -84,11 +85,15 @@ export function useGitStatus(projectPath: string | null): GitStatusMap {
     }
   }, [projectPath, fetchStatus]);
 
-  // Re-fetch on file system changes
+  // Re-fetch on file system changes. The watcher covers every env root, so
+  // only react to dirs under THIS root — churn in another worktree is not a
+  // status change here.
   useEffect(() => {
     if (!projectPath) return;
-    const unlisten = listen<string[]>("fs-change", () => {
-      scheduleFetchStatus();
+    const unlisten = listen<string[]>("fs-change", (event) => {
+      if (event.payload.some((dir) => isPrefix(projectPath, dir))) {
+        scheduleFetchStatus();
+      }
     });
     return () => {
       if (refreshTimer.current) {

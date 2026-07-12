@@ -6,11 +6,18 @@ import {
   FIVE_HOUR_SECONDS,
   WEEKLY_SECONDS,
 } from "./usageFormat";
+import { timeAgo } from "../../lib/timeAgo";
 
 const AGENT_LABELS: Record<UsageAgent, string> = {
   claude: "Claude",
   codex: "Codex",
 };
+
+/** Beyond this snapshot age the row admits it: "as of Xm" + a slight dim.
+ * Comfortably above the active poll cadence (5 min), so it only appears when
+ * the tracker is genuinely behind (idle cadence, rate-limit backoff, errors
+ * serving cache) — never during normal operation. */
+const STALE_AFTER_SECS = 10 * 60;
 
 interface UsageRowProps {
   agent: UsageAgent;
@@ -28,6 +35,13 @@ export default function UsageRow({ agent, usage, onClick }: UsageRowProps) {
   const status = usage?.status ?? "loading";
   const isOk = status === "ok";
 
+  // Numbers older than the stale window get an "as of Xm" cue and a slight dim
+  // instead of silently posing as current (parent ticks every 30s, so the label
+  // stays fresh). Errors serving a cached value surface here too.
+  const updatedAt = usage?.updated_at ?? null;
+  const ageSecs = updatedAt ? Date.now() / 1000 - updatedAt : 0;
+  const isStale = isOk && updatedAt != null && ageSecs > STALE_AFTER_SECS;
+
   // Compact right-hand text for non-ok states.
   const statusLabel =
     status === "loading" ? "…" : status === "error" ? "unavailable" : "";
@@ -40,12 +54,15 @@ export default function UsageRow({ agent, usage, onClick }: UsageRowProps) {
       style={{
         ...styles.row,
         backgroundColor: hovered ? "var(--bg-hover)" : "transparent",
-        opacity: isOk ? 1 : 0.55,
+        opacity: isOk ? (isStale ? 0.75 : 1) : 0.55,
       }}
       title={isOk ? "View usage detail" : usage?.error ?? "Usage unavailable"}
     >
       <div style={styles.topline}>
         <span style={styles.name}>{AGENT_LABELS[agent]}</span>
+        {isOk && isStale && updatedAt && (
+          <span style={styles.reset}>as of {timeAgo(updatedAt * 1000)}</span>
+        )}
         {!isOk && statusLabel && <span style={styles.reset}>{statusLabel}</span>}
       </div>
       {isOk && (
