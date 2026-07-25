@@ -1,3 +1,8 @@
+## v0.4.4 — File Tracking and Worktree Label Fixes
+
+- **Builds no longer thrash file tracking** — compiling a project (a Rust build, a big JS build) used to flood the file watcher with thousands of build-output changes, triggering repeated full rescans for the length of the build. Build directories are now ignored consistently, so Codezilla stays quiet and responsive while builds run.
+- **Agent worktrees get stable names** — Claude and Codex worktrees without a branch now show a meaningful, stable identity in the sidebar (source, folder, and commit) instead of a bare directory name, with the full path and state shown on hover.
+
 ## v0.4.3 — Live Worktree Stats and Raw Markdown Editing
 
 Worktree change counts now update live wherever the work happens, the usage chart stays fresh without tripping rate limits, and Markdown editing switches to a raw-source editor with a cleaner rendered view.
