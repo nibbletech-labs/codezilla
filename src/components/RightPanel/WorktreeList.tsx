@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import { useAppStore } from "../../store/appStore";
+import { worktreeLabel, worktreeTitle } from "../../lib/worktree";
 
 /**
  * The WORKTREES section: one row per environment — main always first (selects
@@ -18,13 +19,17 @@ export default function WorktreeList() {
   );
 
   const rows = useMemo(() => {
-    const list: { key: string; label: string; envPath: string | null }[] = [
-      { key: projectPath ?? "main", label: "main", envPath: null },
+    const list: { key: string; label: string; title: string; envPath: string | null }[] = [
+      { key: projectPath ?? "main", label: "main", title: projectPath ?? "main", envPath: null },
     ];
     for (const wt of worktrees) {
       if (wt.source === "main") continue;
-      const label = wt.branch ?? (wt.detached ? "detached" : (wt.path.split("/").pop() || wt.path));
-      list.push({ key: wt.path, label, envPath: wt.path });
+      list.push({
+        key: wt.path,
+        label: worktreeLabel(wt),
+        title: worktreeTitle(wt),
+        envPath: wt.path,
+      });
     }
     return list;
   }, [worktrees, projectPath]);
@@ -37,6 +42,7 @@ export default function WorktreeList() {
           <WorktreeRow
             key={row.key}
             label={row.label}
+            title={row.title}
             selected={selectedEnvPath === row.envPath}
             added={diff?.added ?? 0}
             removed={diff?.removed ?? 0}
@@ -50,12 +56,14 @@ export default function WorktreeList() {
 
 function WorktreeRow({
   label,
+  title,
   selected,
   added,
   removed,
   onClick,
 }: {
   label: string;
+  title: string;
   selected: boolean;
   added: number;
   removed: number;
@@ -75,7 +83,7 @@ function WorktreeRow({
       onClick={onClick}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
-      title={label}
+      title={title}
     >
       <span style={styles.label}>{label}</span>
       {(added > 0 || removed > 0) && (

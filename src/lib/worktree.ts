@@ -1,5 +1,43 @@
 import type { WorktreeInfo } from "./tauri";
 
+function pathParts(path: string): string[] {
+  return path.split(/[\\/]+/).filter(Boolean);
+}
+
+function basename(path: string): string {
+  const parts = pathParts(path);
+  return parts[parts.length - 1] ?? path;
+}
+
+function sourcePathLabel(worktree: WorktreeInfo): string {
+  const parts = pathParts(worktree.path);
+  const worktreesIndex = parts.lastIndexOf("worktrees");
+  const relativeParts = worktreesIndex >= 0 ? parts.slice(worktreesIndex + 1) : parts.slice(-1);
+  const relative = relativeParts.join("/") || basename(worktree.path);
+  return `${worktree.source}/${relative}`;
+}
+
+/** Stable sidebar identity for branchless worktrees created by coding agents. */
+export function worktreeLabel(worktree: WorktreeInfo): string {
+  if (worktree.branch) return worktree.branch;
+
+  const identity =
+    worktree.source === "codex" || worktree.source === "claude"
+      ? sourcePathLabel(worktree)
+      : basename(worktree.path) || "detached";
+  const shortHead = worktree.head.slice(0, 7);
+  return shortHead ? `${identity} @ ${shortHead}` : identity;
+}
+
+export function worktreeTitle(worktree: WorktreeInfo): string {
+  const state = worktree.detached && worktree.head
+    ? `Detached at ${worktree.head.slice(0, 7)}`
+    : worktree.branch
+      ? `Branch: ${worktree.branch}`
+      : "";
+  return [worktreeLabel(worktree), worktree.path, state].filter(Boolean).join("\n");
+}
+
 /** Strip trailing slashes, preserving a bare root "/". */
 function norm(p: string): string {
   return p.length > 1 ? p.replace(/\/+$/, "") : p;

@@ -1,7 +1,7 @@
 pub mod types;
 
 use log::error;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Output;
 
 use types::{
@@ -82,20 +82,36 @@ pub async fn get_git_branch(path: String) -> Result<String, String> {
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
+fn codex_worktrees_root() -> Option<PathBuf> {
+    if let Ok(codex_home) = std::env::var("CODEX_HOME") {
+        return Some(PathBuf::from(codex_home).join("worktrees"));
+    }
+    let home = std::env::var("HOME").ok()?;
+    Some(PathBuf::from(home).join(".codex").join("worktrees"))
+}
+
 /// Classify a worktree by its path. The first porcelain record (the repo's
 /// main working tree) is always "main"; others are inferred from where they
 /// live: Claude under `<repo>/.claude/worktrees/`, Codex under
-/// `~/.codex/worktrees/`, anything else is a manual `git worktree add`.
-fn classify_worktree(path: &str, is_main: bool) -> String {
+/// `$CODEX_HOME/worktrees/` (default `~/.codex/worktrees/`), anything else is
+/// a manual `git worktree add`.
+fn classify_worktree_at(path: &str, is_main: bool, codex_root: Option<&Path>) -> String {
     if is_main {
         "main".to_string()
     } else if path.contains("/.claude/worktrees/") {
         "claude".to_string()
-    } else if path.contains("/.codex/worktrees/") {
+    } else if codex_root.is_some_and(|root| Path::new(path).starts_with(root))
+        || path.contains("/.codex/worktrees/")
+    {
         "codex".to_string()
     } else {
         "manual".to_string()
     }
+}
+
+fn classify_worktree(path: &str, is_main: bool) -> String {
+    let codex_root = codex_worktrees_root();
+    classify_worktree_at(path, is_main, codex_root.as_deref())
 }
 
 /// Enumerate every worktree of the repo at `path` via `git worktree list
@@ -625,4 +641,42 @@ pub async fn get_commit_diff(repo_path: String, commit_ref: String) -> Result<St
     }
 
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::classify_worktree_at;
+    use std::path::Path;
+
+    #[test]
+    fn classifies_default_codex_worktree_without_environment() {
+        assert_eq!(
+            classify_worktree_at("/Users/dev/.codex/worktrees/6582/codezilla", false, None),
+            "codex"
+        );
+    }
+
+    #[test]
+    fn classifies_worktree_under_custom_codex_home() {
+        assert_eq!(
+            classify_worktree_at(
+                "/Volumes/fast/codex-home/worktrees/6582/codezilla",
+                false,
+                Some(Path::new("/Volumes/fast/codex-home/worktrees")),
+            ),
+            "codex"
+        );
+    }
+
+    #[test]
+    fn custom_codex_root_match_is_path_boundary_aware() {
+        assert_eq!(
+            classify_worktree_at(
+                "/Volumes/fast/codex-home/worktrees-old/codezilla",
+                false,
+                Some(Path::new("/Volumes/fast/codex-home/worktrees")),
+            ),
+            "manual"
+        );
+    }
 }
