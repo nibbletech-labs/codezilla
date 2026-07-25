@@ -15,14 +15,12 @@ pub struct FileWatcher {
 /// high-volume (git index rewrites, package installs, Xcode builds). Filtering
 /// here keeps `fs-change` emits — and the git/file-tree refreshes they trigger
 /// in the frontend — from firing on every build or `git` invocation.
-const EXCLUDED_DIRS: [&str; 3] = [".git", "node_modules", "DerivedData"];
-
-fn is_excluded(path: &std::path::Path) -> bool {
-    path.components().any(|c| {
-        c.as_os_str()
-            .to_str()
-            .is_some_and(|name| EXCLUDED_DIRS.contains(&name))
-    })
+///
+/// The names come from `super::is_skipped_dir`, the same predicate the
+/// file-search index prunes with, so the watcher can never again report churn
+/// in a directory the index is guaranteed to discard.
+pub(super) fn is_excluded(path: &std::path::Path) -> bool {
+    path.components().any(|c| super::is_skipped_dir(c.as_os_str()))
 }
 
 pub type WatcherState = Arc<Mutex<Option<FileWatcher>>>;

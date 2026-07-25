@@ -30,6 +30,9 @@ fn is_os_hidden(name: &OsStr) -> bool {
 /// gitignored-but-real files like a raw image or a local .env are findable), so
 /// we skip these by name instead — otherwise a single scan pulls in tens of
 /// thousands of node_modules / target artifacts.
+///
+/// This is the single source of truth: `watcher::is_excluded` reads it too, via
+/// `is_skipped_dir`.
 const BUILD_DIR_NAMES: &[&str] = &[
     "node_modules",
     "target",
@@ -54,6 +57,18 @@ const BUILD_DIR_NAMES: &[&str] = &[
 fn is_build_dir(name: &OsStr) -> bool {
     let s = name.to_string_lossy();
     BUILD_DIR_NAMES.iter().any(|&d| s == d)
+}
+
+/// Directory names that neither the file-search index nor the change watcher
+/// should descend into: `.git` plus every build/dependency dir above.
+///
+/// The two used to keep separate lists, and they drifted: `target` was on the
+/// index's list but not the watcher's, so a `cargo build` fired a storm of
+/// change events that each triggered a full rescan — a rescan that then pruned
+/// `target` and produced a byte-identical index. Sharing one predicate is what
+/// stops them diverging again.
+fn is_skipped_dir(name: &OsStr) -> bool {
+    name == OsStr::new(".git") || is_build_dir(name)
 }
 
 pub fn canonicalize_path(raw: &str) -> Result<std::path::PathBuf, String> {
@@ -385,6 +400,39 @@ mod tests {
     use super::write_file;
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    /// The watcher and the file-search index must prune the same directories.
+    /// When they drifted, `target` was pruned by the index but still watched,
+    /// so every `cargo build` triggered a full rescan that changed nothing.
+    #[test]
+    fn watcher_and_index_skip_the_same_dirs() {
+        use std::ffi::OsStr;
+
+        for name in super::BUILD_DIR_NAMES {
+            let os = OsStr::new(*name);
+            assert!(
+                super::is_skipped_dir(os),
+                "{} is pruned by the index but not skipped by the watcher",
+                name
+            );
+            assert!(
+                super::watcher::is_excluded(
+                    &std::path::Path::new("/proj").join(name).join("f.o")
+                ),
+                "watcher does not exclude churn under {}",
+                name
+            );
+        }
+
+        // .git is skipped by both, and is not a build dir.
+        assert!(super::is_skipped_dir(OsStr::new(".git")));
+        assert!(!super::is_build_dir(OsStr::new(".git")));
+
+        // Ordinary source dirs stay visible to both.
+        for name in ["src", "docs", "tools", "assets"] {
+            assert!(!super::is_skipped_dir(OsStr::new(name)));
+        }
+    }
 
     fn test_root(name: &str) -> std::path::PathBuf {
         let unique = SystemTime::now()
