@@ -2,6 +2,7 @@ import { useEffect, useRef, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { useAppStore } from "../store/appStore";
 import { revealInFinder, openInDefaultApp, writePty } from "../lib/tauri";
+import { copyText } from "../lib/clipboard";
 import { isEditableMarkdownFile } from "../lib/markdownRenderer";
 import { resolveProjectRootForPath } from "../lib/worktree";
 
@@ -118,7 +119,7 @@ export function FileLinkMenu() {
         </svg>
       ),
       action: () => {
-        navigator.clipboard.writeText(path);
+        copyText(path);
         closeMenu();
       },
     },

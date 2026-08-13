@@ -1,3 +1,10 @@
+## v0.4.5 — Clipboard Fix
+
+Copying stopped working entirely on the latest macOS. This release fixes it.
+
+- **Copying works again** — after updating to macOS 26.6, "Copy as prose", "Copy Path", "Copy Session ID" and "Copy Resume Command" all silently stopped putting anything on the clipboard. All of them work again, and are no longer affected by macOS updates.
+- **"Copy as prose" no longer claims false success** — the button used to flash "Copied!" even when nothing had been copied. It now shows when a copy has failed.
+
 ## v0.4.4 — File Tracking and Worktree Label Fixes
 
 - **Builds no longer thrash file tracking** — compiling a project (a Rust build, a big JS build) used to flood the file watcher with thousands of build-output changes, triggering repeated full rescans for the length of the build. Build directories are now ignored consistently, so Codezilla stays quiet and responsive while builds run.

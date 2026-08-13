@@ -12,6 +12,7 @@
     "window-state:default",
     "updater:default",
     "process:default",
-    "log:default"
+    "log:default",
+    "clipboard-manager:allow-write-text"
   ]
 }

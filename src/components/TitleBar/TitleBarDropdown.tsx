@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import { useAppStore } from "../../store/appStore";
 import { ask } from "@tauri-apps/plugin-dialog";
+import { copyText } from "../../lib/clipboard";
 import { isThreadLikelyWorking } from "../../lib/threadRuntime";
 
 interface TitleBarDropdownProps {
@@ -59,12 +60,12 @@ export default function TitleBarDropdown({ anchorRect, onClose }: TitleBarDropdo
   };
 
   const handleCopySessionId = () => {
-    if (sessionId) navigator.clipboard.writeText(sessionId);
+    if (sessionId) copyText(sessionId);
     onClose();
   };
 
   const handleCopyResumeCmd = () => {
-    if (resumeCmd) navigator.clipboard.writeText(resumeCmd);
+    if (resumeCmd) copyText(resumeCmd);
     onClose();
   };
 

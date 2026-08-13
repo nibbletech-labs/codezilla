@@ -48,6 +48,7 @@ import {
 
 import { createFilePathLinkProviderForTerminal } from "../../lib/filePathLinkProvider";
 import { createCommitHashLinkProviderForTerminal } from "../../lib/commitHashLinkProvider";
+import { copyText } from "../../lib/clipboard";
 import { collapseProseWraps } from "../../lib/proseCopy";
 import { openExternalUrl } from "../../lib/externalLinks";
 import { createInitialTranscriptInfo } from "../../store/transcriptTypes";
@@ -936,16 +937,12 @@ export default function TerminalMultiplexer() {
       {hasSelection && activeThreadId && (
         <CopyProseButton onClick={() => {
           const active = threads.find((t) => t.id === activeThreadId);
-          if (active?.sessionId) {
-            const instance = instancesRef.current.get(active.sessionId);
-            if (instance) {
-              const sel = instance.terminal.getSelection();
-              if (sel) {
-                const cleaned = collapseProseWraps(sel);
-                navigator.clipboard.writeText(cleaned);
-              }
-            }
-          }
+          if (!active?.sessionId) return Promise.resolve(false);
+          const instance = instancesRef.current.get(active.sessionId);
+          if (!instance) return Promise.resolve(false);
+          const sel = instance.terminal.getSelection();
+          if (!sel) return Promise.resolve(false);
+          return copyText(collapseProseWraps(sel));
         }} />
       )}
       {showScrollButton && activeThreadId && (
@@ -1235,15 +1232,20 @@ function ScrollToBottomButton({ onClick }: { onClick: () => void }) {
 // collapseProseWraps lives in src/lib/proseCopy.ts (pure + unit-tested, see
 // tests/prose-copy.test.ts) and is imported at the top of this file.
 
-function CopyProseButton({ onClick }: { onClick: () => void }) {
+// Reports the real outcome of the clipboard write: a failed copy used to still
+// flash "Copied!", which hid a completely dead clipboard behind a success state.
+function CopyProseButton({ onClick }: { onClick: () => Promise<boolean> }) {
   const [hovered, setHovered] = useState(false);
-  const [copied, setCopied] = useState(false);
+  const [status, setStatus] = useState<"idle" | "copied" | "failed">("idle");
+  const copied = status === "copied";
+  const failed = status === "failed";
   return (
     <button
       onClick={() => {
-        onClick();
-        setCopied(true);
-        setTimeout(() => setCopied(false), 1200);
+        onClick().then((ok) => {
+          setStatus(ok ? "copied" : "failed");
+          setTimeout(() => setStatus("idle"), ok ? 1200 : 2000);
+        });
       }}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
@@ -1252,11 +1254,11 @@ function CopyProseButton({ onClick }: { onClick: () => void }) {
         top: "8px",
         right: "24px",
         zIndex: 20,
-        background: copied
-          ? "var(--accent)"
-          : hovered ? "var(--accent)" : "var(--accent-selection)",
-        border: "1px solid var(--accent)",
-        color: copied || hovered ? "var(--accent-text)" : "var(--text-primary)",
+        background: failed
+          ? "#f14c4c"
+          : copied || hovered ? "var(--accent)" : "var(--accent-selection)",
+        border: `1px solid ${failed ? "#f14c4c" : "var(--accent)"}`,
+        color: failed || copied || hovered ? "var(--accent-text)" : "var(--text-primary)",
         fontSize: "var(--font-size-sm)",
         fontWeight: 600,
         cursor: "pointer",
@@ -1265,7 +1267,7 @@ function CopyProseButton({ onClick }: { onClick: () => void }) {
         transition: "background 0.15s, border-color 0.15s, color 0.15s",
       }}
     >
-      {copied ? "Copied!" : "Copy as prose"}
+      {copied ? "Copied!" : failed ? "Copy failed" : "Copy as prose"}
     </button>
   );
 }

@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { useAppStore, SLOW_GIT_MS } from "../../store/appStore";
+import { copyText } from "../../lib/clipboard";
 import { diagnoseRepoHealth } from "../../lib/tauri";
 
 // Re-warn after a dismissal only if git gets meaningfully worse than it was
@@ -60,7 +61,8 @@ export default function RepoHealthBanner() {
 
   const copyFix = () => {
     if (!fixCommands) return;
-    navigator.clipboard.writeText(fixCommands).then(() => {
+    copyText(fixCommands).then((ok) => {
+      if (!ok) return;
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     });
