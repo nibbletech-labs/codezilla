@@ -4,12 +4,12 @@
 # src-tauri/binaries/heed-<target-triple>, where Tauri's `externalBin` expects
 # it. Run before `tauri build`. Idempotent: re-running re-downloads and replaces.
 #
-#   HEED_VERSION=0.1.0 ./scripts/fetch-heed.sh            # host triple
+#   HEED_VERSION=0.2.0 ./scripts/fetch-heed.sh            # host triple
 #   TARGET=aarch64-apple-darwin ./scripts/fetch-heed.sh   # explicit triple (CI)
 #
 set -euo pipefail
 
-HEED_VERSION="${HEED_VERSION:-0.1.0}"
+HEED_VERSION="${HEED_VERSION:-0.2.0}"
 REPO="${HEED_REPO:-nibbletech-labs/heed}"
 # Default to the host triple; CI passes TARGET to match `tauri build --target`.
 TARGET="${TARGET:-$(rustc -vV | sed -n 's/host: //p')}"

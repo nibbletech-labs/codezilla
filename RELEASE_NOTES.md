@@ -1,3 +1,10 @@
+## v0.4.6 — Activity Tracking Follows Background Sessions
+
+Threads that moved into a background session kept showing as idle while they were still working. This release fixes that, and stops those sessions going missing when a thread is resumed.
+
+- **Threads no longer sit on "Idle" while they're working** — when Claude moves a session into the background, or restarts it in place, it continues the conversation under a new session behind the scenes. Codezilla kept watching the old one, so a thread that was actively working showed as idle indefinitely. It now follows the session that is actually running.
+- **Resuming a moved thread reopens the right conversation** — a thread whose session had moved would reopen the older, pre-move transcript, leaving hours of recent work unreachable. Resuming now returns to the conversation you were last looking at.
+
 ## v0.4.5 — Clipboard Fix
 
 Copying stopped working entirely on the latest macOS. This release fixes it.

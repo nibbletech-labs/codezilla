@@ -453,17 +453,20 @@ function applyHeedThreadState(payloads: HeedThreadPayload[]): void {
     const thread = state.threads.find((t) => t.id === p.ownerThreadId);
     if (!thread) continue;
 
-    // Capture Codex's native session id the moment Heed correlates the thread.
-    // Codex mints its own id (unlike Claude, whose id we supply at spawn), so it
-    // has to be captured back here — `nativeThreadId` is that id. Persistence
-    // already saves `codexThreadId`, so storing it now is what lets a later
-    // `codex resume <id>` work. Gate on a real change to avoid redundant writes.
-    if (
-      p.cli === "codex"
-      && isValidUUID(p.nativeThreadId)
-      && thread.codexThreadId !== p.nativeThreadId
-    ) {
-      state.setCodexThreadId(thread.id, p.nativeThreadId);
+    // Capture the CLI's native session id whenever Heed's differs from ours.
+    // Codex mints its own id, so it has to be captured back here. Claude's is
+    // supplied at spawn, but it doesn't stay ours: Claude rotates the id when a
+    // session forks to its background daemon or restarts in place, and Heed
+    // moves ownership to whichever session is actually live. Adopting that id
+    // is what keeps a later `--resume` pointing at the conversation the user
+    // can see, rather than the transcript it was forked from. Gate on a real
+    // change to avoid redundant writes.
+    if (isValidUUID(p.nativeThreadId)) {
+      if (p.cli === "codex" && thread.codexThreadId !== p.nativeThreadId) {
+        state.setCodexThreadId(thread.id, p.nativeThreadId);
+      } else if (p.cli === "claude" && thread.claudeSessionId !== p.nativeThreadId) {
+        state.setClaudeSessionId(thread.id, p.nativeThreadId);
+      }
     }
 
     const current =

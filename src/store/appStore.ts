@@ -90,6 +90,7 @@ interface AppState {
   resumeThread: (threadId: string) => string;
   newSession: (threadId: string) => string;
   setCodexThreadId: (threadId: string, codexThreadId: string) => void;
+  setClaudeSessionId: (threadId: string, claudeSessionId: string) => void;
   clearResuming: (threadId: string) => void;
   touchThread: (threadId: string) => void;
 
@@ -723,6 +724,14 @@ export const useAppStore = create<AppState>((set, get) => ({
     set((s) => ({
       threads: s.threads.map((t) =>
         t.id === threadId ? { ...t, codexThreadId } : t,
+      ),
+    }));
+  },
+
+  setClaudeSessionId: (threadId, claudeSessionId) => {
+    set((s) => ({
+      threads: s.threads.map((t) =>
+        t.id === threadId ? { ...t, claudeSessionId } : t,
       ),
     }));
   },
