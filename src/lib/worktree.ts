@@ -80,6 +80,8 @@ export function attributeEnv(
   return null;
 }
 
+/** Return the known repo/worktree that owns a path. Absolute paths outside all
+ * known environments are linked output, not members of the active project. */
 export function resolveProjectRootForPath(
   filePath: string,
   activeProjectPath: string | null,
@@ -96,8 +98,6 @@ export function resolveProjectRootForPath(
   return (
     Array.from(candidates)
       .filter((candidate) => isPrefix(candidate, filePath))
-      .sort((a, b) => norm(b).length - norm(a).length)[0] ??
-    selectedEnvPath ??
-    activeProjectPath
+      .sort((a, b) => norm(b).length - norm(a).length)[0] ?? null
   );
 }

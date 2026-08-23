@@ -120,6 +120,54 @@ fn resolve_in_root(path: &str, project_root: &str) -> Result<PathBuf, String> {
     Ok(norm_path)
 }
 
+/// Roots where coding agents commonly leave user-facing output that is linked
+/// from the terminal but does not belong to the active repository.
+///
+/// These roots are deliberately narrow. They are only used by read/open/reveal
+/// commands; writes continue to require project-root containment.
+fn linked_output_roots() -> Vec<PathBuf> {
+    let mut roots = vec![std::env::temp_dir(), PathBuf::from("/tmp")];
+    if let Some(home) = std::env::var_os("HOME") {
+        roots.push(PathBuf::from(home).join(".haven"));
+    }
+    roots
+}
+
+/// Resolve a path for read-only display operations.
+///
+/// Project files retain the lexical containment behaviour of `resolve_in_root`
+/// so an intentional symlink inside a repo still works. Paths outside the repo
+/// must exist and canonicalize beneath one of the explicit linked-output roots;
+/// canonicalization prevents `..` and symlink escapes from those roots.
+fn resolve_for_read(path: &str, project_root: &str) -> Result<PathBuf, String> {
+    resolve_for_read_with_roots(path, project_root, &linked_output_roots())
+}
+
+fn resolve_for_read_with_roots(
+    path: &str,
+    project_root: &str,
+    linked_roots: &[PathBuf],
+) -> Result<PathBuf, String> {
+    let norm_path = normalize_lexical(Path::new(path));
+    let norm_root = normalize_lexical(Path::new(project_root));
+    if norm_path.starts_with(&norm_root) {
+        return Ok(norm_path);
+    }
+
+    let canonical_path = canonicalize_path(path)?;
+    if linked_roots.iter().any(|root| {
+        root.canonicalize()
+            .is_ok_and(|canonical_root| canonical_path.starts_with(canonical_root))
+    }) {
+        return Ok(canonical_path);
+    }
+
+    Err(format!(
+        "Path '{}' is outside the project root and supported linked-output locations",
+        path
+    ))
+}
+
 #[derive(Serialize, Clone)]
 pub struct FileEntry {
     pub name: String,
@@ -276,7 +324,7 @@ const MAX_FILE_SIZE: u64 = 512 * 1024;
 
 #[tauri::command]
 pub fn read_file(path: String, project_root: String) -> Result<String, String> {
-    let file_path = resolve_in_root(&path, &project_root)?;
+    let file_path = resolve_for_read(&path, &project_root)?;
 
     if !file_path.is_file() {
         return Err(format!("Not a file: {}", path));
@@ -318,7 +366,7 @@ const MAX_IMAGE_SIZE: u64 = 50 * 1024 * 1024; // 50 MB
 
 #[tauri::command]
 pub fn read_file_base64(path: String, project_root: String) -> Result<String, String> {
-    let file_path = resolve_in_root(&path, &project_root)?;
+    let file_path = resolve_for_read(&path, &project_root)?;
 
     if !file_path.is_file() {
         return Err(format!("Not a file: {}", path));
@@ -344,7 +392,7 @@ pub fn read_file_base64(path: String, project_root: String) -> Result<String, St
 
 #[tauri::command]
 pub fn preview_file(path: String, project_root: String) -> Result<(), String> {
-    let file_path = resolve_in_root(&path, &project_root)?;
+    let file_path = resolve_for_read(&path, &project_root)?;
 
     if !file_path.exists() {
         return Err(format!("File not found: {}", path));
@@ -364,7 +412,7 @@ pub fn preview_file(path: String, project_root: String) -> Result<(), String> {
 
 #[tauri::command]
 pub fn reveal_in_finder(path: String, project_root: String) -> Result<(), String> {
-    let file_path = resolve_in_root(&path, &project_root)?;
+    let file_path = resolve_for_read(&path, &project_root)?;
 
     if !file_path.exists() {
         return Err(format!("Path not found: {}", path));
@@ -381,7 +429,7 @@ pub fn reveal_in_finder(path: String, project_root: String) -> Result<(), String
 
 #[tauri::command]
 pub fn open_in_default_app(path: String, project_root: String) -> Result<(), String> {
-    let file_path = resolve_in_root(&path, &project_root)?;
+    let file_path = resolve_for_read(&path, &project_root)?;
 
     if !file_path.exists() {
         return Err(format!("Path not found: {}", path));
@@ -397,7 +445,7 @@ pub fn open_in_default_app(path: String, project_root: String) -> Result<(), Str
 
 #[cfg(test)]
 mod tests {
-    use super::write_file;
+    use super::{read_file, resolve_for_read_with_roots, write_file};
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -458,6 +506,77 @@ mod tests {
 
         assert_eq!(fs::read_to_string(&file).unwrap(), "after");
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn read_file_reads_linked_output_outside_project_root() {
+        let root = test_root("read_project");
+        let linked_root = test_root("read_linked");
+        fs::create_dir_all(&root).unwrap();
+        fs::create_dir_all(&linked_root).unwrap();
+        let file = linked_root.join("report.md");
+        fs::write(&file, "linked output").unwrap();
+
+        let content = read_file(
+            file.to_string_lossy().to_string(),
+            root.to_string_lossy().to_string(),
+        )
+        .unwrap();
+
+        assert_eq!(content, "linked output");
+        let _ = fs::remove_dir_all(root);
+        let _ = fs::remove_dir_all(linked_root);
+    }
+
+    #[test]
+    fn read_resolver_rejects_unapproved_external_path() {
+        let root = test_root("read_reject_project");
+        let linked_root = test_root("read_allowed");
+        let outside = test_root("read_reject_outside");
+        fs::create_dir_all(&root).unwrap();
+        fs::create_dir_all(&linked_root).unwrap();
+        fs::create_dir_all(&outside).unwrap();
+        let file = outside.join("report.md");
+        fs::write(&file, "outside").unwrap();
+
+        let err = resolve_for_read_with_roots(
+            file.to_string_lossy().as_ref(),
+            root.to_string_lossy().as_ref(),
+            &[linked_root.clone()],
+        )
+        .unwrap_err();
+
+        assert!(err.contains("outside the project root"));
+        let _ = fs::remove_dir_all(root);
+        let _ = fs::remove_dir_all(linked_root);
+        let _ = fs::remove_dir_all(outside);
+    }
+
+    #[test]
+    fn read_resolver_rejects_symlink_escape_from_linked_root() {
+        use std::os::unix::fs::symlink;
+        let root = test_root("read_sym_project");
+        let linked_root = test_root("read_sym_allowed");
+        let outside = test_root("read_sym_outside");
+        fs::create_dir_all(&root).unwrap();
+        fs::create_dir_all(&linked_root).unwrap();
+        fs::create_dir_all(&outside).unwrap();
+        let target = outside.join("secret.md");
+        fs::write(&target, "outside").unwrap();
+        let link = linked_root.join("linked.md");
+        symlink(&target, &link).unwrap();
+
+        let err = resolve_for_read_with_roots(
+            link.to_string_lossy().as_ref(),
+            root.to_string_lossy().as_ref(),
+            &[linked_root.clone()],
+        )
+        .unwrap_err();
+
+        assert!(err.contains("outside the project root"));
+        let _ = fs::remove_dir_all(root);
+        let _ = fs::remove_dir_all(linked_root);
+        let _ = fs::remove_dir_all(outside);
     }
 
     #[test]

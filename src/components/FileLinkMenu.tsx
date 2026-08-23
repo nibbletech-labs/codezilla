@@ -35,6 +35,10 @@ export function FileLinkMenu() {
     selectedEnvPath,
     worktrees,
   ) ?? undefined;
+  // External terminal links (system temp and Haven artifacts) have no owning
+  // git root, but the backend still needs the active root as request context.
+  // It independently restricts this read-only access to approved locations.
+  const accessRoot = projectPath ?? selectedEnvPath ?? activeProject?.path;
 
   // Path to send to the terminal: project-relative when we can resolve it,
   // otherwise the path as-is (terminal links may already be relative).
@@ -67,7 +71,7 @@ export function FileLinkMenu() {
         closeMenu();
       },
     },
-    ...(isEditableMarkdownFile(path)
+    ...(projectPath && isEditableMarkdownFile(path)
       ? [
           {
             label: "Edit",
@@ -94,7 +98,7 @@ export function FileLinkMenu() {
         </svg>
       ),
       action: () => {
-        if (projectPath) openInDefaultApp(path, projectPath);
+        if (accessRoot) openInDefaultApp(path, accessRoot);
         closeMenu();
       },
     },
@@ -106,7 +110,7 @@ export function FileLinkMenu() {
         </svg>
       ),
       action: () => {
-        if (projectPath) revealInFinder(path, projectPath);
+        if (accessRoot) revealInFinder(path, accessRoot);
         closeMenu();
       },
     },

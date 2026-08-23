@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { parsePaths, parseUnresolvedCandidates } from "../src/lib/parsePaths.ts";
+import { resolveProjectRootForPath } from "../src/lib/worktree.ts";
 
 const PROJ = "/proj";
 
@@ -104,6 +105,18 @@ test("unresolved absolute path is kept verbatim", () => {
   assert.equal(r[0].resolved, "/proj/docs/new.md");
 });
 
+test("system-temp and Haven paths become disk candidates without being indexed", () => {
+  const temp = parseUnresolvedCandidates("/private/tmp/agent-output/report.html", PROJ, new Set());
+  const haven = parseUnresolvedCandidates(
+    "/Users/test/.haven/demo/items/HV-1/mockup.png",
+    PROJ,
+    new Set(),
+  );
+
+  assert.equal(temp[0]?.resolved, "/private/tmp/agent-output/report.html");
+  assert.equal(haven[0]?.resolved, "/Users/test/.haven/demo/items/HV-1/mockup.png");
+});
+
 test("an indexed path produces no unresolved candidate", () => {
   const r = parseUnresolvedCandidates("src/foo.ts", PROJ, new Set(["/proj/src/foo.ts"]));
   assert.deepEqual(r, []);
@@ -145,4 +158,31 @@ test("bare filename not in the index becomes a root-level disk candidate", () =>
 
 test("no path-like text yields no unresolved candidates", () => {
   assert.deepEqual(parseUnresolvedCandidates("nothing path-like here", PROJ, new Set()), []);
+});
+
+test("absolute linked output has no owning project root", () => {
+  assert.equal(
+    resolveProjectRootForPath("/private/tmp/report.html", PROJ, null, []),
+    null,
+  );
+  assert.equal(
+    resolveProjectRootForPath("/Users/test/.haven/demo/items/HV-1/report.md", PROJ, null, []),
+    null,
+  );
+});
+
+test("repository and worktree files resolve to their owning root", () => {
+  const worktree = {
+    path: "/worktrees/feature",
+    branch: "feature",
+    head: "1234567890",
+    detached: false,
+    source: "codex" as const,
+  };
+
+  assert.equal(resolveProjectRootForPath("/proj/src/main.ts", PROJ, null, []), PROJ);
+  assert.equal(
+    resolveProjectRootForPath("/worktrees/feature/src/main.ts", PROJ, null, [worktree]),
+    worktree.path,
+  );
 });

@@ -1,5 +1,5 @@
 import { lazy, Suspense, useEffect, useState, useCallback, useRef } from "react";
-import { readFile, readFileBase64, getFileDiffStat, revealInFinder, writeFile } from "../../lib/tauri";
+import { readFile, readFileBase64, getFileDiffStat, previewFile, revealInFinder, writeFile } from "../../lib/tauri";
 import { normalizeExternalUrl, openExternalUrl } from "../../lib/externalLinks";
 import { sanitizeHtml } from "../../lib/sanitize";
 import { isMarkdownFile, renderMarkdown } from "../../lib/markdownRenderer";
@@ -57,9 +57,23 @@ export default function FilePreview({ filePath, line, initialMode = "preview", o
   const [imageDataUrl, setImageDataUrl] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const isMarkdown = isMarkdownFile(filePath);
-  // All markdown files are editable now — raw source editing has none of the
-  // round-trip fragility that previously limited editing to plain `.md`.
-  const canEditMarkdown = isMarkdown;
+
+  // Resolve an owning git root separately from the root passed as context to
+  // read-only backend commands. Terminal links into system temp and ~/.haven
+  // are previewable but intentionally do not gain edit or diff capabilities.
+  const activeProject = useAppStore((s) => s.getActiveProject());
+  const selectedEnvPath = useAppStore((s) => s.selectedEnvPath);
+  const worktrees = useAppStore((s) => s.worktrees);
+  const projectPath = resolveProjectRootForPath(
+    filePath,
+    activeProject?.path ?? null,
+    selectedEnvPath,
+    worktrees,
+  );
+  const accessRoot = projectPath ?? selectedEnvPath ?? activeProject?.path ?? null;
+  // Markdown inside a repository/worktree remains editable; linked output is
+  // read-only even when it is itself a Markdown file.
+  const canEditMarkdown = isMarkdown && projectPath !== null;
   const [viewMode, setViewMode] = useState<ViewMode>(
     initialMode === "edit" && canEditMarkdown ? "source" : isMarkdown ? "rendered" : "file",
   );
@@ -83,17 +97,8 @@ export default function FilePreview({ filePath, line, initialMode = "preview", o
   const fileName = filePath.split("/").pop() ?? filePath;
   const category = getFileCategory(filePath);
 
-  // Git status for badge — scoped to the selected environment so the badge
-  // reflects the chosen worktree when one is selected.
-  const activeProject = useAppStore((s) => s.getActiveProject());
-  const selectedEnvPath = useAppStore((s) => s.selectedEnvPath);
-  const worktrees = useAppStore((s) => s.worktrees);
-  const projectPath = resolveProjectRootForPath(
-    filePath,
-    activeProject?.path ?? null,
-    selectedEnvPath,
-    worktrees,
-  );
+  // Git status for badge — scoped to the owning environment so external linked
+  // output does not accidentally query the active repository.
   const gitStatus = useGitStatus(projectPath);
   const fileGitStatus = gitStatus.get(filePath);
   const [fileDiffStat, setFileDiffStat] = useState<[number, number] | null>(null);
@@ -141,24 +146,34 @@ export default function FilePreview({ filePath, line, initialMode = "preview", o
     setImageDataUrl(null);
     setError(null);
 
-    if (!projectPath) {
+    if (!accessRoot) {
       setError("No active project");
       return;
     }
 
     if (category === "text") {
-      readFile(filePath, projectPath)
+      readFile(filePath, accessRoot)
         .then(setContent)
         .catch((err) => setError(String(err)));
     } else if (category === "image") {
-      readFileBase64(filePath, projectPath)
+      readFileBase64(filePath, accessRoot)
         .then((b64) => {
           const mime = getMimeTypeFromPath(filePath);
           setImageDataUrl(`data:${mime};base64,${b64}`);
         })
         .catch((err) => setError(String(err)));
     }
-  }, [filePath, category, projectPath]);
+  }, [filePath, category, accessRoot]);
+
+  // Terminal Cmd/Ctrl-click opens this component directly. Keep that gesture
+  // useful for PDFs, office documents, media, and archives by forwarding them
+  // to macOS Quick Look just as the file tree does.
+  useEffect(() => {
+    if (category !== "native" || !accessRoot) return;
+    previewFile(filePath, accessRoot)
+      .then(onClose)
+      .catch((err) => setError(String(err)));
+  }, [filePath, category, accessRoot, onClose]);
 
   // Seed the editor buffer the first time the source view opens for a file.
   useEffect(() => {
@@ -344,7 +359,7 @@ export default function FilePreview({ filePath, line, initialMode = "preview", o
       }
       // D toggles diff view
       if (e.key === "d" || e.key === "D") {
-        if (isTextInput) return;
+        if (isTextInput || !projectPath) return;
         e.preventDefault();
         switchView(viewMode === "diff" ? (isMarkdown ? "rendered" : "file") : "diff");
         return;
@@ -352,7 +367,7 @@ export default function FilePreview({ filePath, line, initialMode = "preview", o
       // M toggles between the rendered preview and the editable source view
       if (e.key === "m" || e.key === "M") {
         if (isTextInput) return;
-        if (!isMarkdown) return;
+        if (!canEditMarkdown) return;
         e.preventDefault();
         switchView(viewMode === "rendered" ? "source" : "rendered");
         return;
@@ -373,7 +388,7 @@ export default function FilePreview({ filePath, line, initialMode = "preview", o
     // Use capture phase so we intercept before xterm's handler sends keys to PTY
     window.addEventListener("keydown", handleKeyDown, true);
     return () => window.removeEventListener("keydown", handleKeyDown, true);
-  }, [switchView, isMarkdown, requestClose, saveEditContent, viewMode]);
+  }, [switchView, isMarkdown, canEditMarkdown, projectPath, requestClose, saveEditContent, viewMode]);
 
   const handleBackdropClick = useCallback(
     (e: React.MouseEvent) => {
@@ -406,7 +421,7 @@ export default function FilePreview({ filePath, line, initialMode = "preview", o
   }
 
   useEffect(() => {
-    if (viewMode !== "rendered" || !renderedMarkdownHtml || !projectPath || !bodyRef.current) return;
+    if (viewMode !== "rendered" || !renderedMarkdownHtml || !accessRoot || !bodyRef.current) return;
 
     const previewBody = bodyRef.current;
     let cancelled = false;
@@ -418,12 +433,12 @@ export default function FilePreview({ filePath, line, initialMode = "preview", o
         const src = img.getAttribute("src");
         if (!src) return;
 
-        const candidates = resolveMarkdownImageCandidates(src, filePath, projectPath);
+        const candidates = resolveMarkdownImageCandidates(src, filePath, accessRoot);
         if (candidates.length === 0) return;
 
         for (const candidate of candidates) {
           try {
-            const b64 = await readFileBase64(candidate, projectPath);
+            const b64 = await readFileBase64(candidate, accessRoot);
             if (cancelled || !previewBody.contains(img)) return;
 
             img.dataset.codezillaResolvedSrc = candidate;
@@ -442,7 +457,7 @@ export default function FilePreview({ filePath, line, initialMode = "preview", o
     return () => {
       cancelled = true;
     };
-  }, [filePath, projectPath, renderedMarkdownHtml, viewMode]);
+  }, [filePath, accessRoot, renderedMarkdownHtml, viewMode]);
 
   const lang = getLangFromPath(filePath);
 
@@ -561,11 +576,13 @@ export default function FilePreview({ filePath, line, initialMode = "preview", o
 
   // The always-available view switcher. Markdown gets all three surfaces;
   // other text files get source + diff; binary/media gets none.
-  const viewSegments: Array<[ViewMode, string]> = isMarkdown
-    ? [["rendered", "Rendered"], ["source", "Markdown"], ["diff", "Diff"]]
-    : category === "text"
-      ? [["file", "File"], ["diff", "Diff"]]
-      : [];
+  const viewSegments: Array<[ViewMode, string]> = projectPath
+    ? isMarkdown
+      ? [["rendered", "Rendered"], ["source", "Markdown"], ["diff", "Diff"]]
+      : category === "text"
+        ? [["file", "File"], ["diff", "Diff"]]
+        : []
+    : [];
 
   return (
     <div style={styles.backdrop} onClick={handleBackdropClick}>
@@ -660,7 +677,7 @@ export default function FilePreview({ filePath, line, initialMode = "preview", o
             )}
             <button
               style={styles.closeButton}
-              onClick={() => projectPath && revealInFinder(filePath, projectPath)}
+              onClick={() => accessRoot && revealInFinder(filePath, accessRoot)}
               title="Reveal in Finder"
             >
               <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">

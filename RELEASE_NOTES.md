@@ -1,3 +1,11 @@
+## v0.4.7 — Temp and Haven File Links
+
+Files created by an AI outside the repository can now be opened directly from terminal output.
+
+- **Temp files open normally** — links to files in `/tmp` and the per-user macOS temp directory now support Preview, Open, Reveal in Finder, and Cmd/Ctrl-click Quick Look without needing to be indexed in the project.
+- **Haven attachments are clickable** — files stored under `~/.haven` get the same terminal-link actions, including in-app previews for text, Markdown, and images.
+- **External output stays read-only in Codezilla** — temp files and Haven artifacts do not gain repository editing or Git-diff controls, and paths outside the approved locations remain blocked.
+
 ## v0.4.6 — Activity Tracking Follows Background Sessions
 
 Threads that moved into a background session kept showing as idle while they were still working. This release fixes that, and stops those sessions going missing when a thread is resumed.
