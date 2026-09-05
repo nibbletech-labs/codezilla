@@ -400,12 +400,7 @@ export function setUsageAgentEnabled(agent: "claude" | "codex", enabled: boolean
   return invoke("set_usage_agent_enabled", { agent, enabled });
 }
 
-/** Heartbeat: this agent's threads are active — keeps the fast poll cadence. */
-export function reportUsageActivity(agent: "claude" | "codex"): Promise<void> {
-  return invoke("report_usage_activity", { agent });
-}
-
-/** Push: refresh this agent's usage soon (floored backend-side at 60s spacing). */
-export function requestUsageRefresh(agent: "claude" | "codex"): Promise<void> {
-  return invoke("request_usage_refresh", { agent });
+/** One last-active timestamp per terminal, in epoch seconds. */
+export function reportUsageActivity(agent: "claude" | "codex", activeSessions: number[]): Promise<void> {
+  return invoke("report_usage_activity", { agent, activeSessions });
 }

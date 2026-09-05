@@ -13,10 +13,8 @@ const AGENT_LABELS: Record<UsageAgent, string> = {
   codex: "Codex",
 };
 
-/** Beyond this snapshot age the row admits it: "as of Xm" + a slight dim.
- * Comfortably above the active poll cadence (5 min), so it only appears when
- * the tracker is genuinely behind (idle cadence, rate-limit backoff, errors
- * serving cache) — never during normal operation. */
+/** Show the age once a reading is older than the ordinary active cadence.
+ * Errors and passed reset deadlines also mark cached readings as stale. */
 const STALE_AFTER_SECS = 10 * 60;
 
 interface UsageRowProps {
@@ -40,7 +38,9 @@ export default function UsageRow({ agent, usage, onClick }: UsageRowProps) {
   // stays fresh). Errors serving a cached value surface here too.
   const updatedAt = usage?.updated_at ?? null;
   const ageSecs = updatedAt ? Date.now() / 1000 - updatedAt : 0;
-  const isStale = isOk && updatedAt != null && ageSecs > STALE_AFTER_SECS;
+  const expired = [usage?.five_hour_resets_at, usage?.weekly_resets_at]
+    .some((reset) => reset != null && reset <= Date.now() / 1000);
+  const isStale = isOk && (Boolean(usage?.error) || expired || ageSecs > STALE_AFTER_SECS);
 
   // Compact right-hand text for non-ok states.
   const statusLabel =
@@ -56,7 +56,7 @@ export default function UsageRow({ agent, usage, onClick }: UsageRowProps) {
         backgroundColor: hovered ? "var(--bg-hover)" : "transparent",
         opacity: isOk ? (isStale ? 0.75 : 1) : 0.55,
       }}
-      title={isOk ? "View usage detail" : usage?.error ?? "Usage unavailable"}
+      title={usage?.error ?? (isOk ? "View usage detail" : "Usage unavailable")}
     >
       <div style={styles.topline}>
         <span style={styles.name}>{AGENT_LABELS[agent]}</span>

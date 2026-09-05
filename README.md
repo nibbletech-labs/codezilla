@@ -11,6 +11,7 @@ A macOS desktop app for multi-project management of AI-enabled development. Supp
 - **Multiple thread types** — Launch Claude Code, Codex [Beta], or standard terminal sessions within project folders
 - **Session resumption** — Conversations persist across restarts; Claude Code and Codex sessions resume automatically
 - **Thread status at a glance** — See which threads are running, saved, or exited across all your projects
+- **Usage charts** — Cached Claude and Codex subscription readings; refresh hourly when idle, every 10 minutes with 1–3 recently active terminals, and every 5 minutes with 4+. Activity is counted per provider over the last five minutes. Custom status lines are unaffected.
 - **Launch presets** — Create reusable thread configurations with custom CLI arguments
 - **File preview** — Browse project files with syntax highlighting, Quick Look preview, markdown rendering, and git diff view
 - **File panel views** — Switch between All, Recent, and Changes views to focus on the files that matter

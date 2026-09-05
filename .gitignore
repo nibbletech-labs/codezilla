@@ -17,7 +17,8 @@ docs/
 scripts/*
 # ...except the build-required heed sidecar fetch script (CI runs it).
 !scripts/fetch-heed.sh
-tests/
+tests/*
+!tests/usage-activity.test.ts
 CLAUDE.md
 .claude/
 src-tauri/gen/schemas/

@@ -4,8 +4,8 @@
 // partial/failed fetch still renders.
 
 /**
- * - `ok` — data present and current
- * - `na` — nothing to track (API-key billing, not signed in, no Codex sessions)
+ * - `ok` — last successful reading available; error may describe a failed refresh
+ * - `na` — nothing to track (API-key billing or not signed in)
  * - `error` — transient/unexpected failure (429, HTTP, Keychain denied, …)
  * - `loading` — not fetched yet
  */

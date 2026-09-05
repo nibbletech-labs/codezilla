@@ -17,7 +17,6 @@ import {
   type PtyOutputData,
   type PtyExitData,
   type HeedThreadPayload,
-  requestUsageRefresh,
 } from "../../lib/tauri";
 import {
   TERMINAL_CONFIG,
@@ -490,18 +489,6 @@ function applyHeedThreadState(payloads: HeedThreadPayload[]): void {
       } else {
         clearInterrupt(thread.id);
       }
-    }
-
-    // A Claude turn just finished — its usage numbers just moved, so this is
-    // the perfect moment to refresh the chart. The backend floors these
-    // requests at 60s spacing (and any 429 penalty), so bursts are safe.
-    if (
-      activityState === "idle"
-      && !isGone
-      && current.activityState === "working"
-      && thread.type === "claude"
-    ) {
-      requestUsageRefresh("claude").catch(() => { /* best-effort */ });
     }
 
     // Surface the "done" badge on a clean working -> idle transition, and reset

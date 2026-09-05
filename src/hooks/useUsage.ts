@@ -4,79 +4,65 @@ import { useAppStore } from "../store/appStore";
 import {
   getUsageSnapshot,
   reportUsageActivity,
-  requestUsageRefresh,
   startUsageTracking,
   stopUsageTracking,
 } from "../lib/tauri";
 import type { UsageSnapshot } from "../store/usageTypes";
+import { usageActivity } from "../lib/usageActivity";
 
-/** A Claude thread counts as active if it saw activity within this window. */
-const ACTIVITY_WINDOW_MS = 10 * 60_000;
-/** Consider the snapshot stale for the visibility catch-up beyond this age. */
-const STALE_AFTER_SECS = 300;
-
-/**
- * Drives the plan-usage tracker: starts the backend refresher, primes the store
- * with the cached snapshot, and subscribes to `usage-updated` events. The
- * refresher is cheap and self-degrading (agents with no subscription report
- * `na` and are hidden), so it runs for everyone; unmount stops it.
- *
- * Also shapes the backend's Claude poll cadence: a 60s heartbeat reports
- * whether any Claude thread has been active recently (active → 5 min cadence,
- * idle → hourly), and regaining window visibility with a stale snapshot
- * requests an immediate catch-up (floored backend-side).
- */
+/** Cached measurements remain visible while the backend refreshes each provider. */
 export function useUsage() {
   const setUsage = useAppStore((s) => s.setUsage);
 
   useEffect(() => {
     let cancelled = false;
+    let receivedUpdate = false;
 
-    startUsageTracking().catch(() => { /* best-effort */ });
-    getUsageSnapshot()
-      .then((snap) => { if (!cancelled) setUsage(snap); })
-      .catch(() => { /* no snapshot yet */ });
-
+    let started = false;
+    // Subscribe before starting workers so a fast cache restore cannot be lost.
     const unlistenPromise = listen<UsageSnapshot>("usage-updated", (event) => {
       if (cancelled) return;
+      receivedUpdate = true;
       setUsage(event.payload);
     });
+    unlistenPromise.then(async () => {
+      if (cancelled) return;
+      started = true;
+      await startUsageTracking();
+      if (cancelled) return;
+      const snapshot = await getUsageSnapshot();
+      if (!cancelled && !receivedUpdate) setUsage(snapshot);
+    }).catch(() => { /* best-effort */ });
 
     return () => {
       cancelled = true;
       unlistenPromise.then((fn) => fn()).catch(() => { /* ignore */ });
-      stopUsageTracking().catch(() => { /* ignore */ });
+      if (started) stopUsageTracking().catch(() => { /* ignore */ });
     };
   }, [setUsage]);
 
-  // Activity heartbeat: usage only moves while agents run, so tell the backend
-  // when Claude threads are working (any project — the limit is account-wide).
   useEffect(() => {
+    const lastWorking = new Map<string, number>();
     const beat = () => {
       const state = useAppStore.getState();
-      const now = Date.now();
-      const active = state.threads.some(
-        (t) => t.type === "claude" && now - t.lastActivityAt < ACTIVITY_WINDOW_MS,
-      );
-      if (active) reportUsageActivity("claude").catch(() => { /* best-effort */ });
-    };
-    beat();
-    const id = setInterval(beat, 60_000);
-    return () => clearInterval(id);
-  }, []);
-
-  // Visibility catch-up: coming back to a long-hidden window shouldn't mean
-  // staring at old numbers until the next scheduled poll.
-  useEffect(() => {
-    const onVisible = () => {
-      if (document.hidden) return;
-      const claude = useAppStore.getState().usage?.claude;
-      const updatedAt = claude?.updated_at ?? 0;
-      if (Date.now() / 1000 - updatedAt > STALE_AFTER_SECS) {
-        requestUsageRefresh("claude").catch(() => { /* best-effort */ });
+      const activity = usageActivity(state.threads, state.transcriptInfo, lastWorking, Date.now());
+      for (const agent of ["claude", "codex"] as const) {
+        reportUsageActivity(agent, activity[agent]).catch(() => { /* best-effort */ });
       }
     };
+    beat();
+    // Capture short turns as well as long, quiet work. Store updates maintain
+    // local timestamps; only the timer sends backend heartbeats.
+    const unsubscribe = useAppStore.subscribe((state) => {
+      usageActivity(state.threads, state.transcriptInfo, lastWorking, Date.now());
+    });
+    const id = setInterval(beat, 15_000);
+    const onVisible = () => { if (!document.hidden) beat(); };
     document.addEventListener("visibilitychange", onVisible);
-    return () => document.removeEventListener("visibilitychange", onVisible);
+    return () => {
+      clearInterval(id);
+      unsubscribe();
+      document.removeEventListener("visibilitychange", onVisible);
+    };
   }, []);
 }

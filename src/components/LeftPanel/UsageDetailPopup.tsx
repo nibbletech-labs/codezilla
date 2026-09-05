@@ -90,6 +90,10 @@ export default function UsageDetailPopup({ agent, usage, anchor, onClose }: Usag
           </div>
         )}
 
+        {isOk && usage?.error && (
+          <div style={styles.error}>Refresh failed: {usage.error}. Showing the last successful reading.</div>
+        )}
+
         {agent === "claude" && (
           <div style={styles.note}>
             Figures come from an unofficial Claude endpoint and may occasionally be unavailable.
@@ -97,7 +101,7 @@ export default function UsageDetailPopup({ agent, usage, anchor, onClose }: Usag
         )}
         {agent === "codex" && (
           <div style={styles.note}>
-            Figures are read from local Codex session files and may be stale until the next turn.
+            Figures are refreshed periodically from Codex. Cached readings remain visible between refreshes.
           </div>
         )}
       </div>
@@ -118,7 +122,9 @@ function ResetLine({ resetsAt }: { resetsAt: number | null }) {
   if (!resetsAt) return null;
   return (
     <div style={styles.resetLine}>
-      resets in {formatResetCountdown(resetsAt)} · {formatResetAbsolute(resetsAt)}
+      {resetsAt <= Date.now() / 1000
+        ? "Reset time passed; awaiting an updated reading"
+        : `resets in ${formatResetCountdown(resetsAt)} · ${formatResetAbsolute(resetsAt)}`}
     </div>
   );
 }

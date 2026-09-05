@@ -8,7 +8,7 @@
 //! ourselves. The endpoint is unofficial and 429s without a `User-Agent`, so
 //! callers must pass one and poll no faster than ~180s (see the scheduler).
 
-use super::{AgentUsage, STATUS_ERROR, STATUS_NA, STATUS_OK};
+use super::{AgentUsage, FetchOutcome, STATUS_ERROR, STATUS_NA, STATUS_OK};
 use serde_json::Value;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
@@ -38,14 +38,6 @@ enum Unavail {
     RateLimited { retry_after_secs: Option<i64> },
 }
 
-/// A fetch attempt plus the scheduling hints the plain `AgentUsage` can't
-/// carry (it's the UI payload — retry mechanics don't belong in it).
-pub struct FetchOutcome {
-    pub usage: AgentUsage,
-    pub rate_limited: bool,
-    pub retry_after_secs: Option<i64>,
-}
-
 fn na(msg: &str) -> AgentUsage {
     AgentUsage {
         status: STATUS_NA.to_string(),
@@ -62,7 +54,8 @@ fn err(msg: &str) -> AgentUsage {
     }
 }
 
-struct Credentials {
+pub(super) struct Credentials {
+    pub key: String,
     token: String,
     /// Subscription tier from the Keychain item (e.g. "pro", "max"), if present.
     plan: Option<String>,
@@ -81,7 +74,9 @@ fn read_credentials() -> Result<Credentials, Unavail> {
         let stderr = String::from_utf8_lossy(&output.stderr);
         // "could not be found" → Claude Code isn't signed in (not a failure).
         if stderr.contains("could not be found") {
-            return Err(Unavail::Na("Not signed in to a Claude subscription".to_string()));
+            return Err(Unavail::Na(
+                "Not signed in to a Claude subscription".to_string(),
+            ));
         }
         return Err(Unavail::Err("Keychain access denied".to_string()));
     }
@@ -102,7 +97,44 @@ fn read_credentials() -> Result<Credentials, Unavail> {
         .get("subscriptionType")
         .and_then(|t| t.as_str())
         .map(|s| s.to_string());
-    Ok(Credentials { token, plan })
+    // Claude's signed-in profile is stable across access-token refreshes.
+    // Fall back to a credential fingerprint if no account profile is available.
+    let profile = std::env::var_os("HOME")
+        .and_then(|home| std::fs::read(PathBuf::from(home).join(".claude.json")).ok())
+        .and_then(|raw| serde_json::from_slice::<Value>(&raw).ok());
+    let key = credential_key(profile.as_ref(), &token);
+    Ok(Credentials { token, plan, key })
+}
+
+fn credential_key(profile: Option<&Value>, token: &str) -> String {
+    if let Some(account) = profile.and_then(|v| v.get("oauthAccount")) {
+        if let (Some(user), Some(org)) = (
+            account["accountUuid"].as_str(),
+            account["organizationUuid"].as_str(),
+        ) {
+            return super::fingerprint(&format!("{user}:{org}"));
+        }
+    }
+    super::fingerprint(token)
+}
+
+/// Retry-After permits delta seconds or an IMF-fixdate HTTP date.
+fn retry_after(value: &str, now: i64) -> Option<i64> {
+    if let Ok(seconds) = value.trim().parse::<i64>() {
+        return (seconds >= 0).then_some(seconds);
+    }
+    let parts: Vec<_> = value.split_whitespace().collect();
+    if parts.len() != 6 || parts[5] != "GMT" {
+        return None;
+    }
+    let month = [
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+    ]
+    .iter()
+    .position(|m| *m == parts[2])?
+        + 1;
+    let date = format!("{}-{:02}-{}T{}Z", parts[3], month, parts[1], parts[4]);
+    parse_iso8601_to_epoch(&date).map(|deadline| (deadline - now).max(0))
 }
 
 fn fetch_usage(token: &str, user_agent: &str) -> Result<Value, Unavail> {
@@ -124,7 +156,7 @@ fn fetch_usage(token: &str, user_agent: &str) -> Result<Value, Unavail> {
             .headers()
             .get("retry-after")
             .and_then(|v| v.to_str().ok())
-            .and_then(|s| s.trim().parse::<i64>().ok());
+            .and_then(|s| retry_after(s, now_epoch()));
         return Err(Unavail::RateLimited { retry_after_secs });
     }
     if status.as_u16() == 401 {
@@ -146,17 +178,14 @@ fn from_unavail(u: Unavail) -> FetchOutcome {
     match u {
         Unavail::Na(m) => FetchOutcome {
             usage: na(&m),
-            rate_limited: false,
             retry_after_secs: None,
         },
         Unavail::Err(m) => FetchOutcome {
             usage: err(&m),
-            rate_limited: false,
             retry_after_secs: None,
         },
         Unavail::RateLimited { retry_after_secs } => FetchOutcome {
             usage: err("Rate limited by usage endpoint (429)"),
-            rate_limited: true,
             retry_after_secs,
         },
     }
@@ -165,7 +194,6 @@ fn from_unavail(u: Unavail) -> FetchOutcome {
 fn ok_outcome(usage: AgentUsage) -> FetchOutcome {
     FetchOutcome {
         usage,
-        rate_limited: false,
         retry_after_secs: None,
     }
 }
@@ -173,20 +201,31 @@ fn ok_outcome(usage: AgentUsage) -> FetchOutcome {
 /// Read the current Claude plan usage. Never panics; a miss returns a row tagged
 /// `na` (nothing to track) or `error` (transient failure), with the reason in
 /// the detail popup, plus scheduling hints for the caller.
-pub fn fetch(user_agent: &str) -> FetchOutcome {
+pub(super) fn prepare() -> Result<Credentials, FetchOutcome> {
     if !cfg!(target_os = "macos") {
-        return ok_outcome(na("Claude plan usage is available on macOS only"));
+        return Err(ok_outcome(na(
+            "Claude plan usage is available on macOS only",
+        )));
     }
+    read_credentials().map_err(from_unavail)
+}
 
-    let creds = match read_credentials() {
-        Ok(c) => c,
-        Err(u) => return from_unavail(u),
-    };
+pub(super) fn fetch(creds: Credentials, user_agent: &str) -> FetchOutcome {
     let body = match fetch_usage(&creds.token, user_agent) {
         Ok(b) => b,
         Err(u) => return from_unavail(u),
     };
 
+    // Do not publish an in-flight response after a credential/account switch.
+    match read_credentials() {
+        Ok(current) if current.key == creds.key => {}
+        Ok(_) => {
+            return ok_outcome(na(
+                "Claude credentials changed; waiting for a fresh reading",
+            ))
+        }
+        Err(error) => return from_unavail(error),
+    }
     let five_hour_pct = body["five_hour"]["utilization"].as_f64();
     let weekly_pct = body["seven_day"]["utilization"].as_f64();
 
@@ -198,7 +237,10 @@ pub fn fetch(user_agent: &str) -> FetchOutcome {
     let extra = &body["extra_usage"];
     let extra_enabled = extra["is_enabled"].as_bool().unwrap_or(false);
     let (extra_usage_pct, extra_usage_used_credits) = if extra_enabled {
-        (extra["utilization"].as_f64(), extra["used_credits"].as_f64())
+        (
+            extra["utilization"].as_f64(),
+            extra["used_credits"].as_f64(),
+        )
     } else {
         (None, None)
     };
@@ -393,7 +435,7 @@ fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
 
 /// Parse `2026-02-06T22:00:00+00:00` / `...Z` / fractional seconds to epoch
 /// seconds. Returns None on anything it doesn't recognize.
-fn parse_iso8601_to_epoch(s: &str) -> Option<i64> {
+pub(super) fn parse_iso8601_to_epoch(s: &str) -> Option<i64> {
     let s = s.trim();
     if s.len() < 19 {
         return None;
@@ -423,4 +465,32 @@ fn parse_iso8601_to_epoch(s: &str) -> Option<i64> {
         }
     }
     Some(epoch)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+    #[test]
+    fn account_identity_survives_token_rotation_but_not_an_account_switch() {
+        let a = json!({"oauthAccount":{"accountUuid":"a","organizationUuid":"org"}});
+        let b = json!({"oauthAccount":{"accountUuid":"b","organizationUuid":"org"}});
+        assert_eq!(
+            credential_key(Some(&a), "old"),
+            credential_key(Some(&a), "new")
+        );
+        assert_ne!(
+            credential_key(Some(&a), "old"),
+            credential_key(Some(&b), "old")
+        );
+        assert_ne!(credential_key(None, "old"), credential_key(None, "new"));
+    }
+    #[test]
+    fn retry_after_supports_seconds_and_http_dates() {
+        let now = parse_iso8601_to_epoch("2026-09-05T07:00:00Z").unwrap();
+        assert_eq!(retry_after("900", now), Some(900));
+        assert_eq!(retry_after("Sat, 05 Sep 2026 07:15:00 GMT", now), Some(900));
+        assert_eq!(retry_after("-1", now), None);
+        assert_eq!(retry_after("invalid", now), None);
+    }
 }

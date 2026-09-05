@@ -647,7 +647,6 @@ pub fn run() {
             usage::get_usage_snapshot,
             usage::set_usage_agent_enabled,
             usage::report_usage_activity,
-            usage::request_usage_refresh,
             launchd::write_launchd_entry,
             launchd::remove_launchd_entry,
             launchd::list_launchd_entries,

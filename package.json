@@ -8,6 +8,7 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "tauri": "tauri",
+    "test:usage": "node --experimental-strip-types --test tests/usage-activity.test.ts",
     "test:thread-activity": "node --experimental-strip-types --test tests/thread-activity.test.ts",
     "test:prose-copy": "node --experimental-strip-types --test tests/prose-copy.test.ts",
     "test:file-path-link": "node --experimental-strip-types --test tests/file-path-link.test.ts",
