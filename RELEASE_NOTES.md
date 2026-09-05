@@ -1,3 +1,11 @@
+## v0.4.8 — Heed Installs as a Login Item
+
+Heed, the background activity tracker Codezilla relies on, is now installed as a proper macOS app, and the usage charts are more dependable.
+
+- **Heed appears as "Heed" in Login Items** — the background activity tracker now shows up under its own name and icon in System Settings › General › Login Items & Extensions, rather than a personal developer name. Existing installs are migrated automatically the first time Codezilla launches; macOS may show a one-time "Heed can run in the background" notice.
+- **Requires macOS 13 Ventura or later** — the new background-service mechanism is not available on older versions of macOS.
+- **Reliable usage charts** — Claude and Codex usage refreshes on a schedule based on how busy your terminals are, keeps the last good reading when a refresh fails (and tells you), and Codex figures no longer go stale between turns.
+
 ## v0.4.7 — Temp and Haven File Links
 
 Files created by an AI outside the repository can now be opened directly from terminal output.

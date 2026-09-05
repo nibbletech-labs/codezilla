@@ -2,7 +2,9 @@ node_modules/
 dist/
 target/
 src-tauri/target/
-# Bundled heed sidecar — fetched at build time by scripts/fetch-heed.sh
+# Bundled Heed.app — fetched at build time by scripts/fetch-heed.sh
+src-tauri/resources/Heed.app
+# Pre-0.4.8 sidecar location; kept ignored so stale local fetches stay out of git
 src-tauri/binaries/
 .DS_Store
 *.log

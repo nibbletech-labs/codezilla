@@ -15,7 +15,7 @@ use log::{info, warn};
 use notify::{Config, Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{mpsc, Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -431,57 +431,79 @@ pub fn start_state_watcher(app_handle: AppHandle) {
     });
 }
 
-/// Stable, update-surviving location the heed binary is staged to: `~/.heed/bin/heed`.
-/// The launchd plist bakes in the binary's path, so it must NOT point inside the
-/// versioned `.app` bundle (that path moves on every Codezilla update and would
-/// strand the daemon). [`crate::cutover`] copies the bundled sidecar here on launch.
+/// Stable, update-surviving CLI entry point: `~/.heed/bin/heed`. On a machine
+/// migrated to the Heed.app bundle this is a symlink heed maintains into
+/// `Contents/MacOS/heed` of the installed bundle; on a legacy install it is a
+/// regular file. Either way it is where `heed` invocations resolve first.
 pub(crate) fn stable_heed_path() -> Option<PathBuf> {
     let home = std::env::var_os("HOME")?;
     Some(PathBuf::from(home).join(".heed").join("bin").join("heed"))
 }
 
-/// The `heed` sidecar Tauri ships next to our executable, if present. The
-/// target-triple suffix is stripped at bundle time → `heed`; checking the
-/// suffixed name too is belt-and-braces. Absent under `tauri dev` (returns None).
-pub(crate) fn bundled_sidecar() -> Option<PathBuf> {
-    let exe = std::env::current_exe().ok()?;
-    let dir = exe.parent()?;
-    for name in [
-        "heed".to_string(),
-        format!("heed-{}-apple-darwin", std::env::consts::ARCH),
-    ] {
-        let p = dir.join(name);
-        if p.exists() {
-            return Some(p);
-        }
-    }
-    None
+/// Where the Heed.app bundle is installed for this user (hidden from Finder and
+/// Launchpad by design): `~/Library/Application Support/Heed/Heed.app`.
+/// [`crate::cutover`] stages the bundled copy here on launch.
+pub(crate) fn installed_heed_app() -> Option<PathBuf> {
+    let home = std::env::var_os("HOME")?;
+    Some(
+        PathBuf::from(home)
+            .join("Library")
+            .join("Application Support")
+            .join("Heed")
+            .join("Heed.app"),
+    )
 }
 
-/// Resolve the `heed` binary to invoke. Prefer the staged stable copy (what the
-/// launchd service runs); then the bundled sidecar (packaged build, before
-/// staging has happened); then `heed` on `PATH` (`tauri dev`).
+/// The CLI/daemon binary inside a Heed.app bundle.
+pub(crate) fn bundle_binary(app: &Path) -> PathBuf {
+    app.join("Contents").join("MacOS").join("heed")
+}
+
+/// The pre-signed `Heed.app` Tauri ships inside our bundle
+/// (`Codezilla.app/Contents/Resources/Heed.app`), resolved relative to the
+/// running executable (`Contents/MacOS/codezilla`). Absent under `tauri dev`
+/// (returns None).
+pub(crate) fn bundled_heed_app() -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    bundled_heed_app_for_exe(&exe)
+}
+
+/// Pure resolver behind [`bundled_heed_app`]: `<exe dir>/../Resources/Heed.app`,
+/// only when that bundle actually carries its binary.
+pub(crate) fn bundled_heed_app_for_exe(exe: &Path) -> Option<PathBuf> {
+    let app = exe.parent()?.parent()?.join("Resources").join("Heed.app");
+    if bundle_binary(&app).is_file() {
+        Some(app)
+    } else {
+        None
+    }
+}
+
+/// Resolve the `heed` binary to invoke. Prefer the stable path (what the
+/// service runs, symlinked into the installed bundle); then the binary inside
+/// the bundled Heed.app (packaged build, before staging has happened); then
+/// `heed` on `PATH` (`tauri dev`).
 pub(crate) fn heed_bin() -> std::ffi::OsString {
     if let Some(stable) = stable_heed_path() {
         if stable.exists() {
             return stable.into_os_string();
         }
     }
-    if let Some(sidecar) = bundled_sidecar() {
-        return sidecar.into_os_string();
+    if let Some(app) = bundled_heed_app() {
+        return bundle_binary(&app).into_os_string();
     }
     std::ffi::OsString::from("heed")
 }
 
 /// Register Codezilla ownership of a native CLI thread in Heed's `owners.json`,
 /// so this thread shows up with `owner_product = "codezilla"` in state.json and
-/// is picked up by the watcher above. Shells out to the bundled `heed` sidecar
+/// is picked up by the watcher above. Shells out to the bundled `heed`
 /// (or `heed` on PATH in dev — see [`heed_bin`]). Best-effort — logs on failure.
 /// Blocks on the child process, so callers on the UI path should spawn a thread.
 pub fn register_owner(cli: &str, native_thread_id: &str, owner_thread_id: &str, cwd: Option<&str>) {
     let mut cmd = std::process::Command::new(heed_bin());
     // Finder/Dock launches inherit a minimal PATH; if we fell back to bare
-    // `heed` (dev, no bundled sidecar) it wouldn't be found. Augment as the
+    // `heed` (dev, no bundled `heed`) it wouldn't be found. Augment as the
     // shell-spawn path does.
     cmd.env("PATH", crate::cli_detect::augmented_path());
     cmd.args([
@@ -709,5 +731,32 @@ mod tests {
         }];
         let (claims, _) = match_codex_pendings(&threads, &pendings);
         assert!(claims.is_empty());
+    }
+
+    #[test]
+    fn bundled_heed_app_resolves_resources_beside_macos_dir() {
+        let root = std::env::temp_dir()
+            .join(format!("cz-heed-client-bundle-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let exe = root.join("Codezilla.app/Contents/MacOS/codezilla");
+        std::fs::create_dir_all(exe.parent().unwrap()).unwrap();
+        std::fs::write(&exe, b"").unwrap();
+
+        // No Heed.app beside us (tauri dev layout) → None.
+        assert_eq!(bundled_heed_app_for_exe(&exe), None);
+
+        // Heed.app present but empty → still None (needs its binary).
+        let app = root.join("Codezilla.app/Contents/Resources/Heed.app");
+        std::fs::create_dir_all(&app).unwrap();
+        assert_eq!(bundled_heed_app_for_exe(&exe), None);
+
+        // Full layout → the bundle path; bundle_binary points inside it.
+        let bin = bundle_binary(&app);
+        std::fs::create_dir_all(bin.parent().unwrap()).unwrap();
+        std::fs::write(&bin, b"#!/bin/sh\necho heed 0.3.0\n").unwrap();
+        assert_eq!(bundled_heed_app_for_exe(&exe), Some(app.clone()));
+        assert_eq!(bin, app.join("Contents").join("MacOS").join("heed"));
+
+        std::fs::remove_dir_all(&root).ok();
     }
 }

@@ -5,7 +5,9 @@
 //! `~/.claude/settings.json` / `~/.codex/config.toml`. Activity detection now
 //! comes entirely from the standalone Heed daemon (see [`crate::heed_client`]),
 //! so on launch we:
-//!   1. ensure Heed itself is installed (its hooks + launchd service),
+//!   1. ensure Heed itself is installed (stage the bundled Heed.app to
+//!      `~/Library/Application Support/Heed/` and let heed register its own
+//!      background service — Codezilla never touches launchd),
 //!   2. strip the legacy Codezilla hook registrations (which otherwise
 //!      double-fire alongside Heed's), and
 //!   3. archive the old script directories (move, never delete).
@@ -22,9 +24,6 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 use toml_edit::{ArrayOfTables, DocumentMut, Table};
-
-/// launchd label Heed's `--service-install` writes (see heed `service.rs`).
-const HEED_DAEMON_LABEL: &str = "dev.heed.daemon";
 
 fn home() -> Option<PathBuf> {
     std::env::var_os("HOME").map(PathBuf::from)
@@ -60,92 +59,102 @@ pub fn run() {
     });
 }
 
-/// Install Heed's hooks + launchd service via the bundled sidecar (idempotent),
-/// in place of Codezilla's own installers.
+/// Install Heed's hooks + background service via the bundled Heed.app
+/// (idempotent), in place of Codezilla's own installers.
 ///
-/// Heed's `--service-install` bakes the *path of the binary that runs it* into
-/// the launchd plist. The bundled sidecar lives inside the versioned `.app`,
-/// whose path changes on every Codezilla update — pointing launchd there would
-/// strand the daemon. So we first stage the sidecar to a stable path
-/// (`~/.heed/bin/heed`) and run `install` from *that* copy, then make sure the
-/// running daemon is loaded onto it. In dev there's no bundled sidecar, so we
-/// skip staging entirely and leave the developer's own daemon untouched.
+/// Packaged builds ship a notarized `Heed.app` under `Contents/Resources`. That
+/// path moves on every Codezilla update, so we first stage the bundle to its
+/// stable home (`~/Library/Application Support/Heed/Heed.app`) and run
+/// `install --service-install` from *that* copy; heed then migrates any legacy
+/// launchd agent, maintains the `~/.heed/bin/heed` symlink and registers its
+/// SMAppService agent itself. In dev there's no bundled Heed.app, so we skip
+/// staging and run `install` via whatever `heed` resolves to, as before.
 fn install_heed() {
-    let staged = stage_stable_heed();
-    let heed: std::ffi::OsString = match &staged {
-        Some((path, _)) => path.clone().into_os_string(),
+    let heed: std::ffi::OsString = match crate::heed_client::bundled_heed_app() {
+        Some(src) => {
+            let Some(dst) = crate::heed_client::installed_heed_app() else {
+                warn!("cutover: HOME unset, skipping heed install");
+                return;
+            };
+            match stage_heed_app(&src, &dst) {
+                Some(app) => crate::heed_client::bundle_binary(&app).into_os_string(),
+                // Never run `install` from the copy inside Codezilla.app: heed
+                // would register a path that moves on the next update.
+                None => {
+                    warn!("cutover: no usable installed Heed.app, skipping heed install");
+                    return;
+                }
+            }
+        }
         None => crate::heed_client::heed_bin(),
     };
 
-    // Record where the plist points *before* install, so we can tell whether
-    // this run migrates an existing daemon onto the stable path.
-    let prev_plist_bin = staged.as_ref().and_then(|_| plist_program_path());
+    match run_heed(&heed, &["install", "--service-install"]) {
+        Ok(()) => info!("cutover: heed install --service-install ok"),
+        Err(e) => warn!("cutover: heed install failed: {e}"),
+    }
+}
 
-    let mut cmd = Command::new(&heed);
-    cmd.args(["install", "--service-install"]);
-    // Finder/Dock launches inherit a minimal PATH; augment so a bare `heed`
-    // (dev fallback) is still found.
-    cmd.env("PATH", crate::cli_detect::augmented_path());
-    match cmd.output() {
-        Ok(out) if out.status.success() => info!("cutover: heed install --service-install ok"),
-        Ok(out) => {
-            warn!(
-                "cutover: heed install failed: {}",
-                String::from_utf8_lossy(&out.stderr).trim()
-            );
-            return;
+/// Run `heed <args>` with the augmented PATH (Finder/Dock launches inherit a
+/// minimal one), mapping a non-zero exit or spawn failure to a message.
+fn run_heed(heed: &std::ffi::OsStr, args: &[&str]) -> Result<(), String> {
+    let out = Command::new(heed)
+        .args(args)
+        .env("PATH", crate::cli_detect::augmented_path())
+        .output()
+        .map_err(|e| format!("could not run `heed {}`: {e}", args.join(" ")))?;
+    if out.status.success() {
+        Ok(())
+    } else {
+        Err(String::from_utf8_lossy(&out.stderr).trim().to_string())
+    }
+}
+
+// --- Heed.app staging ------------------------------------------------------
+
+/// Make sure the installed bundle at `dst` carries at least the Heed version
+/// shipped at `src`. Returns the bundle to run `install` from: `dst` when it is
+/// current or was just (re)staged, or `dst` unchanged when a restage failed but
+/// the previous bundle is still in place. `None` only when nothing usable is
+/// installed afterwards. Never downgrades and never clobbers a bundle it can't
+/// verify (see [`decide_restage`]).
+fn stage_heed_app(src: &Path, dst: &Path) -> Option<PathBuf> {
+    if !needs_restage(src, dst) {
+        return Some(dst.to_path_buf());
+    }
+    let installed_bin = crate::heed_client::bundle_binary(dst);
+    if installed_bin.exists() {
+        // A registered bundle must be unregistered before it is replaced
+        // (re-registering an in-place-modified bundle fails). Best-effort:
+        // an unregistered or legacy-only machine reports an error we ignore.
+        unregister_service(&installed_bin);
+    }
+    match swap_bundle(src, dst) {
+        Ok(()) => {
+            info!("cutover: staged Heed.app {:?} -> {:?}", src, dst);
+            Some(dst.to_path_buf())
         }
         Err(e) => {
-            warn!("cutover: could not run `heed install`: {e}");
-            return;
+            warn!("cutover: staging Heed.app to {:?} failed: {e}", dst);
+            installed_bin.exists().then(|| dst.to_path_buf())
         }
-    }
-
-    // Only manage launchd for packaged builds (where we staged a sidecar);
-    // dev's manually-bootstrapped daemon is left alone.
-    if let Some((stable_path, binary_changed)) = staged {
-        ensure_daemon_loaded(&stable_path, binary_changed, prev_plist_bin.as_deref());
     }
 }
 
-// --- Stable-path staging + launchd reload (the "4b" fix) -----------------
-
-/// Copy the bundled `heed` sidecar to `~/.heed/bin/heed` when it's missing or
-/// differs from the bundled one. Returns the stable path and whether the binary
-/// content was (re)written, or `None` when there's no bundled sidecar (dev) or
-/// staging failed (best-effort — `install_heed` then falls back to `heed_bin`).
-fn stage_stable_heed() -> Option<(PathBuf, bool)> {
-    let src = crate::heed_client::bundled_sidecar()?;
-    let dst = crate::heed_client::stable_heed_path()?;
-
-    if !needs_restage(&src, &dst) {
-        return Some((dst, false));
-    }
-    if let Some(parent) = dst.parent() {
-        if let Err(e) = fs::create_dir_all(parent) {
-            warn!("cutover: create {:?} failed: {e}", parent);
-            return None;
-        }
-    }
-    if let Err(e) = copy_executable(&src, &dst) {
-        warn!("cutover: staging heed to {:?} failed: {e}", dst);
-        return None;
-    }
-    info!("cutover: staged heed sidecar {:?} -> {:?}", src, dst);
-    Some((dst, true))
-}
-
-/// Restage only when it would install a *newer* Heed than the one already at the
-/// stable path — never downgrade, and never clobber an installed binary we can't
-/// verify. We compare the binaries' reported versions (`heed --version`) rather
-/// than file mtime/size: a freshly-fetched-but-older sidecar can carry a newer
-/// mtime than a manually-installed current build and would otherwise overwrite
-/// it (e.g. running a dev Codezilla against a hand-installed Heed daemon).
+/// Restage only when it would install a *newer* Heed than the bundle already at
+/// `dst` — never downgrade, and never clobber an installed bundle we can't
+/// verify. Versions come from `<bundle>/Contents/MacOS/heed --version` rather
+/// than mtimes: a freshly-fetched-but-older bundle can carry a newer mtime than
+/// a hand-installed current build and would otherwise overwrite it.
 fn needs_restage(src: &Path, dst: &Path) -> bool {
-    if !dst.exists() {
+    let dst_bin = crate::heed_client::bundle_binary(dst);
+    if !dst_bin.exists() {
         return true; // nothing installed yet
     }
-    decide_restage(heed_version(src), heed_version(dst))
+    decide_restage(
+        heed_version(&crate::heed_client::bundle_binary(src)),
+        heed_version(&dst_bin),
+    )
 }
 
 /// Pure restage policy (split out so it's testable without spawning binaries):
@@ -197,91 +206,79 @@ fn parse_semver(s: &str) -> Option<(u64, u64, u64)> {
     None
 }
 
-/// Copy via a temp file + rename so a crash mid-copy can't leave a truncated
-/// binary at the stable path (which launchd would then fail to exec). Marks the
-/// result executable.
-fn copy_executable(src: &Path, dst: &Path) -> std::io::Result<()> {
-    let tmp = dst.with_extension("staging");
-    fs::copy(src, &tmp)?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&tmp, fs::Permissions::from_mode(0o755))?;
+/// Ask the installed bundle to unregister its background service (heed owns
+/// the SMAppService call; Codezilla never touches launchd). Best-effort.
+fn unregister_service(installed_bin: &Path) {
+    match run_heed(installed_bin.as_os_str(), &["service", "unregister"]) {
+        Ok(()) => info!("cutover: heed service unregister ok"),
+        Err(e) => warn!("cutover: heed service unregister: {e}"),
     }
-    fs::rename(&tmp, dst)
 }
 
-fn launchd_plist_path() -> Option<PathBuf> {
-    home().map(|h| {
-        h.join("Library")
-            .join("LaunchAgents")
-            .join(format!("{HEED_DAEMON_LABEL}.plist"))
-    })
-}
+/// Replace the bundle at `dst` with a copy of `src` without ever leaving a
+/// half-written bundle at `dst`: copy to a `Heed.app.staging` sibling, move
+/// the old bundle aside to `Heed.app.old`, rename staging into place, then
+/// remove the old one. If the final rename fails the old bundle is put back.
+fn swap_bundle(src: &Path, dst: &Path) -> std::io::Result<()> {
+    let parent = dst
+        .parent()
+        .ok_or_else(|| std::io::Error::other("bundle path has no parent"))?;
+    fs::create_dir_all(parent)?;
+    let name = dst
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "Heed.app".to_string());
+    let staging = dst.with_file_name(format!("{name}.staging"));
+    let old = dst.with_file_name(format!("{name}.old"));
 
-fn gui_domain() -> String {
-    let uid = unsafe { libc::getuid() };
-    format!("gui/{uid}")
-}
+    // Leftovers from an interrupted earlier run.
+    let _ = fs::remove_dir_all(&staging);
+    let _ = fs::remove_dir_all(&old);
 
-/// The binary path currently baked into the on-disk launchd plist
-/// (`ProgramArguments[0]`), if the plist exists and parses.
-fn plist_program_path() -> Option<String> {
-    let path = launchd_plist_path()?;
-    let value = plist::Value::from_file(&path).ok()?;
-    value
-        .as_dictionary()?
-        .get("ProgramArguments")?
-        .as_array()?
-        .first()?
-        .as_string()
-        .map(|s| s.to_string())
-}
+    copy_bundle(src, &staging)?;
 
-/// Make sure the launchd agent is loaded and running the staged binary.
-/// Reloads (bootout + bootstrap) when the binary changed, when the plist was
-/// just repointed at a new path (one-time migration off the old `.app` path),
-/// or when it isn't loaded yet. Otherwise leaves the running daemon alone so a
-/// normal launch never restarts it. Best-effort, macOS-only.
-fn ensure_daemon_loaded(stable_path: &Path, binary_changed: bool, prev_plist_bin: Option<&str>) {
-    let Some(plist) = launchd_plist_path() else {
-        return;
-    };
-    if !plist.exists() {
-        warn!("cutover: heed plist missing after install, skipping daemon load");
-        return;
-    }
-    let domain = gui_domain();
-    let target = format!("{domain}/{HEED_DAEMON_LABEL}");
-
-    let loaded = launchctl_loaded(&target);
-    let repointed = prev_plist_bin != Some(&stable_path.to_string_lossy());
-    if !loaded || binary_changed || repointed {
-        // bootout is harmless (and ignored) when nothing is loaded.
-        let _ = Command::new("launchctl").args(["bootout", &target]).output();
-        match Command::new("launchctl")
-            .args(["bootstrap", &domain, &plist.to_string_lossy()])
-            .output()
-        {
-            Ok(out) if out.status.success() => {
-                info!("cutover: (re)loaded {target} onto {:?}", stable_path)
-            }
-            Ok(out) => warn!(
-                "cutover: launchctl bootstrap failed: {}",
-                String::from_utf8_lossy(&out.stderr).trim()
-            ),
-            Err(e) => warn!("cutover: could not run launchctl bootstrap: {e}"),
+    if dst.exists() {
+        if let Err(e) = fs::rename(dst, &old) {
+            // Old bundle untouched; don't leave the staging copy behind.
+            let _ = fs::remove_dir_all(&staging);
+            return Err(e);
         }
     }
+    if let Err(e) = fs::rename(&staging, dst) {
+        if old.exists() {
+            let _ = fs::rename(&old, dst);
+        }
+        let _ = fs::remove_dir_all(&staging);
+        return Err(e);
+    }
+    let _ = fs::remove_dir_all(&old);
+    Ok(())
 }
 
-/// Whether launchd currently has the service loaded (`launchctl print` exits 0).
-fn launchctl_loaded(target: &str) -> bool {
-    Command::new("launchctl")
-        .args(["print", target])
+/// Copy a bundle with `ditto`, which preserves the code signature, symlinks
+/// and permissions exactly — including any `com.apple.quarantine` xattr a
+/// DMG-installed Codezilla.app's files carry (`--noqtn` would only stop ditto
+/// adding its own flag). So the copy is then de-quarantined, best-effort, the
+/// same way tauri-bundler does (`xattr -crs`) before signing. Xattrs sit
+/// outside the code seal, so the bundle's signature is unaffected.
+fn copy_bundle(src: &Path, dst: &Path) -> std::io::Result<()> {
+    let out = Command::new("/usr/bin/ditto").arg(src).arg(dst).output()?;
+    if !out.status.success() {
+        return Err(std::io::Error::other(format!(
+            "ditto failed: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        )));
+    }
+    match Command::new("/usr/bin/xattr")
+        .args(["-dr", "com.apple.quarantine"])
+        .arg(dst)
         .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
+    {
+        // xattr exits non-zero when nothing carried the attribute; that's fine.
+        Ok(_) => {}
+        Err(e) => warn!("cutover: could not strip quarantine from {:?}: {e}", dst),
+    }
+    Ok(())
 }
 
 // --- Legacy Claude hooks (JSON `settings.json`) --------------------------
@@ -499,26 +496,177 @@ mod tests {
         dir
     }
 
-    #[test]
-    fn restage_when_missing_and_copy_makes_executable() {
-        let dir = unique_tmp_dir("restage");
-        let src = dir.join("heed-src");
-        let dst = dir.join("bin").join("heed");
-        fs::write(&src, b"#!/bin/sh\necho heed\n").unwrap();
-
-        // Destination absent → must (re)stage regardless of version.
-        assert!(needs_restage(&src, &dst));
-
-        fs::create_dir_all(dst.parent().unwrap()).unwrap();
-        copy_executable(&src, &dst).unwrap();
-        assert_eq!(fs::read(&dst).unwrap(), fs::read(&src).unwrap());
+    /// Build `<root>/<name>` as a minimal Heed.app whose binary reports `version`
+    /// (or fails, when `version` is None) and accepts any other subcommand.
+    fn fake_bundle(root: &Path, name: &str, version: Option<&str>) -> PathBuf {
+        let app = root.join(name);
+        let bin = crate::heed_client::bundle_binary(&app);
+        fs::create_dir_all(bin.parent().unwrap()).unwrap();
+        let body = match version {
+            Some(v) => format!(
+                "#!/bin/sh\ncase \"$1\" in --version) echo \"heed {v}\";; *) exit 0;; esac\n"
+            ),
+            None => "#!/bin/sh\nexit 1\n".to_string(),
+        };
+        fs::write(&bin, body).unwrap();
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            assert_eq!(fs::metadata(&dst).unwrap().permissions().mode() & 0o777, 0o755);
+            fs::set_permissions(&bin, fs::Permissions::from_mode(0o755)).unwrap();
         }
+        // A marker so tests can tell which bundle ended up at the target.
+        fs::write(app.join("Contents").join("MARKER"), version.unwrap_or("broken")).unwrap();
+        app
+    }
 
-        fs::remove_dir_all(&dir).ok();
+    fn marker(app: &Path) -> String {
+        fs::read_to_string(app.join("Contents").join("MARKER")).unwrap()
+    }
+
+    fn has_quarantine(path: &Path) -> bool {
+        Command::new("/usr/bin/xattr")
+            .args(["-p", "com.apple.quarantine"])
+            .arg(path)
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+    }
+
+    #[test]
+    fn needs_restage_when_no_bundle_installed() {
+        let root = unique_tmp_dir("missing");
+        let src = fake_bundle(&root, "src.app", Some("0.3.0"));
+        assert!(needs_restage(&src, &root.join("missing/Heed.app")));
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn needs_restage_compares_bundle_binary_versions() {
+        let root = unique_tmp_dir("versions");
+        let src_030 = fake_bundle(&root, "src030.app", Some("0.3.0"));
+        let src_020 = fake_bundle(&root, "src020.app", Some("0.2.0"));
+        let src_bad = fake_bundle(&root, "srcbad.app", None);
+        let dst_030 = fake_bundle(&root, "dst030.app", Some("0.3.0"));
+        let dst_020 = fake_bundle(&root, "dst020.app", Some("0.2.0"));
+        let dst_bad = fake_bundle(&root, "dstbad.app", None);
+
+        assert!(needs_restage(&src_030, &dst_020), "newer bundled → restage");
+        assert!(!needs_restage(&src_030, &dst_030), "equal → leave alone");
+        assert!(!needs_restage(&src_020, &dst_030), "never downgrade");
+        assert!(!needs_restage(&src_bad, &dst_030), "never clobber unverifiable");
+        assert!(needs_restage(&src_030, &dst_bad), "replace unreadable install");
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn swap_bundle_replaces_installed_bundle_and_cleans_siblings() {
+        let root = unique_tmp_dir("swap");
+        let dst = fake_bundle(&root, "Heed.app", Some("0.2.0"));
+        let src = fake_bundle(&root, "src/Heed.app", Some("0.3.0"));
+
+        swap_bundle(&src, &dst).unwrap();
+
+        assert_eq!(marker(&dst), "0.3.0");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let bin = crate::heed_client::bundle_binary(&dst);
+            assert_eq!(fs::metadata(&bin).unwrap().permissions().mode() & 0o777, 0o755);
+        }
+        assert!(!root.join("Heed.app.staging").exists());
+        assert!(!root.join("Heed.app.old").exists());
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn swap_bundle_first_install_creates_parent_dir() {
+        let root = unique_tmp_dir("firstinstall");
+        let src = fake_bundle(&root, "src/Heed.app", Some("0.3.0"));
+        let dst = root.join("Application Support/Heed/Heed.app");
+        assert!(!dst.parent().unwrap().exists());
+
+        swap_bundle(&src, &dst).unwrap();
+
+        assert!(crate::heed_client::bundle_binary(&dst).exists());
+        assert_eq!(marker(&dst), "0.3.0");
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn swap_bundle_failure_leaves_installed_bundle_untouched() {
+        let root = unique_tmp_dir("swapfail");
+        let src = root.join("nope/Heed.app");
+        let dst = fake_bundle(&root, "Heed.app", Some("0.2.0"));
+
+        assert!(swap_bundle(&src, &dst).is_err());
+
+        assert_eq!(marker(&dst), "0.2.0");
+        assert!(!root.join("Heed.app.staging").exists());
+        assert!(!root.join("Heed.app.old").exists());
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn stage_heed_app_never_downgrades_and_installs_when_missing() {
+        let root = unique_tmp_dir("stage");
+
+        // (a) older bundled than installed → keep the installed one.
+        let a = root.join("a");
+        let src = fake_bundle(&a, "src/Heed.app", Some("0.2.0"));
+        let dst = fake_bundle(&a, "Heed.app", Some("0.3.0"));
+        assert_eq!(stage_heed_app(&src, &dst), Some(dst.clone()));
+        assert_eq!(marker(&dst), "0.3.0");
+
+        // (b) newer bundled → restaged in place.
+        let b = root.join("b");
+        let src = fake_bundle(&b, "src/Heed.app", Some("0.3.0"));
+        let dst = fake_bundle(&b, "Heed.app", Some("0.2.0"));
+        assert_eq!(stage_heed_app(&src, &dst), Some(dst.clone()));
+        assert_eq!(marker(&dst), "0.3.0");
+
+        // (c) nothing installed → first install.
+        let c = root.join("c");
+        let src = fake_bundle(&c, "src/Heed.app", Some("0.3.0"));
+        let dst = c.join("Heed.app");
+        assert_eq!(stage_heed_app(&src, &dst), Some(dst.clone()));
+        assert!(crate::heed_client::bundle_binary(&dst).exists());
+        assert_eq!(marker(&dst), "0.3.0");
+
+        // (d) nothing bundled and nothing installed → nothing usable.
+        let d = root.join("d");
+        let src = d.join("nope/Heed.app");
+        let dst = d.join("Heed.app");
+        assert_eq!(stage_heed_app(&src, &dst), None);
+
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn swap_bundle_strips_quarantine_from_staged_copy() {
+        let root = unique_tmp_dir("quarantine");
+        let src = fake_bundle(&root, "src/Heed.app", Some("0.3.0"));
+        let src_bin = crate::heed_client::bundle_binary(&src);
+        for p in [&src, &src_bin] {
+            let out = Command::new("/usr/bin/xattr")
+                .args(["-w", "com.apple.quarantine", "0081;00000000;Test;"])
+                .arg(p)
+                .output()
+                .unwrap();
+            assert!(out.status.success(), "xattr -w failed on {:?}", p);
+        }
+        assert!(has_quarantine(&src), "precondition: source is quarantined");
+        assert!(has_quarantine(&src_bin), "precondition: source binary is quarantined");
+
+        let dst = root.join("Heed.app");
+        swap_bundle(&src, &dst).unwrap();
+
+        assert_eq!(marker(&dst), "0.3.0");
+        assert!(!has_quarantine(&dst), "staged bundle must not be quarantined");
+        assert!(
+            !has_quarantine(&crate::heed_client::bundle_binary(&dst)),
+            "staged binary must not be quarantined"
+        );
+        fs::remove_dir_all(&root).ok();
     }
 
     #[test]
