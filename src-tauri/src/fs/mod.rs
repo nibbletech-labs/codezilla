@@ -38,6 +38,7 @@ const BUILD_DIR_NAMES: &[&str] = &[
     "target",
     "dist",
     "build",
+    ".build",
     "out",
     ".next",
     ".nuxt",
