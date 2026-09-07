@@ -96,7 +96,9 @@ fn install_heed() {
 }
 
 /// Run `heed <args>` with the augmented PATH (Finder/Dock launches inherit a
-/// minimal one), mapping a non-zero exit or spawn failure to a message.
+/// minimal one), mapping a non-zero exit or spawn failure to a message. A
+/// failure always names the exit status (heed can fail silently), plus stderr
+/// when there is any: "exit 1" / "exit 1: <stderr>".
 fn run_heed(heed: &std::ffi::OsStr, args: &[&str]) -> Result<(), String> {
     let out = Command::new(heed)
         .args(args)
@@ -104,10 +106,18 @@ fn run_heed(heed: &std::ffi::OsStr, args: &[&str]) -> Result<(), String> {
         .output()
         .map_err(|e| format!("could not run `heed {}`: {e}", args.join(" ")))?;
     if out.status.success() {
-        Ok(())
-    } else {
-        Err(String::from_utf8_lossy(&out.stderr).trim().to_string())
+        return Ok(());
     }
+    let status = match out.status.code() {
+        Some(code) => format!("exit {code}"),
+        None => out.status.to_string(), // killed by a signal
+    };
+    let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
+    Err(if stderr.is_empty() {
+        status
+    } else {
+        format!("{status}: {stderr}")
+    })
 }
 
 // --- Heed.app staging ------------------------------------------------------
@@ -120,6 +130,10 @@ fn run_heed(heed: &std::ffi::OsStr, args: &[&str]) -> Result<(), String> {
 /// verify (see [`decide_restage`]).
 fn stage_heed_app(src: &Path, dst: &Path) -> Option<PathBuf> {
     if !needs_restage(src, dst) {
+        // A crash between swap_bundle's final rename and its cleanup leaves
+        // `Heed.app.old` beside a current bundle; equal versions would
+        // otherwise never revisit it.
+        remove_swap_leftovers(dst);
         return Some(dst.to_path_buf());
     }
     let installed_bin = crate::heed_client::bundle_binary(dst);
@@ -224,16 +238,10 @@ fn swap_bundle(src: &Path, dst: &Path) -> std::io::Result<()> {
         .parent()
         .ok_or_else(|| std::io::Error::other("bundle path has no parent"))?;
     fs::create_dir_all(parent)?;
-    let name = dst
-        .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "Heed.app".to_string());
-    let staging = dst.with_file_name(format!("{name}.staging"));
-    let old = dst.with_file_name(format!("{name}.old"));
+    let (staging, old) = swap_siblings(dst);
 
     // Leftovers from an interrupted earlier run.
-    let _ = fs::remove_dir_all(&staging);
-    let _ = fs::remove_dir_all(&old);
+    remove_swap_leftovers(dst);
 
     copy_bundle(src, &staging)?;
 
@@ -253,6 +261,25 @@ fn swap_bundle(src: &Path, dst: &Path) -> std::io::Result<()> {
     }
     let _ = fs::remove_dir_all(&old);
     Ok(())
+}
+
+/// The `Heed.app.staging` / `Heed.app.old` siblings [`swap_bundle`] works through.
+fn swap_siblings(dst: &Path) -> (PathBuf, PathBuf) {
+    let name = dst
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "Heed.app".to_string());
+    (
+        dst.with_file_name(format!("{name}.staging")),
+        dst.with_file_name(format!("{name}.old")),
+    )
+}
+
+/// Best-effort removal of both swap siblings; absent ones are not an error.
+fn remove_swap_leftovers(dst: &Path) {
+    let (staging, old) = swap_siblings(dst);
+    let _ = fs::remove_dir_all(&staging);
+    let _ = fs::remove_dir_all(&old);
 }
 
 /// Copy a bundle with `ditto`, which preserves the code signature, symlinks
@@ -638,6 +665,56 @@ mod tests {
         let dst = d.join("Heed.app");
         assert_eq!(stage_heed_app(&src, &dst), None);
 
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn stage_heed_app_sweeps_stale_siblings_when_installed_is_current() {
+        let root = unique_tmp_dir("sweep");
+        let src = fake_bundle(&root, "src/Heed.app", Some("0.3.0"));
+        let dst = fake_bundle(&root, "Heed.app", Some("0.3.0"));
+        // Leftovers from a run that crashed between the final rename and the
+        // cleanup, or an interrupted copy.
+        let old = fake_bundle(&root, "Heed.app.old", Some("0.2.0"));
+        let staging = fake_bundle(&root, "Heed.app.staging", Some("0.3.0"));
+        assert!(!needs_restage(&src, &dst), "precondition: equal versions");
+
+        assert_eq!(stage_heed_app(&src, &dst), Some(dst.clone()));
+
+        assert!(!old.exists(), "Heed.app.old must be swept");
+        assert!(!staging.exists(), "Heed.app.staging must be swept");
+        assert_eq!(marker(&dst), "0.3.0");
+        assert!(crate::heed_client::bundle_binary(&dst).exists());
+        fs::remove_dir_all(&root).ok();
+    }
+
+    /// Write `<root>/<name>` as an executable shell script.
+    fn fake_script(root: &Path, name: &str, body: &str) -> PathBuf {
+        let path = root.join(name);
+        fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        path
+    }
+
+    #[test]
+    fn run_heed_error_reports_exit_status_and_stderr() {
+        let root = unique_tmp_dir("runheed");
+
+        let silent = fake_script(&root, "silent", "exit 3");
+        let err = run_heed(silent.as_os_str(), &["install"]).unwrap_err();
+        assert_eq!(err, "exit 3", "silent failure must still name the exit status");
+
+        let noisy = fake_script(&root, "noisy", "echo 'no such service' >&2; exit 1");
+        let err = run_heed(noisy.as_os_str(), &["install"]).unwrap_err();
+        assert!(err.contains("exit 1"), "got {err:?}");
+        assert!(err.contains("no such service"), "got {err:?}");
+
+        let ok = fake_script(&root, "ok", "exit 0");
+        assert_eq!(run_heed(ok.as_os_str(), &["install"]), Ok(()));
         fs::remove_dir_all(&root).ok();
     }
 

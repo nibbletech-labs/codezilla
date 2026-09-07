@@ -3,7 +3,7 @@
 //! snapshot. No threads, model turns, terminal UI or user configuration changes.
 use super::{AgentUsage, FetchOutcome, STATUS_NA, STATUS_OK};
 use serde_json::{json, Value};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -19,33 +19,22 @@ fn auth_path() -> Option<PathBuf> {
     Some(root.join("auth.json"))
 }
 
-pub(super) fn prepare() -> Result<Credentials, FetchOutcome> {
+pub(super) fn prepare() -> Result<Credentials, Box<FetchOutcome>> {
     prepare_on_path(&crate::cli_detect::augmented_path())
 }
 
-fn prepare_on_path(search_path: &str) -> Result<Credentials, FetchOutcome> {
+fn prepare_on_path(search_path: &str) -> Result<Credentials, Box<FetchOutcome>> {
     // Nothing to track without the CLI: hide the row rather than retrying a
     // spawn that can never succeed until the user installs Codex.
     if !codex_installed(search_path) {
-        return Err(FetchOutcome {
+        return Err(Box::new(FetchOutcome {
             usage: not_installed(),
             retry_after_secs: None,
-        });
+        }));
     }
-    let path = auth_path().ok_or_else(|| FetchOutcome::error("Cannot locate Codex credentials"))?;
-    // Keychain-only and externally managed auth are resolved by account/read.
-    // This fingerprint isolates local credential changes; it never leaves disk.
-    let raw = match std::fs::read(&path) {
-        Ok(raw) => raw,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
-        Err(_) => return Err(FetchOutcome::error("Cannot read Codex credential identity")),
-    };
-    let auth: Value = serde_json::from_slice(&raw).unwrap_or(Value::Null);
-    let identity = auth["tokens"]["account_id"]
-        .as_str()
-        .or_else(|| auth["OPENAI_API_KEY"].as_str());
-    let key = if let Some(identity) = identity {
-        super::fingerprint(&format!("{}:{identity}", path.display()))
+    let (path, identity) = local_identity()?;
+    let account = if identity.is_some() {
+        Value::Null
     } else {
         // Keychain-only auth: ask the local app server for its account identity
         // before restoring cached data. No model turn or usage request needed.
@@ -57,14 +46,44 @@ fn prepare_on_path(search_path: &str) -> Result<Credentials, FetchOutcome> {
             .block_on(read_server(false))
             .map_err(FetchOutcome::error)?;
         if !is_subscription(&account["account"]) {
-            return Err(FetchOutcome {
+            return Err(Box::new(FetchOutcome {
                 usage: no_subscription(),
                 retry_after_secs: None,
-            });
+            }));
         }
-        super::fingerprint(&format!("{}:{}", path.display(), account["account"]))
+        account["account"].clone()
     };
-    Ok(Credentials { key })
+    Ok(Credentials {
+        key: account_key(&path, identity.as_deref(), &account),
+    })
+}
+
+/// The credential identity recorded in `auth.json`, if any. `None` identity
+/// means keychain-only or externally managed auth, which `account/read`
+/// resolves instead. This fingerprint isolates local credential changes; it
+/// never leaves disk.
+fn local_identity() -> Result<(PathBuf, Option<String>), Box<FetchOutcome>> {
+    let path = auth_path().ok_or_else(|| FetchOutcome::error("Cannot locate Codex credentials"))?;
+    let raw = match std::fs::read(&path) {
+        Ok(raw) => raw,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+        Err(_) => return Err(FetchOutcome::error("Cannot read Codex credential identity").into()),
+    };
+    let auth: Value = serde_json::from_slice(&raw).unwrap_or(Value::Null);
+    let identity = auth["tokens"]["account_id"]
+        .as_str()
+        .or_else(|| auth["OPENAI_API_KEY"].as_str())
+        .map(str::to_owned);
+    Ok((path, identity))
+}
+
+/// Cache key for an account: the local `auth.json` identity when there is
+/// one, otherwise the account the app server reported.
+fn account_key(path: &Path, identity: Option<&str>, account: &Value) -> String {
+    match identity {
+        Some(identity) => super::fingerprint(&format!("{}:{identity}", path.display())),
+        None => super::fingerprint(&format!("{}:{account}", path.display())),
+    }
 }
 
 pub(super) fn fetch(creds: Credentials) -> FetchOutcome {
@@ -75,41 +94,57 @@ pub(super) fn fetch(creds: Credentials) -> FetchOutcome {
         Ok(rt) => rt,
         Err(e) => return FetchOutcome::error(format!("Cannot start Codex usage reader: {e}")),
     };
-    match runtime.block_on(read_server(true)) {
-        Ok(body) => {
-            let mut usage = if is_subscription(&body["account"]) {
-                match parse_snapshot(&body["limits"], super::now_epoch()) {
-                    Ok(usage) => usage,
-                    Err(error) => return FetchOutcome::error(error),
-                }
-            } else {
-                no_subscription()
-            };
-            match prepare() {
-                Ok(current) if current.key == creds.key => {}
-                Ok(_) => {
-                    return FetchOutcome {
-                        usage: AgentUsage {
-                            status: STATUS_NA.into(),
-                            error: Some(
-                                "Codex account changed; waiting for a fresh reading".into(),
-                            ),
-                            ..Default::default()
-                        },
-                        retry_after_secs: None,
-                    }
-                }
-                Err(outcome) => return outcome,
-            }
-            if usage.status == STATUS_OK {
-                usage.tokens_today = tokens_today();
-            }
-            FetchOutcome {
-                usage,
-                retry_after_secs: None,
-            }
-        }
-        Err(error) => FetchOutcome::error(error),
+    let body = match runtime.block_on(read_server(true)) {
+        Ok(body) => body,
+        Err(error) => return FetchOutcome::error(error),
+    };
+    let (path, identity) = match local_identity() {
+        Ok(local) => local,
+        Err(outcome) => return *outcome,
+    };
+    let mut outcome = resolve(&creds, &body, &path, identity.as_deref());
+    if outcome.usage.status == STATUS_OK {
+        outcome.usage.tokens_today = tokens_today();
+    }
+    outcome
+}
+
+/// Turn an `account/read` + `account/rateLimits/read` body into an outcome,
+/// withholding it if the account no longer matches `creds`. The identity
+/// check reuses the account that arrived with the reading rather than
+/// re-running [`prepare`], which would spawn a second app server per refresh
+/// on keychain-only auth.
+fn resolve(
+    creds: &Credentials,
+    body: &Value,
+    path: &Path,
+    identity: Option<&str>,
+) -> FetchOutcome {
+    let account = &body["account"];
+    if !is_subscription(account) {
+        return FetchOutcome {
+            usage: no_subscription(),
+            retry_after_secs: None,
+        };
+    }
+    let usage = match parse_snapshot(&body["limits"], super::now_epoch()) {
+        Ok(usage) => usage,
+        Err(error) => return FetchOutcome::error(error),
+    };
+    // Do not publish an in-flight response after a credential/account switch.
+    if account_key(path, identity, account) != creds.key {
+        return FetchOutcome {
+            usage: AgentUsage {
+                status: STATUS_NA.into(),
+                error: Some("Codex account changed; waiting for a fresh reading".into()),
+                ..Default::default()
+            },
+            retry_after_secs: None,
+        };
+    }
+    FetchOutcome {
+        usage,
+        retry_after_secs: None,
     }
 }
 
@@ -187,7 +222,7 @@ async fn read_server_command(
             &mut output,
             1,
             "initialize",
-            json!({"clientInfo": {"name": "codezilla", "version": "0.1.0"}}),
+            json!({"clientInfo": {"name": "codezilla", "version": env!("CARGO_PKG_VERSION")}}),
         )
         .await?;
         input
@@ -450,6 +485,53 @@ for method in ['initialize','initialized','account/read','account/rateLimits/rea
         }
         assert!(codex_installed(&search_path));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn fetched_reading_is_checked_against_the_account_it_came_with() {
+        // The account/read result that arrived with the limits is the identity
+        // check; no second app-server round trip is needed after a fetch.
+        let path = PathBuf::from("/nonexistent/codex/auth.json");
+        let account_a = json!({"type":"chatgpt","email":"a@example.invalid"});
+        let account_b = json!({"type":"chatgpt","email":"b@example.invalid"});
+        let limits = json!({"rateLimits":{
+            "limitId":"codex","primary":{"usedPercent":12,"windowDurationMins":10080}
+        }});
+
+        // Keychain-only auth: the key is derived from the reported account.
+        let creds = Credentials {
+            key: account_key(&path, None, &account_a),
+        };
+        let body = json!({"account": account_a, "limits": limits});
+        let outcome = resolve(&creds, &body, &path, None);
+        assert_eq!(outcome.usage.status, STATUS_OK);
+        assert_eq!(outcome.usage.weekly_pct, Some(12.0));
+
+        let body_b = json!({"account": account_b, "limits": limits});
+        let outcome = resolve(&creds, &body_b, &path, None);
+        assert_eq!(outcome.usage.status, STATUS_NA);
+        assert!(outcome
+            .usage
+            .error
+            .as_deref()
+            .is_some_and(|e| e.contains("account changed")));
+
+        // File-backed auth: the key follows auth.json, not the server account.
+        let creds = Credentials {
+            key: account_key(&path, Some("acct_1"), &Value::Null),
+        };
+        let status = |identity| resolve(&creds, &body_b, &path, Some(identity)).usage.status;
+        assert_eq!(status("acct_1"), STATUS_OK);
+        assert_eq!(status("acct_2"), STATUS_NA);
+
+        // A non-subscription account is "nothing to track", not a failure.
+        let api = json!({"account": {"type":"apiKey"}, "limits": Value::Null});
+        let outcome = resolve(&creds, &api, &path, Some("acct_1"));
+        assert_eq!(outcome.usage.status, STATUS_NA);
+        assert_eq!(
+            outcome.usage.error.as_deref(),
+            Some("No Codex subscription signed in")
+        );
     }
 
     #[test]

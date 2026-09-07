@@ -279,11 +279,9 @@ pub fn start_usage_tracking(
     app: AppHandle,
     state: tauri::State<'_, UsageState>,
 ) -> Result<(), String> {
-    let dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| e.to_string())?
-        .join("usage-v2");
+    let app_data = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    remove_legacy_cache(&app_data);
+    let dir = app_data.join("usage-v2");
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let generation = {
         let mut inner = state.lock().map_err(|_| "usage state poisoned")?;
@@ -302,6 +300,18 @@ pub fn start_usage_tracking(
         std::thread::spawn(move || run_provider(app, state, generation, index, dir));
     }
     Ok(())
+}
+
+/// Delete the single-file cache older versions kept at
+/// `<app-data>/usage-cache.json`; the per-provider cache now lives under
+/// `usage-v2/`. Missing is the steady state, not an error.
+fn remove_legacy_cache(app_data: &Path) {
+    let legacy = app_data.join("usage-cache.json");
+    match std::fs::remove_file(&legacy) {
+        Ok(()) => log::info!("usage: removed legacy cache {}", legacy.display()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => warn!("usage: could not remove legacy cache {}: {e}", legacy.display()),
+    }
 }
 
 fn run_provider(app: AppHandle, state: UsageState, generation: u64, index: usize, dir: PathBuf) {
@@ -369,7 +379,7 @@ fn run_provider(app: AppHandle, state: UsageState, generation: u64, index: usize
                                     cached = CachedUsage::default();
                                     let _ = std::fs::remove_file(&path);
                                 }
-                                cached.record(outcome, now, interval);
+                                cached.record(*outcome, now, interval);
                                 publish(&app, &state, generation, index, cached.usage.clone());
                             }
                         }
@@ -562,6 +572,23 @@ mod tests {
         assert_eq!(read_cache(&path, "account-b").usage.status, STATUS_LOADING);
         std::fs::remove_dir_all(dir).unwrap();
     }
+    #[test]
+    fn legacy_usage_cache_file_is_removed() {
+        let dir = std::env::temp_dir()
+            .join(format!("codezilla-usage-legacy-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let legacy = dir.join("usage-cache.json");
+        std::fs::write(&legacy, b"{}").unwrap();
+
+        remove_legacy_cache(&dir);
+        assert!(!legacy.exists(), "old usage-cache.json must be deleted");
+
+        // Already gone, or never existed: silently fine.
+        remove_legacy_cache(&dir);
+        remove_legacy_cache(&dir.join("missing"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn fetch_lock_excludes_second_instance_and_releases_on_drop() {
         let path = std::env::temp_dir().join(format!(

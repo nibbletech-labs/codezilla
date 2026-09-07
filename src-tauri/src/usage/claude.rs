@@ -8,24 +8,17 @@
 //! ourselves. The endpoint is unofficial and 429s without a `User-Agent`, so
 //! callers must pass one and poll no faster than ~180s (see the scheduler).
 
-use super::{AgentUsage, FetchOutcome, STATUS_ERROR, STATUS_NA, STATUS_OK};
+use super::{now_epoch, AgentUsage, FetchOutcome, STATUS_ERROR, STATUS_NA, STATUS_OK};
 use serde_json::Value;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, UNIX_EPOCH};
 
 const USAGE_URL: &str = "https://api.anthropic.com/api/oauth/usage";
 const KEYCHAIN_SERVICE: &str = "Claude Code-credentials";
 const MAX_DEPTH: u8 = 4;
-
-fn now_epoch() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0)
-}
 
 /// An unsuccessful fetch, tagged so the UI can tell "nothing to track here"
 /// (`Na` — API-key billing, not signed in, non-macOS) from a real failure
@@ -201,13 +194,13 @@ fn ok_outcome(usage: AgentUsage) -> FetchOutcome {
 /// Read the current Claude plan usage. Never panics; a miss returns a row tagged
 /// `na` (nothing to track) or `error` (transient failure), with the reason in
 /// the detail popup, plus scheduling hints for the caller.
-pub(super) fn prepare() -> Result<Credentials, FetchOutcome> {
+pub(super) fn prepare() -> Result<Credentials, Box<FetchOutcome>> {
     if !cfg!(target_os = "macos") {
-        return Err(ok_outcome(na(
+        return Err(Box::new(ok_outcome(na(
             "Claude plan usage is available on macOS only",
-        )));
+        ))));
     }
-    read_credentials().map_err(from_unavail)
+    read_credentials().map_err(|u| Box::new(from_unavail(u)))
 }
 
 pub(super) fn fetch(creds: Credentials, user_agent: &str) -> FetchOutcome {

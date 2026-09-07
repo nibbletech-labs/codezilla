@@ -34,7 +34,7 @@ jobs:
       - name: Build frontend
         run: npm run build
 
-      - name: Fetch heed sidecar
+      - name: Fetch Heed.app bundle
         run: TARGET=aarch64-apple-darwin ./scripts/fetch-heed.sh
 
       - name: Build Tauri app
