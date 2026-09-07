@@ -104,7 +104,13 @@ fn run_heed(heed: &std::ffi::OsStr, args: &[&str]) -> Result<(), String> {
         .args(args)
         .env("PATH", crate::cli_detect::augmented_path())
         .output()
-        .map_err(|e| format!("could not run `heed {}`: {e}", args.join(" ")))?;
+        .map_err(|e| {
+            format!(
+                "could not run `{} {}`: {e}",
+                heed.to_string_lossy(),
+                args.join(" ")
+            )
+        })?;
     if out.status.success() {
         return Ok(());
     }
@@ -715,6 +721,15 @@ mod tests {
 
         let ok = fake_script(&root, "ok", "exit 0");
         assert_eq!(run_heed(ok.as_os_str(), &["install"]), Ok(()));
+
+        // A binary that can't be spawned names the path that was tried.
+        let missing = root.join("missing-heed");
+        let err = run_heed(missing.as_os_str(), &["install"]).unwrap_err();
+        assert!(
+            err.contains(&missing.to_string_lossy().into_owned()),
+            "spawn failure must name the binary tried, got {err:?}"
+        );
+        assert!(err.contains("install"), "got {err:?}");
         fs::remove_dir_all(&root).ok();
     }
 
