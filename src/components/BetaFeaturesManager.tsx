@@ -8,7 +8,6 @@ import { syncLaunchdEntries } from "../lib/launchdSync";
 
 const FEATURES: { key: keyof BetaFeatures; label: string; description: string }[] = [
   { key: "codexThreads", label: "Codex Threads", description: "Enable Codex (OpenAI) thread type" },
-  { key: "skillsPlugins", label: "Skills & Plugins", description: "Browse and install skills and plugins" },
   { key: "scheduledJobs", label: "Scheduled Jobs", description: "Run tasks on a schedule via launchd" },
 ];
 

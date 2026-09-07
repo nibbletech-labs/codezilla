@@ -233,7 +233,7 @@ interface SortableProjectItemProps {
   activeThreadId: string | null;
   activeJobId: string | null;
   baseFontSize: number;
-  betaFeatures: { codexThreads: boolean; skillsPlugins: boolean; scheduledJobs: boolean };
+  betaFeatures: { codexThreads: boolean; scheduledJobs: boolean };
   setActiveProject: (id: string) => void;
   setActiveThread: (id: string) => void;
   setActiveJob: (id: string) => void;

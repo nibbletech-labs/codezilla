@@ -6,7 +6,6 @@ mod fs;
 mod git;
 mod heed_client;
 mod pty;
-mod skills;
 mod transcript;
 mod usage;
 
@@ -361,7 +360,6 @@ pub fn run() {
         })
         .setup(move |app| {
             info!("Codezilla starting up");
-            skills::cleanup_temp_dirs();
             // Activity detection now comes entirely from the standalone Heed
             // daemon. Ensure Heed is installed and migrate off Codezilla's own
             // embedded hooks (remove the legacy ~/.codezilla registrations that
@@ -656,21 +654,6 @@ pub fn run() {
             launchd::reveal_log_in_finder,
             launchd::run_job_now,
             launchd::prune_job_logs,
-            skills::fetch_git_repo,
-            skills::detect::detect_installable_items,
-            skills::check_for_updates,
-            skills::install_item,
-            skills::remove_item,
-            skills::scan_installed_items,
-            skills::cleanup_fetch,
-            skills::register_marketplace,
-            skills::install_plugin,
-            skills::uninstall_plugin,
-            skills::hash_file,
-            skills::list_marketplaces,
-            skills::check_install_path_exists,
-            skills::move_item,
-            skills::hash_file_in_temp,
             sync_remember_window_position,
             sync_appearance_menu,
             sync_accent_menu,

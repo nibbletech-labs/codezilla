@@ -32,7 +32,6 @@ import ThreadIcon from "../LeftPanel/ThreadIcons";
 import ProjectIcon from "../ProjectIcon";
 import { IconPicker } from "../IconPicker";
 import { JobDetailPanel, JobCreationForm } from "../ScheduledJobs";
-import { SkillsPluginsSummary, SkillsPluginsManager } from "../SkillsPlugins";
 import PresetsManager from "../LaunchPresets/PresetsManager";
 import BetaFeaturesManager from "../BetaFeaturesManager";
 import {
@@ -653,7 +652,6 @@ export default function TerminalMultiplexer() {
   const addThread = useAppStore((s) => s.addThread);
   const removeProject = useAppStore((s) => s.removeProject);
   const setProjectIcon = useAppStore((s) => s.setProjectIcon);
-  const skillsManagerOpen = useAppStore((s) => s.skillsManagerOpen);
   const presetsManagerOpen = useAppStore((s) => s.presetsManagerOpen);
   const betaFeatures = useAppStore((s) => s.betaFeatures);
   const betaFeaturesOpen = useAppStore((s) => s.betaFeaturesOpen);
@@ -994,7 +992,6 @@ export default function TerminalMultiplexer() {
             </div>
           )}
           {betaFeatures.scheduledJobs && activeProjectId && <ScheduledJobsSummary projectId={activeProjectId} getProjectJobs={getProjectJobs} setActiveJob={setActiveJob} onNewJob={() => setShowJobForm(true)} />}
-          {betaFeatures.skillsPlugins && activeProjectId && <SkillsPluginsSummary />}
           {activeProjectId && (
             <RemoveProjectButton onClick={() => removeProject(activeProjectId)} />
           )}
@@ -1021,11 +1018,6 @@ export default function TerminalMultiplexer() {
           projectId={activeProjectId}
           onClose={() => setShowJobForm(false)}
         />,
-        document.body,
-      )}
-      {/* Skills & Plugins Manager overlay */}
-      {betaFeatures.skillsPlugins && skillsManagerOpen && createPortal(
-        <SkillsPluginsManager />,
         document.body,
       )}
       {/* Launch Presets Manager overlay */}

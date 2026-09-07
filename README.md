@@ -19,7 +19,6 @@ A macOS desktop app for multi-project management of AI-enabled development. Supp
 - **Clickable terminal output** — File paths, URLs, and commit hashes become clickable links
 - **Copy as prose** — Select terminal output and copy it as clean, readable text with line wraps removed
 - **Appearance** — Dark, Light, or System theme with 8 accent colours and text size scaling
-- **[Beta] Skills & Plugins Manager** — Discover, install, and manage Claude Code skills, agents, commands, and plugins from git repos with a built-in registry and update tracking
 - **[Beta] Scheduled jobs** — Create recurring tasks with launchd integration
 
 See the [User Guide](USER_GUIDE.md) for full documentation.

@@ -1,6 +1,6 @@
 # Codezilla User Guide
 
-Codezilla is a desktop app for managing AI coding sessions alongside your project files. It gives you terminals for Claude Code, Codex [Beta], and plain shell — all in one window with an integrated file browser, Quick Look preview, scheduled jobs [Beta], and a skills & plugins manager [Beta].
+Codezilla is a desktop app for managing AI coding sessions alongside your project files. It gives you terminals for Claude Code, Codex [Beta], and plain shell — all in one window with an integrated file browser, Quick Look preview and scheduled jobs [Beta].
 
 ---
 
@@ -22,7 +22,7 @@ The app has three panels, a title bar, and a status bar:
 - **Title bar** — app title and current git branch name (top-right)
 - **Left panel** — your projects, threads, and scheduled jobs
 - **Centre panel** — the active terminal session, job detail, or project view
-- **Right panel** — file tree with git status, plus a skills & plugins strip
+- **Right panel** — file tree with git status and worktrees
 - **Status bar** — git diff summary and app version (bottom-left)
 
 The right panel edge can be dragged to resize (150px–600px).
@@ -380,77 +380,6 @@ The detail panel shows:
 
 ---
 
-## Skills & Plugins Manager [Beta]
-
-The Skills & Plugins Manager lets you discover, install, update, and organise Claude Code skills, agents, commands, and plugins across your projects.
-
-### Accessing the manager
-
-- **Right panel strip** — a compact bar above the file tree shows item counts (e.g. "3 skills · 1 plugin") and an update badge. Click it to open the full manager.
-- **Project view summary** — when no thread is active, the centre panel lists installed item names with a **Manage** button.
-
-### What it shows
-
-The manager overlay is divided into sections:
-
-| Section | Contents |
-|---------|----------|
-| **Add from URL** | Text input to paste a git repo URL and fetch installable items |
-| **Installed — Global** | Skills, agents, and commands installed for all projects |
-| **Installed — This Project** | Items scoped to the active project only |
-| **Marketplace Plugins** | Plugins installed via Claude Code's marketplace system |
-| **Unmanaged** | Items found on disk but not tracked by Codezilla's registry |
-| **Registry** | Previously fetched items available for install |
-| **Sources** | Git repo URLs registered as item sources |
-
-### Installing from a URL
-
-1. Paste a git repo URL into the **Add from URL** input and press Enter or click **Fetch**
-2. Codezilla clones the repo and scans for installable items (skills, agents, commands, plugins)
-3. Detected items appear with checkboxes (all selected by default)
-4. Choose a scope — **Global** or **This Project** — and click **Install**
-5. If files already exist at the install path, a confirmation dialog warns before overwriting
-
-### Installing marketplace plugins
-
-1. Paste a marketplace repo URL and fetch
-2. Detected plugins appear in the results
-3. Select and install — Codezilla registers the marketplace and runs `claude plugin install` under the hood
-4. Installed plugins show their marketplace name as a clickable link to the GitHub repo
-
-### Managing installed items
-
-| Action | How |
-|--------|-----|
-| **Remove** | Click the remove button — confirms, then deletes files |
-| **Update** | When an update badge appears, click it to pull the latest version from the source repo |
-| **Move to Global** | Promote a project-scoped item so all projects can use it |
-| **Move to Project** | Restrict a global item to the current project only |
-
-### Claiming unmanaged items
-
-If Codezilla finds skills or plugins on disk that it doesn't track (e.g. manually installed), they appear in the **Unmanaged** section. Click **Link source** to associate them with a git repo URL. Codezilla verifies the content matches using SHA-256 hashes.
-
-### Duplicate detection
-
-If the same item is installed at both global and project scope, the project copy shows a yellow **duplicate** badge. Click **Remove duplicate** to clean up the redundant copy.
-
-### Marketplace links
-
-Installed items and marketplace plugins show clickable source labels (e.g. the marketplace name or `github.com/user/repo`). Clicking these opens the repo in your system browser.
-
-### Plugin sub-items
-
-Marketplace plugins that contain multiple skills, agents, or commands show an expand toggle. Click to reveal the plugin's contents as an indented tree.
-
-### Scope and project filtering
-
-- **Global** items appear in every project
-- **Project-scoped** items only appear when their project is active
-- Marketplace plugins installed for a specific project are filtered — you only see plugins belonging to the active project
-
----
-
 ## Appearance
 
 ### Theme
@@ -541,10 +470,3 @@ Idle threads (waiting for input) close silently — their sessions are saved and
 |----------|--------|
 | **Cmd+click** file path | Open in file tree + Quick Look |
 | **Click** URL | Open in system browser |
-
-### Skills & Plugins Manager
-
-| Shortcut | Action |
-|----------|--------|
-| **Escape** | Close confirm dialog, then close manager |
-| **Enter** (in URL input) | Fetch items from URL |

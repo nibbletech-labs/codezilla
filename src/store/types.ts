@@ -80,7 +80,6 @@ export const THREAD_NEW_LABELS: Record<ThreadType, string> = {
 
 export interface BetaFeatures {
   codexThreads: boolean;
-  skillsPlugins: boolean;
   scheduledJobs: boolean;
 }
 

@@ -3,13 +3,10 @@ import { load } from "@tauri-apps/plugin-store";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { invoke } from "@tauri-apps/api/core";
 import { useAppStore, type RepoHealthDismissal } from "../store/appStore";
-import { useSkillsPluginsStore } from "../store/skillsPluginsStore";
 import type { Project, PersistedThread, ScheduledJob, LaunchPreset, BetaFeatures, ProjectIcon, UsageChartVisibility } from "../store/types";
 import { setUsageAgentEnabled } from "../lib/tauri";
-import type { SkillsPluginsRegistry } from "../store/skillsPluginsTypes";
 import type { AccentColorId, AppearanceMode } from "../lib/themes";
 import { syncLaunchdEntries } from "../lib/launchdSync";
-import { checkRegistryUpdates, reconcileInstalledItems } from "../lib/skillsSync";
 
 const STORE_FILE = "codezilla-config.json";
 const PROJECTS_KEY = "projects";
@@ -22,7 +19,6 @@ const REMEMBER_WINDOW_KEY = "rememberWindowPosition";
 const SHOW_LEFT_PANEL_KEY = "showLeftPanel";
 const SHOW_RIGHT_PANEL_KEY = "showRightPanel";
 const SCHEDULED_JOBS_KEY = "scheduledJobs";
-const SKILLS_PLUGINS_KEY = "skillsPluginsRegistry";
 const LAUNCH_PRESETS_KEY = "launchPresets";
 const BETA_FEATURES_KEY = "betaFeatures";
 const AUTO_DISABLED_JOBS_KEY = "autoDisabledJobIds";
@@ -77,8 +73,6 @@ export function usePersistence() {
   const loadRepoHealthDismissals = useAppStore((s) => s.loadRepoHealthDismissals);
   const touchedEnvsByThread = useAppStore((s) => s.touchedEnvsByThread);
   const loadTouchedEnvs = useAppStore((s) => s.loadTouchedEnvs);
-  const skillsSources = useSkillsPluginsStore((s) => s.sources);
-  const skillsInstallations = useSkillsPluginsStore((s) => s.installations);
   const loadProjects = useAppStore((s) => s.loadProjects);
   const loadExpandedPaths = useAppStore((s) => s.loadExpandedPaths);
   const loadThreads = useAppStore((s) => s.loadThreads);
@@ -163,16 +157,6 @@ export function usePersistence() {
           syncLaunchdEntries(savedJobs ?? [], saved).catch(console.error);
         }
 
-        // Load skills/plugins registry
-        const savedRegistry = await store.get<SkillsPluginsRegistry>(SKILLS_PLUGINS_KEY);
-        if (savedRegistry) {
-          useSkillsPluginsStore.getState().loadRegistry(savedRegistry);
-        }
-        // Check for updates and reconcile on startup
-        const activeProjectPath = saved?.[0]?.path;
-        checkRegistryUpdates().catch(console.error);
-        reconcileInstalledItems(activeProjectPath).catch(console.error);
-
         const savedFontSize = await store.get<number>(FONT_SIZE_KEY);
         if (savedFontSize != null) {
           loadBaseFontSize(savedFontSize);
@@ -251,7 +235,6 @@ export function usePersistence() {
         await store.set(AUTO_DISABLED_JOBS_KEY, autoDisabledJobIds);
         await store.set(REPO_HEALTH_DISMISSALS_KEY, repoHealthDismissals);
         await store.set(TOUCHED_ENVS_KEY, touchedEnvsByThread);
-        await store.set(SKILLS_PLUGINS_KEY, { sources: skillsSources, installations: skillsInstallations });
         // Guard threads against HMR store resets wiping persisted data
         if (threads.length > 0 || threadsLoaded.current) {
           const persisted: PersistedThread[] = threads.map((t) => ({
@@ -272,7 +255,7 @@ export function usePersistence() {
         console.error("Failed to persist state:", e);
       }
     })();
-  }, [projects, expandedPaths, threads, scheduledJobs, launchPresets, betaFeatures, usageChartVisibility, autoDisabledJobIds, repoHealthDismissals, touchedEnvsByThread, skillsSources, skillsInstallations, baseFontSize, accentColorId, appearanceMode, rememberWindowPosition, showLeftPanel, showRightPanel]);
+  }, [projects, expandedPaths, threads, scheduledJobs, launchPresets, betaFeatures, usageChartVisibility, autoDisabledJobIds, repoHealthDismissals, touchedEnvsByThread, baseFontSize, accentColorId, appearanceMode, rememberWindowPosition, showLeftPanel, showRightPanel]);
 
   // Sync Rust menu state (separate from persistence — these only need their specific dep)
   useEffect(() => {

@@ -45,7 +45,6 @@ interface AppState {
   showRightPanel: boolean;
   renamingThreadId: string | null;
   sidebarOpenedForRename: boolean;
-  skillsManagerOpen: boolean;
   presetsManagerOpen: boolean;
 
   // Preview / selection actions
@@ -123,8 +122,6 @@ interface AppState {
   loadPanelVisibility: (left: boolean, right: boolean) => void;
   startRenamingThread: (threadId: string) => void;
   clearRenamingThread: () => void;
-  openSkillsManager: () => void;
-  closeSkillsManager: () => void;
   openPresetsManager: () => void;
   closePresetsManager: () => void;
 
@@ -201,7 +198,6 @@ export const useAppStore = create<AppState>((set, get) => ({
   showRightPanel: true,
   renamingThreadId: null,
   sidebarOpenedForRename: false,
-  skillsManagerOpen: false,
   presetsManagerOpen: false,
   scheduledJobs: [],
   activeJobId: null,
@@ -214,7 +210,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   loadUsageChartVisibility: (v) =>
     set({ usageChartVisibility: { claude: v.claude ?? true, codex: v.codex ?? true } }),
 
-  betaFeatures: { codexThreads: false, skillsPlugins: false, scheduledJobs: false },
+  betaFeatures: { codexThreads: false, scheduledJobs: false },
   betaFeaturesOpen: false,
   autoDisabledJobIds: [],
   repoHealthFlagged: {},
@@ -844,8 +840,6 @@ export const useAppStore = create<AppState>((set, get) => ({
     set({ renamingThreadId: null });
   },
 
-  openSkillsManager: () => set({ skillsManagerOpen: true }),
-  closeSkillsManager: () => set({ skillsManagerOpen: false }),
   openPresetsManager: () => set({ presetsManagerOpen: true }),
   closePresetsManager: () => set({ presetsManagerOpen: false }),
 
@@ -961,7 +955,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   loadBetaFeatures: (features) => {
     // Merge over defaults so flags added in newer versions default to off
     // rather than `undefined` when loading an older persisted object.
-    const defaults: BetaFeatures = { codexThreads: false, skillsPlugins: false, scheduledJobs: false };
+    const defaults: BetaFeatures = { codexThreads: false, scheduledJobs: false };
     set({ betaFeatures: { ...defaults, ...features } });
   },
 
