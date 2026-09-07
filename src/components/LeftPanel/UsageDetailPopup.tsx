@@ -6,6 +6,7 @@ import {
   formatResetCountdown,
   formatTokens,
   formatUpdatedAgo,
+  windowTitle,
 } from "./usageFormat";
 
 const AGENT_LABELS: Record<UsageAgent, string> = {
@@ -23,9 +24,10 @@ interface UsageDetailPopupProps {
 }
 
 /**
- * Detail popup for one agent's usage, anchored to its row. Shows both windows
- * with exact %, absolute + relative reset times, Claude per-model weekly caps,
- * plan tier, today's tokens, and last-updated — or the error when unavailable.
+ * Detail popup for one agent's usage, anchored to its row. Shows a section per
+ * account-wide window the provider reported — exact %, absolute + relative
+ * reset times — plus plan tier, today's tokens, and last-updated, or the error
+ * when unavailable. Windows the provider no longer sends are simply absent.
  */
 export default function UsageDetailPopup({ agent, usage, anchor, onClose }: UsageDetailPopupProps) {
   useEffect(() => {
@@ -40,6 +42,7 @@ export default function UsageDetailPopup({ agent, usage, anchor, onClose }: Usag
   const top = Math.min(anchor.y, window.innerHeight - 320);
 
   const isOk = usage?.status === "ok";
+  const windows = (usage?.windows ?? []).filter((w) => !w.scope);
 
   return (
     <>
@@ -52,15 +55,20 @@ export default function UsageDetailPopup({ agent, usage, anchor, onClose }: Usag
 
         {isOk ? (
           <>
-            <Section label="5-hour window">
-              <UsageGauge label="5h" pct={usage?.five_hour_pct ?? null} />
-              <ResetLine resetsAt={usage?.five_hour_resets_at ?? null} />
-            </Section>
+            {windows.map((w) => (
+              <Section key={w.id} label={windowTitle(w)}>
+                {/* The section heading already names the window; only repeat
+                    it on the gauge when it is a short period label. */}
+                <UsageGauge label={w.duration_secs ? w.label : ""} pct={w.used_pct} />
+                <ResetLine resetsAt={w.resets_at} />
+              </Section>
+            ))}
 
-            <Section label="Weekly window">
-              <UsageGauge label="7d" pct={usage?.weekly_pct ?? null} />
-              <ResetLine resetsAt={usage?.weekly_resets_at ?? null} />
-            </Section>
+            {windows.length === 0 && (
+              <div style={styles.error}>
+                No usage limits are being reported for this plan right now.
+              </div>
+            )}
 
             {usage?.extra_usage_pct != null && (
               <Section label="Extra usage (beyond plan)">

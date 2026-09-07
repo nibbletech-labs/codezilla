@@ -1,23 +1,31 @@
 // Formatting helpers for the plan-usage UI. Kept dependency-free (no date libs).
 
-/** Fixed window lengths, in seconds, used to derive how far through a period we are. */
-export const FIVE_HOUR_SECONDS = 5 * 3600;
-export const WEEKLY_SECONDS = 7 * 86_400;
-
 /**
  * Fraction (0–100) of a usage window that has elapsed, derived from its reset
- * timestamp and known length. This is the "pace" against which utilization is
- * compared: if usage outruns this, you're burning faster than the clock.
- * Returns null when the timestamp is missing.
+ * timestamp and the length the provider reported. This is the "pace" against
+ * which utilization is compared: if usage outruns this, you're burning faster
+ * than the clock. Returns null when either input is missing, which hides the
+ * tick rather than inventing a window length.
  */
 export function windowElapsedPct(
   resetsAtEpoch: number | null,
-  periodSeconds: number,
+  periodSeconds: number | null,
 ): number | null {
-  if (!resetsAtEpoch) return null;
+  if (!resetsAtEpoch || !periodSeconds) return null;
   const remaining = resetsAtEpoch - Math.floor(Date.now() / 1000);
   const elapsed = (1 - remaining / periodSeconds) * 100;
   return Math.max(0, Math.min(100, elapsed));
+}
+
+/**
+ * Section heading for one window: "5-hour window", "7-day window", or the
+ * window's own label when its length is unknown ("billing cycle window").
+ */
+export function windowTitle(window: { label: string; duration_secs: number | null }): string {
+  const secs = window.duration_secs;
+  if (secs && secs % 86_400 === 0) return `${secs / 86_400}-day window`;
+  if (secs && secs % 3600 === 0) return `${secs / 3600}-hour window`;
+  return `${window.label} window`;
 }
 
 /** Compact token count: 12_014_493 → "12.0M", 4500 → "4.5K", 320 → "320". */

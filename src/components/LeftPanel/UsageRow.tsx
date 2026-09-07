@@ -1,11 +1,7 @@
 import { useState } from "react";
 import type { AgentUsage, UsageAgent } from "../../store/usageTypes";
 import UsageGauge from "./UsageGauge";
-import {
-  windowElapsedPct,
-  FIVE_HOUR_SECONDS,
-  WEEKLY_SECONDS,
-} from "./usageFormat";
+import { windowElapsedPct } from "./usageFormat";
 import { timeAgo } from "../../lib/timeAgo";
 
 const AGENT_LABELS: Record<UsageAgent, string> = {
@@ -24,9 +20,10 @@ interface UsageRowProps {
 }
 
 /**
- * One agent's plan-usage summary: name, a 5-hour and weekly gauge, and the
- * soonest reset countdown. Dimmed with "unavailable" when there's no data.
- * Clicking opens the detail popup.
+ * One agent's plan-usage summary: name and a gauge per account-wide window the
+ * provider currently reports — however many that is, and whatever their
+ * lengths. A window the provider stops sending simply disappears. Dimmed with
+ * "unavailable" when there's no data. Clicking opens the detail popup.
  */
 export default function UsageRow({ agent, usage, onClick }: UsageRowProps) {
   const [hovered, setHovered] = useState(false);
@@ -38,13 +35,28 @@ export default function UsageRow({ agent, usage, onClick }: UsageRowProps) {
   // stays fresh). Errors serving a cached value surface here too.
   const updatedAt = usage?.updated_at ?? null;
   const ageSecs = updatedAt ? Date.now() / 1000 - updatedAt : 0;
-  const expired = [usage?.five_hour_resets_at, usage?.weekly_resets_at]
-    .some((reset) => reset != null && reset <= Date.now() / 1000);
+  // Only account-wide limits with a known period belong in the compact row.
+  // Per-model caps, and entries whose key we could not read as a time window,
+  // ride along in the payload and are listed in the detail popup instead —
+  // one unrecognised name must not reshape the sidebar.
+  const windows = (usage?.windows ?? []).filter(
+    (w) => !w.scope && w.duration_secs != null,
+  );
+  const expired = windows.some(
+    (w) => w.resets_at != null && w.resets_at <= Date.now() / 1000,
+  );
   const isStale = isOk && (Boolean(usage?.error) || expired || ageSecs > STALE_AFTER_SECS);
 
-  // Compact right-hand text for non-ok states.
+  // Compact right-hand text for non-ok states, and for a reading that carries
+  // no windows at all (a provider that has stopped publishing limits).
   const statusLabel =
-    status === "loading" ? "…" : status === "error" ? "unavailable" : "";
+    status === "loading"
+      ? "…"
+      : status === "error"
+        ? "unavailable"
+        : isOk && windows.length === 0
+          ? "no limits reported"
+          : "";
 
   return (
     <div
@@ -63,26 +75,20 @@ export default function UsageRow({ agent, usage, onClick }: UsageRowProps) {
         {isOk && isStale && updatedAt && (
           <span style={styles.reset}>as of {timeAgo(updatedAt * 1000)}</span>
         )}
-        {!isOk && statusLabel && <span style={styles.reset}>{statusLabel}</span>}
+        {statusLabel && !(isOk && isStale && updatedAt) && (
+          <span style={styles.reset}>{statusLabel}</span>
+        )}
       </div>
-      {isOk && (
+      {windows.length > 0 && (
         <div style={styles.gauges}>
-          <UsageGauge
-            label="5h"
-            pct={usage?.five_hour_pct ?? null}
-            elapsedPct={windowElapsedPct(
-              usage?.five_hour_resets_at ?? null,
-              FIVE_HOUR_SECONDS,
-            )}
-          />
-          <UsageGauge
-            label="7d"
-            pct={usage?.weekly_pct ?? null}
-            elapsedPct={windowElapsedPct(
-              usage?.weekly_resets_at ?? null,
-              WEEKLY_SECONDS,
-            )}
-          />
+          {windows.map((w) => (
+            <UsageGauge
+              key={w.id}
+              label={w.label}
+              pct={w.used_pct}
+              elapsedPct={windowElapsedPct(w.resets_at, w.duration_secs)}
+            />
+          ))}
         </div>
       )}
     </div>

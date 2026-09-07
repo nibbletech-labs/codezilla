@@ -23,6 +23,27 @@ pub const STATUS_ERROR: &str = "error";
 /// Not fetched yet — shown briefly before the first refresh lands.
 pub const STATUS_LOADING: &str = "loading";
 
+/// One rate-limit window as the provider reported it. Providers add, remove
+/// and resize windows without warning (Codex dropped the 5-hour window from
+/// its main bucket in September 2026), so a reading carries whatever windows
+/// arrived rather than mapping them onto fixed named fields. The UI renders
+/// the list it is given and shows nothing for windows that stop appearing.
+#[derive(Clone, Serialize, Deserialize, Default, Debug, PartialEq)]
+pub struct UsageWindow {
+    /// Identifier for ordering and UI keys, e.g. "5h" or "opus:7d".
+    pub id: String,
+    /// Short gauge label, e.g. "5h", "7d", "30d".
+    pub label: String,
+    /// Utilization 0–100.
+    pub used_pct: f64,
+    /// Unix epoch seconds of the next reset, when the provider states one.
+    pub resets_at: Option<i64>,
+    /// Window length in seconds, when known — drives the elapsed "pace" tick.
+    pub duration_secs: Option<i64>,
+    /// Model or sub-limit this window applies to; `None` is the account limit.
+    pub scope: Option<String>,
+}
+
 /// Per-agent usage, as shipped to the frontend. All percentages are 0–100.
 /// `resets_at` fields are Unix epoch seconds. Everything is optional so a
 /// partial/failed fetch still produces a renderable row. Deserialize exists
@@ -31,13 +52,10 @@ pub const STATUS_LOADING: &str = "loading";
 pub struct AgentUsage {
     /// One of [`STATUS_OK`], [`STATUS_NA`], [`STATUS_ERROR`], [`STATUS_LOADING`].
     pub status: String,
-    pub five_hour_pct: Option<f64>,
-    pub five_hour_resets_at: Option<i64>,
-    pub weekly_pct: Option<f64>,
-    pub weekly_resets_at: Option<i64>,
-    /// Claude-only per-model weekly caps (null on plans without them).
-    pub weekly_sonnet_pct: Option<f64>,
-    pub weekly_opus_pct: Option<f64>,
+    /// Every window the provider reported, account-wide ones first, shortest
+    /// first within each scope. Empty when there is nothing to show.
+    #[serde(default)]
+    pub windows: Vec<UsageWindow>,
     /// Plan tier as reported by the source (e.g. "pro", "prolite", "max").
     pub plan_type: Option<String>,
     /// Account-wide tokens used since local midnight (best-effort estimate).
@@ -123,6 +141,42 @@ fn now_epoch() -> i64 {
 pub(super) fn fingerprint(value: &str) -> String {
     use sha2::{Digest, Sha256};
     format!("{:x}", Sha256::digest(value.as_bytes()))
+}
+
+/// Short label for a window of `mins` minutes: 300 → "5h", 10080 → "7d",
+/// 43200 → "30d", 90 → "1h30m". Any duration gets a label, so a window length
+/// we have never seen before still renders correctly.
+pub(super) fn window_label(mins: i64) -> String {
+    let mins = mins.max(0);
+    if mins >= 1440 && mins % 1440 == 0 {
+        return format!("{}d", mins / 1440);
+    }
+    if mins < 60 {
+        return format!("{mins}m");
+    }
+    let (hours, rest) = (mins / 60, mins % 60);
+    if rest == 0 {
+        format!("{hours}h")
+    } else {
+        format!("{hours}h{rest}m")
+    }
+}
+
+/// Account-wide windows first, then shortest first, so the compact row always
+/// leads with the tightest limit. Unknown durations sort last within a scope.
+pub(super) fn sort_windows(windows: &mut [UsageWindow]) {
+    windows.sort_by(|a, b| {
+        a.scope
+            .is_some()
+            .cmp(&b.scope.is_some())
+            .then_with(|| a.scope.cmp(&b.scope))
+            .then_with(|| {
+                a.duration_secs
+                    .unwrap_or(i64::MAX)
+                    .cmp(&b.duration_secs.unwrap_or(i64::MAX))
+            })
+            .then_with(|| a.label.cmp(&b.label))
+    });
 }
 
 pub(super) struct FetchOutcome {
@@ -281,7 +335,7 @@ pub fn start_usage_tracking(
 ) -> Result<(), String> {
     let app_data = app.path().app_data_dir().map_err(|e| e.to_string())?;
     remove_legacy_cache(&app_data);
-    let dir = app_data.join("usage-v2");
+    let dir = app_data.join("usage-v3");
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let generation = {
         let mut inner = state.lock().map_err(|_| "usage state poisoned")?;
@@ -302,15 +356,26 @@ pub fn start_usage_tracking(
     Ok(())
 }
 
-/// Delete the single-file cache older versions kept at
-/// `<app-data>/usage-cache.json`; the per-provider cache now lives under
-/// `usage-v2/`. Missing is the steady state, not an error.
+/// Delete caches written by older versions: the single `usage-cache.json`
+/// file, and the `usage-v2/` directory whose readings predate the generic
+/// window list (they would restore as a reading with no windows at all).
+/// The current cache lives under `usage-v3/`. Missing is the steady state,
+/// not an error.
 fn remove_legacy_cache(app_data: &Path) {
     let legacy = app_data.join("usage-cache.json");
     match std::fs::remove_file(&legacy) {
         Ok(()) => log::info!("usage: removed legacy cache {}", legacy.display()),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
         Err(e) => warn!("usage: could not remove legacy cache {}: {e}", legacy.display()),
+    }
+    let legacy_dir = app_data.join("usage-v2");
+    match std::fs::remove_dir_all(&legacy_dir) {
+        Ok(()) => log::info!("usage: removed legacy cache {}", legacy_dir.display()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => warn!(
+            "usage: could not remove legacy cache {}: {e}",
+            legacy_dir.display()
+        ),
     }
 }
 
@@ -466,15 +531,72 @@ pub fn report_usage_activity(
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn window(label: &str, pct: f64, resets_at: i64, secs: i64) -> UsageWindow {
+        UsageWindow {
+            id: label.into(),
+            label: label.into(),
+            used_pct: pct,
+            resets_at: Some(resets_at),
+            duration_secs: Some(secs),
+            scope: None,
+        }
+    }
     fn good() -> AgentUsage {
         AgentUsage {
             status: STATUS_OK.into(),
-            five_hour_pct: Some(25.0),
-            weekly_pct: Some(50.0),
+            windows: vec![
+                window("5h", 25.0, 1200, 18_000),
+                window("7d", 50.0, 9000, 604_800),
+            ],
             updated_at: Some(1000),
-            five_hour_resets_at: Some(1200),
             ..Default::default()
         }
+    }
+    fn pct(usage: &AgentUsage, label: &str) -> Option<f64> {
+        usage
+            .windows
+            .iter()
+            .find(|w| w.label == label)
+            .map(|w| w.used_pct)
+    }
+
+    #[test]
+    fn any_window_length_gets_a_label_and_a_stable_order() {
+        assert_eq!(window_label(300), "5h");
+        assert_eq!(window_label(10080), "7d");
+        assert_eq!(window_label(43200), "30d");
+        assert_eq!(window_label(1440), "1d");
+        assert_eq!(window_label(60), "1h");
+        assert_eq!(window_label(90), "1h30m");
+        assert_eq!(window_label(45), "45m");
+
+        // Account windows lead, shortest first; unknown durations sort last.
+        let mut windows = vec![
+            UsageWindow {
+                scope: Some("opus".into()),
+                ..window("7d", 1.0, 0, 604_800)
+            },
+            window("7d", 2.0, 0, 604_800),
+            UsageWindow {
+                duration_secs: None,
+                ..window("monthly", 3.0, 0, 0)
+            },
+            window("5h", 4.0, 0, 18_000),
+        ];
+        sort_windows(&mut windows);
+        let order: Vec<_> = windows
+            .iter()
+            .map(|w| (w.scope.clone(), w.label.clone()))
+            .collect();
+        assert_eq!(
+            order,
+            vec![
+                (None, "5h".into()),
+                (None, "7d".into()),
+                (None, "monthly".into()),
+                (Some("opus".into()), "7d".into()),
+            ]
+        );
     }
     #[test]
     fn counts_recent_terminals_and_exact_boundaries() {
@@ -506,7 +628,7 @@ mod tests {
         cache.record(FetchOutcome::error("offline"), 10000, 300);
         assert_eq!(cache.usage.status, STATUS_OK);
         assert_eq!(cache.usage.updated_at, Some(1000));
-        assert_eq!(cache.usage.five_hour_pct, Some(25.0));
+        assert_eq!(pct(&cache.usage, "5h"), Some(25.0));
         assert_eq!(cache.usage.error.as_deref(), Some("offline"));
         assert_eq!(cache.not_before, 10600);
         cache.record(
@@ -537,8 +659,8 @@ mod tests {
             ..Default::default()
         };
         cache.record(FetchOutcome::error("offline"), 1300, 600);
-        assert_eq!(cache.usage.five_hour_pct, Some(25.0));
-        assert_eq!(cache.usage.five_hour_resets_at, Some(1200));
+        assert_eq!(pct(&cache.usage, "5h"), Some(25.0));
+        assert_eq!(cache.usage.windows[0].resets_at, Some(1200));
     }
     #[test]
     fn signout_clears_old_account_reading() {
@@ -550,7 +672,7 @@ mod tests {
                 ..Default::default()
             },
         );
-        assert!(current.five_hour_pct.is_none());
+        assert!(current.windows.is_empty());
     }
     #[test]
     fn cache_is_account_scoped_and_preserves_retry_deadlines_across_restart() {
@@ -567,7 +689,7 @@ mod tests {
         };
         write_cache(&path, &cache).unwrap();
         let loaded = read_cache(&path, "account-a");
-        assert_eq!(loaded.usage.weekly_pct, Some(50.0));
+        assert_eq!(pct(&loaded.usage, "7d"), Some(50.0));
         assert!(!loaded.due(4999, 300));
         assert_eq!(read_cache(&path, "account-b").usage.status, STATUS_LOADING);
         std::fs::remove_dir_all(dir).unwrap();
@@ -579,9 +701,13 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let legacy = dir.join("usage-cache.json");
         std::fs::write(&legacy, b"{}").unwrap();
+        let legacy_dir = dir.join("usage-v2");
+        std::fs::create_dir_all(&legacy_dir).unwrap();
+        std::fs::write(legacy_dir.join("codex.json"), b"{}").unwrap();
 
         remove_legacy_cache(&dir);
         assert!(!legacy.exists(), "old usage-cache.json must be deleted");
+        assert!(!legacy_dir.exists(), "pre-window usage-v2 cache must be deleted");
 
         // Already gone, or never existed: silently fine.
         remove_legacy_cache(&dir);

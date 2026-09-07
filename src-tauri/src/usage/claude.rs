@@ -8,7 +8,7 @@
 //! ourselves. The endpoint is unofficial and 429s without a `User-Agent`, so
 //! callers must pass one and poll no faster than ~180s (see the scheduler).
 
-use super::{now_epoch, AgentUsage, FetchOutcome, STATUS_ERROR, STATUS_NA, STATUS_OK};
+use super::{now_epoch, AgentUsage, FetchOutcome, UsageWindow, STATUS_ERROR, STATUS_NA, STATUS_OK};
 use serde_json::Value;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
@@ -219,10 +219,8 @@ pub(super) fn fetch(creds: Credentials, user_agent: &str) -> FetchOutcome {
         }
         Err(error) => return from_unavail(error),
     }
-    let five_hour_pct = body["five_hour"]["utilization"].as_f64();
-    let weekly_pct = body["seven_day"]["utilization"].as_f64();
-
-    if five_hour_pct.is_none() && weekly_pct.is_none() {
+    let windows = parse_windows(&body);
+    if windows.iter().all(|w| w.scope.is_some()) {
         return ok_outcome(err("Usage endpoint returned no recognizable data"));
     }
 
@@ -240,22 +238,104 @@ pub(super) fn fetch(creds: Credentials, user_agent: &str) -> FetchOutcome {
 
     ok_outcome(AgentUsage {
         status: STATUS_OK.to_string(),
-        five_hour_pct,
-        five_hour_resets_at: body["five_hour"]["resets_at"]
-            .as_str()
-            .and_then(parse_iso8601_to_epoch),
-        weekly_pct,
-        weekly_resets_at: body["seven_day"]["resets_at"]
-            .as_str()
-            .and_then(parse_iso8601_to_epoch),
-        weekly_sonnet_pct: body["seven_day_sonnet"]["utilization"].as_f64(),
-        weekly_opus_pct: body["seven_day_opus"]["utilization"].as_f64(),
+        windows,
         plan_type: creds.plan, // from the Keychain item's subscriptionType
         tokens_today: tokens_today(),
         extra_usage_pct,
         extra_usage_used_credits,
         updated_at: Some(now_epoch()),
         error: None,
+    })
+}
+
+/// Payload members that carry a `utilization` number but are not rate-limit
+/// windows. Extra usage is credit spend beyond the plan and has its own fields.
+const NOT_WINDOWS: &[&str] = &["extra_usage"];
+
+/// Every window in the payload, whatever it is called. The endpoint is
+/// undocumented and its window set changes (per-model weekly caps arrived long
+/// after the original two), so anything carrying a `utilization` is reported
+/// rather than only the keys we happen to know today.
+fn parse_windows(body: &Value) -> Vec<UsageWindow> {
+    let Some(fields) = body.as_object() else {
+        return Vec::new();
+    };
+    let mut windows = Vec::new();
+    for (key, value) in fields {
+        if NOT_WINDOWS.contains(&key.as_str()) {
+            continue;
+        }
+        let Some(pct) = value["utilization"]
+            .as_f64()
+            .filter(|p| p.is_finite() && *p >= 0.0)
+        else {
+            continue;
+        };
+        let (label, duration_secs, scope) = describe_window_key(key);
+        windows.push(UsageWindow {
+            id: scope
+                .as_deref()
+                .map_or_else(|| label.clone(), |s| format!("{s}:{label}")),
+            label,
+            used_pct: pct,
+            resets_at: value["resets_at"].as_str().and_then(parse_iso8601_to_epoch),
+            duration_secs,
+            scope,
+        });
+    }
+    super::sort_windows(&mut windows);
+    windows
+}
+
+/// Split a window key — `five_hour`, `seven_day`, `seven_day_opus`, a future
+/// `thirty_day` — into a short label, its length, and the model it covers. A
+/// key we cannot parse still becomes a window, labelled from the key itself.
+fn describe_window_key(key: &str) -> (String, Option<i64>, Option<String>) {
+    let mut parts = key.split('_');
+    let count = parts.next().and_then(word_number);
+    let unit = parts.next().and_then(unit_minutes);
+    let rest: Vec<&str> = parts.collect();
+    match (count, unit) {
+        (Some(count), Some(unit)) => {
+            let mins = count * unit;
+            (
+                super::window_label(mins),
+                Some(mins * 60),
+                (!rest.is_empty()).then(|| rest.join(" ")),
+            )
+        }
+        _ => (key.replace('_', " "), None, None),
+    }
+}
+
+fn word_number(word: &str) -> Option<i64> {
+    Some(match word {
+        "one" => 1,
+        "two" => 2,
+        "three" => 3,
+        "four" => 4,
+        "five" => 5,
+        "six" => 6,
+        "seven" => 7,
+        "eight" => 8,
+        "nine" => 9,
+        "ten" => 10,
+        "twelve" => 12,
+        "fourteen" => 14,
+        "twenty" => 20,
+        "thirty" => 30,
+        digits => digits.parse().ok().filter(|n| *n > 0)?,
+    })
+}
+
+fn unit_minutes(word: &str) -> Option<i64> {
+    Some(match word.trim_end_matches('s') {
+        "minute" => 1,
+        "hour" => 60,
+        "day" => 1440,
+        "week" => 10080,
+        "month" => 43200,
+        _ => return None,
     })
 }
 
@@ -478,6 +558,50 @@ mod tests {
         );
         assert_ne!(credential_key(None, "old"), credential_key(None, "new"));
     }
+    #[test]
+    fn windows_come_from_the_payload_including_ones_we_have_never_seen() {
+        let body = json!({
+            "five_hour": {"utilization": 12.0, "resets_at": "2026-09-07T12:00:00Z"},
+            "seven_day": {"utilization": 40.0},
+            "seven_day_opus": {"utilization": 60.0},
+            "thirty_day": {"utilization": 5.0},
+            "extra_usage": {"is_enabled": true, "utilization": 90.0},
+            "unrelated": "ignored"
+        });
+        let windows = parse_windows(&body);
+        let described: Vec<_> = windows
+            .iter()
+            .map(|w| (w.scope.as_deref(), w.label.as_str(), w.used_pct))
+            .collect();
+        // Account windows shortest-first, then per-model ones. Extra usage is
+        // credit spend, not a window, and never becomes a gauge here.
+        assert_eq!(
+            described,
+            vec![
+                (None, "5h", 12.0),
+                (None, "7d", 40.0),
+                (None, "30d", 5.0),
+                (Some("opus"), "7d", 60.0),
+            ]
+        );
+        assert_eq!(windows[0].duration_secs, Some(18_000));
+        assert_eq!(
+            windows[0].resets_at,
+            parse_iso8601_to_epoch("2026-09-07T12:00:00Z")
+        );
+
+        // A window whose key we cannot parse is still shown, not dropped.
+        let odd = parse_windows(&json!({"billing_cycle": {"utilization": 3.0}}));
+        assert_eq!(odd.len(), 1);
+        assert_eq!(odd[0].label, "billing cycle");
+        assert_eq!(odd[0].duration_secs, None);
+        assert!(odd[0].scope.is_none());
+
+        // Nothing but per-model caps is not a usable account reading.
+        let only_scoped = parse_windows(&json!({"seven_day_opus": {"utilization": 1.0}}));
+        assert!(only_scoped.iter().all(|w| w.scope.is_some()));
+    }
+
     #[test]
     fn retry_after_supports_seconds_and_http_dates() {
         let now = parse_iso8601_to_epoch("2026-09-05T07:00:00Z").unwrap();

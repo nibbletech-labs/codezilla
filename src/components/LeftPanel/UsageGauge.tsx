@@ -64,8 +64,11 @@ const styles = {
   label: {
     color: "var(--text-secondary)",
     fontSize: "var(--font-size-sm)",
-    width: 18,
+    minWidth: 18,
     flexShrink: 0,
+    // Labels come from the provider; an unexpectedly long one must not wrap
+    // onto a second line and push the bar around.
+    whiteSpace: "nowrap",
   } as React.CSSProperties,
   track: {
     flex: 1,

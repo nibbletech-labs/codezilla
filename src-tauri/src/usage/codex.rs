@@ -1,7 +1,7 @@
 //! Read a stable account-limit bucket through the installed Codex app server.
 //! A short-lived stdio connection is opened only when the scheduler permits a
 //! snapshot. No threads, model turns, terminal UI or user configuration changes.
-use super::{AgentUsage, FetchOutcome, STATUS_NA, STATUS_OK};
+use super::{AgentUsage, FetchOutcome, UsageWindow, STATUS_NA, STATUS_OK};
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -296,47 +296,76 @@ async fn rpc(
 fn parse_snapshot(body: &Value, now: i64) -> Result<AgentUsage, String> {
     // Prefer the named account bucket. Never switch to whichever model bucket
     // happened to emit the latest event. Legacy single-bucket servers are OK.
-    let bucket = if body["rateLimitsByLimitId"].is_object() {
-        body["rateLimitsByLimitId"].get("codex")
-    } else {
-        body.get("rateLimits")
-            .filter(|b| b["limitId"].is_null() || b["limitId"] == "codex")
+    let by_id = body["rateLimitsByLimitId"].as_object();
+    let main = match by_id {
+        Some(map) => map.get("codex"),
+        None => body
+            .get("rateLimits")
+            .filter(|b| b["limitId"].is_null() || b["limitId"] == "codex"),
     }
     .ok_or("Codex response has no main usage bucket")?;
+
     let mut usage = AgentUsage {
         status: STATUS_OK.into(),
         updated_at: Some(now),
-        plan_type: bucket["planType"].as_str().map(str::to_owned),
+        plan_type: main["planType"].as_str().map(str::to_owned),
+        windows: bucket_windows(main, None),
         ..Default::default()
     };
-    for (key, default_minutes) in [("primary", 300), ("secondary", 10080)] {
-        let window = &bucket[key];
+    if usage.windows.is_empty() {
+        return Err("Codex returned no recognized usage windows".into());
+    }
+    // Per-model buckets ride along scoped to their limit, so the account row
+    // keeps showing account limits only.
+    for (id, bucket) in by_id.into_iter().flatten().filter(|(id, _)| *id != "codex") {
+        let scope = bucket["limitName"].as_str().unwrap_or(id);
+        usage.windows.extend(bucket_windows(bucket, Some(scope)));
+    }
+    super::sort_windows(&mut usage.windows);
+    Ok(usage)
+}
+
+/// Every window in one bucket, whatever it happens to be called. `primary` and
+/// `secondary` are today's shape; a future sibling carrying a `usedPercent` is
+/// picked up the same way, and a window whose duration we have never seen is
+/// labelled from that duration rather than dropped.
+fn bucket_windows(bucket: &Value, scope: Option<&str>) -> Vec<UsageWindow> {
+    let Some(fields) = bucket.as_object() else {
+        return Vec::new();
+    };
+    let mut windows = Vec::new();
+    for (name, window) in fields {
         let Some(pct) = window["usedPercent"]
             .as_f64()
             .filter(|p| p.is_finite() && *p >= 0.0)
         else {
             continue;
         };
-        let resets = window["resetsAt"].as_i64();
-        match window["windowDurationMins"]
+        let mins = window["windowDurationMins"]
             .as_i64()
-            .unwrap_or(default_minutes)
-        {
-            300 => {
-                usage.five_hour_pct = Some(pct);
-                usage.five_hour_resets_at = resets;
-            }
-            10080 => {
-                usage.weekly_pct = Some(pct);
-                usage.weekly_resets_at = resets;
-            }
-            _ => {} // Do not mislabel a new window duration as five hours/week.
-        }
+            .filter(|m| *m > 0)
+            .or_else(|| default_window_mins(name));
+        let label = mins.map_or_else(|| name.clone(), super::window_label);
+        windows.push(UsageWindow {
+            id: scope.map_or_else(|| label.clone(), |s| format!("{s}:{label}")),
+            label,
+            used_pct: pct,
+            resets_at: window["resetsAt"].as_i64(),
+            duration_secs: mins.map(|m| m * 60),
+            scope: scope.map(str::to_owned),
+        });
     }
-    if usage.five_hour_pct.is_none() && usage.weekly_pct.is_none() {
-        return Err("Codex returned no recognized usage windows".into());
+    windows
+}
+
+/// Window lengths for the two long-standing slots, used only when the server
+/// omits `windowDurationMins`.
+fn default_window_mins(name: &str) -> Option<i64> {
+    match name {
+        "primary" => Some(300),
+        "secondary" => Some(10080),
+        _ => None,
     }
-    Ok(usage)
 }
 
 /// Count today's increments, not the full lifetime total of sessions touched today.
@@ -432,10 +461,8 @@ for method in ['initialize','initialized','account/read','account/rateLimits/rea
         let body = rt
             .block_on(read_server_command(command, true, Duration::from_secs(5)))
             .unwrap();
-        assert_eq!(
-            parse_snapshot(&body["limits"], 1000).unwrap().weekly_pct,
-            Some(12.0)
-        );
+        let usage = parse_snapshot(&body["limits"], 1000).unwrap();
+        assert_eq!(window_pct(&usage, "7d"), Some(12.0));
     }
 
     #[test]
@@ -505,7 +532,7 @@ for method in ['initialize','initialized','account/read','account/rateLimits/rea
         let body = json!({"account": account_a, "limits": limits});
         let outcome = resolve(&creds, &body, &path, None);
         assert_eq!(outcome.usage.status, STATUS_OK);
-        assert_eq!(outcome.usage.weekly_pct, Some(12.0));
+        assert_eq!(window_pct(&outcome.usage, "7d"), Some(12.0));
 
         let body_b = json!({"account": account_b, "limits": limits});
         let outcome = resolve(&creds, &body_b, &path, None);
@@ -546,16 +573,51 @@ for method in ['initialize','initialized','account/read','account/rateLimits/rea
         assert_eq!(token_increments(records.as_bytes(), midnight), 40);
     }
 
+    fn window_pct(usage: &AgentUsage, label: &str) -> Option<f64> {
+        usage
+            .windows
+            .iter()
+            .find(|w| w.scope.is_none() && w.label == label)
+            .map(|w| w.used_pct)
+    }
+
     #[test]
     fn selects_main_bucket_with_weekly_primary() {
+        // The account bucket now reports a weekly window only; the vanished
+        // 5-hour window must not linger as an empty gauge.
         let value = json!({"rateLimitsByLimitId": {
-            "codex_other": {"primary":{"usedPercent":99,"windowDurationMins":300}},
+            "codex_other": {"limitName":"Spark","primary":{"usedPercent":99,"windowDurationMins":300}},
             "codex": {"primary":{"usedPercent":5,"windowDurationMins":10080,"resetsAt":2000},"secondary":null}
         }, "rateLimits":{"limitId":"codex_other","primary":{"usedPercent":99}}});
         let usage = parse_snapshot(&value, 1000).unwrap();
-        assert_eq!(usage.weekly_pct, Some(5.0));
-        assert_eq!(usage.five_hour_pct, None);
-        assert_eq!(usage.weekly_resets_at, Some(2000));
+        let account: Vec<_> = usage.windows.iter().filter(|w| w.scope.is_none()).collect();
+        assert_eq!(account.len(), 1);
+        assert_eq!(account[0].label, "7d");
+        assert_eq!(account[0].used_pct, 5.0);
+        assert_eq!(account[0].resets_at, Some(2000));
+        assert_eq!(account[0].duration_secs, Some(604_800));
+        // Other limits are carried, but scoped to their own name.
+        let scoped: Vec<_> = usage.windows.iter().filter(|w| w.scope.is_some()).collect();
+        assert_eq!(scoped.len(), 1);
+        assert_eq!(scoped[0].scope.as_deref(), Some("Spark"));
+        assert_eq!(scoped[0].label, "5h");
+    }
+
+    #[test]
+    fn unfamiliar_window_lengths_and_slots_are_kept_not_dropped() {
+        // A new window duration, and a third slot beside primary/secondary,
+        // both survive with a label derived from their stated length.
+        let usage = parse_snapshot(
+            &json!({"rateLimits":{"limitId":"codex",
+                "primary":{"usedPercent":10,"windowDurationMins":43200},
+                "tertiary":{"usedPercent":20,"windowDurationMins":720}
+            }}),
+            1000,
+        )
+        .unwrap();
+        let labels: Vec<_> = usage.windows.iter().map(|w| w.label.as_str()).collect();
+        assert_eq!(labels, vec!["12h", "30d"]);
+        assert_eq!(window_pct(&usage, "30d"), Some(10.0));
     }
     #[test]
     fn empty_or_unrelated_bucket_is_a_failure_not_an_empty_success() {
@@ -577,7 +639,9 @@ for method in ['initialize','initialized','account/read','account/rateLimits/rea
             1000,
         )
         .unwrap();
-        assert_eq!(usage.weekly_pct, Some(10.0));
-        assert_eq!(usage.five_hour_pct, Some(0.0));
+        assert_eq!(window_pct(&usage, "7d"), Some(10.0));
+        assert_eq!(window_pct(&usage, "5h"), Some(0.0));
+        // Shortest window first regardless of which slot reported it.
+        assert_eq!(usage.windows[0].label, "5h");
     }
 }
