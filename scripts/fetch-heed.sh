@@ -5,12 +5,12 @@
 # picks it up (it ships as Codezilla.app/Contents/Resources/Heed.app). Run
 # before `tauri build`. Idempotent: re-running re-downloads and replaces.
 #
-#   HEED_VERSION=0.3.0 ./scripts/fetch-heed.sh            # host triple
+#   HEED_VERSION=0.3.1 ./scripts/fetch-heed.sh            # host triple
 #   TARGET=aarch64-apple-darwin ./scripts/fetch-heed.sh   # explicit triple (CI)
 #
 set -euo pipefail
 
-HEED_VERSION="${HEED_VERSION:-0.3.0}"
+HEED_VERSION="${HEED_VERSION:-0.3.1}"
 REPO="${HEED_REPO:-nibbletech-labs/heed}"
 # Override to a local `file://` directory to test the checksum path offline.
 BASE_URL="${HEED_BASE_URL:-https://github.com/${REPO}/releases/download/v${HEED_VERSION}}"

@@ -1,3 +1,11 @@
+## v0.4.9 — Heed and Usage Follow-Ups
+
+Small fixes from the 0.4.8 review, shipped together.
+
+- **Cleaner Heed updates** — leftover staging folders from an interrupted Heed update are tidied on the next launch, and a failed Heed install now says which binary it tried and why.
+- **Lighter Codex usage checks** — refreshing Codex usage no longer starts a second helper process each time.
+- **Old usage cache removed** — the cache file left behind by earlier versions is cleaned up automatically.
+
 ## v0.4.8 — Heed Installs as a Login Item
 
 Heed, the background activity tracker Codezilla relies on, is now installed as a proper macOS app, and the usage charts are more dependable.
