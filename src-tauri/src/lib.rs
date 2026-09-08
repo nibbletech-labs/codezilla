@@ -4,6 +4,7 @@ mod cutover;
 mod launchd;
 mod fs;
 mod git;
+mod haven;
 mod heed_client;
 mod pty;
 mod transcript;
@@ -633,6 +634,9 @@ pub fn run() {
             git::get_commit_info,
             git::get_commit_diff,
             git::diagnose_repo_health,
+            haven::haven_detect,
+            haven::haven_list_projects,
+            haven::haven_suggest_project_key,
             transcript::watch_transcript,
             transcript::unwatch_transcript,
             transcript::switch_transcript,

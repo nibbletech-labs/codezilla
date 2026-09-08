@@ -64,6 +64,8 @@ export interface Project {
   threadCounter: Record<ThreadType, number>;
   missing?: boolean;
   icon?: ProjectIcon;
+  /** Haven project key this repo is bound to. Per machine, by construction. */
+  havenProjectKey?: string;
 }
 
 export const THREAD_LABELS: Record<ThreadType, string> = {

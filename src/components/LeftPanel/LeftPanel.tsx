@@ -7,6 +7,7 @@ import { THREAD_NEW_LABELS } from "../../store/types";
 import ThreadItem from "./ThreadItem";
 import ThreadIcon from "./ThreadIcons";
 import JobItem from "./JobItem";
+import ProjectBacklogRow from "./BacklogRow";
 import ProjectIcon from "../ProjectIcon";
 import PresetIconButton from "../LaunchPresets/PresetIconButton";
 import { IconPicker } from "../IconPicker";
@@ -303,6 +304,7 @@ function SortableProjectItem({
   };
 
   const isActive = project.id === activeProjectId;
+  const backlogSelected = useAppStore((s) => s.activeBacklogProjectId === project.id);
 
   return (
     <div ref={setNodeRef} style={style} {...attributes} {...listeners}>
@@ -310,7 +312,7 @@ function SortableProjectItem({
         style={{
           ...styles.projectHeader,
           backgroundColor:
-            isActive && !activeThreadId
+            isActive && !activeThreadId && !backlogSelected
               ? "var(--accent-selection)"
               : hovered
                 ? "var(--bg-hover)"
@@ -353,6 +355,7 @@ function SortableProjectItem({
         </button>
       </div>
 
+      <ProjectBacklogRow project={project} />
       {betaFeatures.scheduledJobs && jobIds.length > 0 && (
         <ScheduledSection jobIds={jobIds} activeJobId={activeJobId} setActiveJob={setActiveJob} />
       )}

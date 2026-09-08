@@ -94,6 +94,7 @@ interface AppState {
   touchThread: (threadId: string) => void;
 
   setProjectIcon: (projectId: string, icon: ProjectIcon | undefined) => void;
+  setProjectHavenKey: (projectId: string, key: string | undefined) => void;
   markProjectMissing: (projectId: string, missing: boolean) => void;
 
   // File tree actions
@@ -134,6 +135,13 @@ interface AppState {
   setActiveJob: (jobId: string) => void;
   getProjectJobs: (projectId: string) => ScheduledJob[];
   loadScheduledJobs: (jobs: ScheduledJob[]) => void;
+
+  // Haven backlog
+  /** null until the first `haven --version` check comes back. */
+  havenInstalled: boolean | null;
+  setHavenInstalled: (installed: boolean) => void;
+  activeBacklogProjectId: string | null;
+  selectBacklog: (projectId: string) => void;
 
   // Launch presets
   launchPresets: LaunchPreset[];
@@ -201,6 +209,8 @@ export const useAppStore = create<AppState>((set, get) => ({
   presetsManagerOpen: false,
   scheduledJobs: [],
   activeJobId: null,
+  havenInstalled: null,
+  activeBacklogProjectId: null,
   launchPresets: [],
   usage: null,
   setUsage: (snapshot) => set({ usage: snapshot }),
@@ -393,7 +403,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     // Focus existing project if duplicate path
     const existing = state.projects.find((p) => p.path === path);
     if (existing) {
-      set({ activeProjectId: existing.id, activeThreadId: null });
+      set({ activeProjectId: existing.id, activeThreadId: null, activeBacklogProjectId: null });
       return;
     }
 
@@ -408,6 +418,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       projects: [...s.projects, project],
       activeProjectId: project.id,
       activeThreadId: null,
+      activeBacklogProjectId: null,
     }));
   },
 
@@ -466,13 +477,15 @@ export const useAppStore = create<AppState>((set, get) => ({
             : s.activeProjectId,
         activeThreadId: removedThreadActive ? null : s.activeThreadId,
         activeJobId: removedJobActive ? null : s.activeJobId,
+        activeBacklogProjectId:
+          s.activeBacklogProjectId === projectId ? null : s.activeBacklogProjectId,
         selectedEnvPath: s.activeProjectId === projectId ? null : s.selectedEnvPath,
       };
     });
   },
 
   setActiveProject: (projectId) => {
-    set({ activeProjectId: projectId, activeThreadId: null, activeJobId: null, selectedEnvPath: null });
+    set({ activeProjectId: projectId, activeThreadId: null, activeJobId: null, activeBacklogProjectId: null, selectedEnvPath: null });
   },
 
   toggleProjectExpanded: (projectId) => {
@@ -542,6 +555,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         threads: newThreads,
         activeThreadId: thread.id,
         activeJobId: null,
+        activeBacklogProjectId: null,
         activeProjectId: projectId,
         ...(s.activeProjectId !== projectId ? { selectedEnvPath: null } : {}),
         transcriptInfo: nextTranscriptInfo,
@@ -630,6 +644,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       set({
         activeThreadId: threadId,
         activeJobId: null,
+        activeBacklogProjectId: null,
         activeProjectId: thread.projectId,
         ...(nextEnv !== undefined ? { selectedEnvPath: nextEnv } : {}),
         ...transcriptPatch,
@@ -645,6 +660,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     set({
       activeThreadId: threadId,
       activeJobId: null,
+      activeBacklogProjectId: null,
       activeProjectId: thread.projectId,
       selectedEnvPath: null,
       ...transcriptPatch,
@@ -756,6 +772,14 @@ export const useAppStore = create<AppState>((set, get) => ({
     }));
   },
 
+  setProjectHavenKey: (projectId, key) => {
+    set((s) => ({
+      projects: s.projects.map((p) =>
+        p.id === projectId ? { ...p, havenProjectKey: key } : p,
+      ),
+    }));
+  },
+
   markProjectMissing: (projectId, missing) => {
     set((s) => ({
       projects: s.projects.map((p) =>
@@ -856,6 +880,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       scheduledJobs: [...s.scheduledJobs, job],
       activeJobId: id,
       activeThreadId: null,
+      activeBacklogProjectId: null,
       activeProjectId: projectId,
       ...(s.activeProjectId !== projectId ? { selectedEnvPath: null } : {}),
     }));
@@ -884,8 +909,24 @@ export const useAppStore = create<AppState>((set, get) => ({
     set({
       activeJobId: jobId,
       activeThreadId: null,
+      activeBacklogProjectId: null,
       activeProjectId: job.projectId,
       ...(job.projectId !== prevProjectId ? { selectedEnvPath: null } : {}),
+    });
+  },
+
+  setHavenInstalled: (installed) => set({ havenInstalled: installed }),
+
+  // Mirrors setActiveJob: own selector on, the other two off, project follows.
+  selectBacklog: (projectId) => {
+    if (!get().projects.some((p) => p.id === projectId)) return;
+    const prevProjectId = get().activeProjectId;
+    set({
+      activeBacklogProjectId: projectId,
+      activeThreadId: null,
+      activeJobId: null,
+      activeProjectId: projectId,
+      ...(projectId !== prevProjectId ? { selectedEnvPath: null } : {}),
     });
   },
 

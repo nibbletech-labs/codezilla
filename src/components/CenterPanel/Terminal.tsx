@@ -32,6 +32,7 @@ import ThreadIcon from "../LeftPanel/ThreadIcons";
 import ProjectIcon from "../ProjectIcon";
 import { IconPicker } from "../IconPicker";
 import { JobDetailPanel, JobCreationForm } from "../ScheduledJobs";
+import { BacklogWorkbench } from "../Backlog";
 import PresetsManager from "../LaunchPresets/PresetsManager";
 import BetaFeaturesManager from "../BetaFeaturesManager";
 import {
@@ -647,6 +648,7 @@ export default function TerminalMultiplexer() {
   const threads = useAppStore((s) => s.threads);
   const activeThreadId = useAppStore((s) => s.activeThreadId);
   const activeJobId = useAppStore((s) => s.activeJobId);
+  const activeBacklogProjectId = useAppStore((s) => s.activeBacklogProjectId);
   const activeProjectId = useAppStore((s) => s.activeProjectId);
   const projects = useAppStore((s) => s.projects);
   const addThread = useAppStore((s) => s.addThread);
@@ -950,7 +952,10 @@ export default function TerminalMultiplexer() {
       {betaFeatures.scheduledJobs && activeJobId && (
         <JobDetailPanel jobId={activeJobId} />
       )}
-      {!activeThreadId && !activeJobId && (
+      {activeBacklogProjectId && (
+        <BacklogWorkbench projectId={activeBacklogProjectId} />
+      )}
+      {!activeThreadId && !activeJobId && !activeBacklogProjectId && (
         <div
           style={{
             display: "flex",

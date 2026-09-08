@@ -21,6 +21,7 @@ scripts/*
 !scripts/fetch-heed.sh
 tests/*
 !tests/usage-activity.test.ts
+!tests/haven-binding.test.ts
 CLAUDE.md
 .claude/
 src-tauri/gen/schemas/
