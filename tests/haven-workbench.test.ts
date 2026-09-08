@@ -9,6 +9,7 @@ import {
   DONE_LABEL,
   NONE_TRACKED,
   PRIORITY_WORDS,
+  PULSE_MS,
   ageText,
   dayKey,
   dayLabel,
@@ -31,6 +32,7 @@ import {
   priorityWord,
   readStamp,
   searchCount,
+  shouldSpin,
   sideText,
   sortByPriority,
   statusColour,
@@ -191,7 +193,7 @@ test("epicShortName cuts at the first colon or em dash and caps at 26", () => {
   );
   assert.equal(epicShortName("Finish the v2 catalogue pipeline"), "Finish the v2 catalogue p…");
   assert.equal(epicShortName("Reference Catalogue"), "Reference Catalogue");
-  assert.equal(epicShortName(null), "ungrouped");
+  assert.equal(epicShortName(null), "Ungrouped");
 });
 
 test("hueOf is pinned per epic ref and pushed clear of the accent", () => {
@@ -506,4 +508,21 @@ test("the Done zone label says exactly what Haven knows", () => {
     DONE_LABEL,
     "Completed · touched in the last 14 days · by last touch — Haven records no completion time",
   );
+});
+
+test("the refresh pulse ends on the clock, not on an animation event", () => {
+  // A read in flight always spins it.
+  assert.equal(shouldSpin(true, null, 1_000), true);
+  assert.equal(shouldSpin(false, null, 1_000), false);
+  // A click spins it for exactly the length of the animation, so an instant
+  // read still shows that something happened.
+  assert.equal(shouldSpin(false, 1_000, 1_000), true);
+  assert.equal(shouldSpin(false, 1_000, 1_000 + PULSE_MS - 1), true);
+  assert.equal(shouldSpin(false, 1_000, 1_000 + PULSE_MS), false);
+  // Clicking while a read is already running is the case `animationend` never
+  // reports: the element is spinning already, so no animation restarts. The
+  // pulse still has to expire on its own.
+  assert.equal(shouldSpin(true, 1_000, 1_200), true);
+  assert.equal(shouldSpin(false, 1_000, 1_200), true);
+  assert.equal(shouldSpin(false, 1_000, 2_000), false);
 });

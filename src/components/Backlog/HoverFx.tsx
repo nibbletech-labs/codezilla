@@ -35,6 +35,14 @@ export default function HoverFx({
   const styleRef = useRef<HTMLStyleElement>(null);
   const [wires, setWires] = useState<Wire[]>([]);
 
+  // The view is read on hover, never rendered from, so it rides in a ref: a
+  // background read landing mid-hover would otherwise tear the listeners down
+  // and clear the highlight under the pointer.
+  const viewRef = useRef(view);
+  useEffect(() => {
+    viewRef.current = view;
+  }, [view]);
+
   useEffect(() => {
     const root = rootRef.current;
     const style = styleRef.current;
@@ -67,9 +75,10 @@ export default function HoverFx({
         return;
       }
 
+      const current = viewRef.current;
       const related = [
-        ...(view.dependsOn.get(ref) ?? []),
-        ...(view.requiredBy.get(ref) ?? []),
+        ...(current.dependsOn.get(ref) ?? []),
+        ...(current.requiredBy.get(ref) ?? []),
       ].filter((r) => SAFE.test(r));
       // Nothing related means nothing to draw, so nothing is dimmed either.
       if (related.length === 0) return clear();
@@ -110,7 +119,7 @@ export default function HoverFx({
       clear();
     };
     // Re-attaching on a tab or mode change is also what clears a stale rule.
-  }, [rootRef, mode, tab, view]);
+  }, [rootRef, mode, tab]);
 
   return (
     <>

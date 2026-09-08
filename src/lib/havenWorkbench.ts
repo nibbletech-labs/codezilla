@@ -24,9 +24,6 @@ export type WorkbenchTab = "flight" | "blocked" | "backlog" | "done" | "linked";
 export type BacklogZone = "ready" | "needsDef";
 export type BacklogOrder = "epic" | "priority";
 
-/** Statuses that mean "finished with" — the same set `havenGraph` buckets by. */
-const DEAD: ReadonlySet<string> = new Set(["done", "archived", "superseded"]);
-
 const HOUR_MS = 36e5;
 const DAY_MS = 864e5;
 
@@ -150,7 +147,7 @@ export function groupByEpic(list: HavenItem[]): EpicGroup[] {
       map.set(key, {
         key,
         root: i.root,
-        name: i.rt ? epicShortName(i.rt) : "Ungrouped",
+        name: epicShortName(i.rt),
         top: NO_PRIORITY,
         items: [i],
       });
@@ -167,7 +164,9 @@ export function groupByEpic(list: HavenItem[]): EpicGroup[] {
 
 /** The epic title cut at the first `:` or `—`, capped at 26 characters (§7). */
 export function epicShortName(title: string | null): string {
-  if (!title) return "ungrouped";
+  // A rootless item is `Ungrouped` wherever it appears — group head and tag
+  // alike — so the board never has two names for one bucket.
+  if (!title) return "Ungrouped";
   const s = String(title).split(/[:—]/)[0].trim();
   return s.length > 26 ? s.slice(0, 25).trim() + "…" : s;
 }
@@ -328,10 +327,6 @@ export function waitsOf(view: HavenView, ref: string): Waits {
     return { kind: "none" };
   }
   return { kind: "waiting", refs: unmet, external: item?.wait === "on_external" };
-}
-
-export function clearedBlockerFlag(view: HavenView, ref: string): boolean {
-  return waitsOf(view, ref).kind === "cleared";
 }
 
 /** How many unmet blockers a row's `waiting on N` reports; 0 hides it. */
@@ -557,6 +552,28 @@ export function readStamp(readAt: number | null, nowMs: number): string {
   return `read ${Math.floor(delta / HOUR_MS)}h ago`;
 }
 
+/** How long the ↻ pulse runs, matching the CSS animation's duration. */
+export const PULSE_MS = 600;
+
+/**
+ * Is the refresh button spinning? A read in flight spins it, and so does a
+ * click, for `PULSE_MS`, so an instant read still shows that something
+ * happened.
+ *
+ * The pulse is bounded by the clock rather than by `animationend`, which never
+ * arrives when the element is already spinning from a read — or when the
+ * animation is suppressed entirely — and would otherwise leave it spinning for
+ * good.
+ */
+export function shouldSpin(
+  reading: boolean,
+  pulseStartedAt: number | null,
+  nowMs: number,
+): boolean {
+  if (reading) return true;
+  return pulseStartedAt !== null && nowMs - pulseStartedAt < PULSE_MS;
+}
+
 /** The empty-tab lines, in each tab's own voice (§5). */
 export const EMPTY_LINES: Record<Exclude<WorkbenchTab, "linked">, string> = {
   flight: "Nothing in flight",
@@ -564,8 +581,3 @@ export const EMPTY_LINES: Record<Exclude<WorkbenchTab, "linked">, string> = {
   backlog: "Nothing in the backlog",
   done: "No completed work touched in the last 14 days",
 };
-
-/** Used by the flight board and the blocked zone to spot finished work. */
-export function isDead(status: string | null): boolean {
-  return DEAD.has(String(status));
-}

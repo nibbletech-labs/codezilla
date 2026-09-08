@@ -1,6 +1,6 @@
-//! Haven CLI client: detection, project listing, and the repo-local
-//! `_haven/items` binding suggestion. CZ-46 adds `haven_graph`, the store
-//! watcher and `haven_status_db_path` on top of `run_haven`.
+//! Haven CLI client: detection, project listing, the repo-local `_haven/items`
+//! binding suggestion, the graph read behind the workbench (`haven_graph`) and
+//! the store path the watcher in `watcher.rs` needs (`haven_status_db_path`).
 
 pub mod watcher;
 
@@ -28,9 +28,15 @@ fn haven_bin() -> OsString {
 async fn run_haven_bin(bin: &OsStr, args: &[&str]) -> Result<Output, String> {
     // augmented_path() blocks on a thread join (up to 5s on the first call,
     // while it sources the login shell) — keep it off the async workers.
-    let path = tokio::task::spawn_blocking(crate::cli_detect::augmented_path)
-        .await
-        .unwrap_or_default();
+    let path = match tokio::task::spawn_blocking(crate::cli_detect::augmented_path).await {
+        Ok(path) => path,
+        // An empty PATH would make every later lookup fail for a reason that
+        // has nothing to do with Haven; the inherited one is the honest fallback.
+        Err(e) => {
+            warn!("haven: PATH augmentation failed ({e}); using the inherited PATH");
+            std::env::var("PATH").unwrap_or_default()
+        }
+    };
     let mut cmd = tokio::process::Command::new(bin);
     cmd.args(args).env("PATH", path).kill_on_drop(true);
     tokio::time::timeout(HAVEN_TIMEOUT, cmd.output())
@@ -98,11 +104,15 @@ pub struct HavenProject {
     pub status: Option<String>,
 }
 
-/// Parse the project list, dropping entries with no key (nothing to bind to).
+/// Parse the project list, dropping entries with no usable key: a missing key
+/// and a blank one are both "nothing to bind to".
 fn parse_project_list(stdout: &str) -> Result<Vec<HavenProject>, String> {
     let parsed: Vec<HavenProject> =
         serde_json::from_str(stdout).map_err(|e| format!("Could not read haven project list: {e}"))?;
-    Ok(parsed.into_iter().filter(|p| p.key.is_some()).collect())
+    Ok(parsed
+        .into_iter()
+        .filter(|p| p.key.as_deref().is_some_and(|k| !k.is_empty()))
+        .collect())
 }
 
 async fn list_projects_with(bin: &OsStr) -> Result<Vec<HavenProject>, String> {
@@ -165,12 +175,17 @@ fn failure_text(what: &str, out: &Output) -> String {
 /// lost or added field must cost nothing.
 ///
 /// `ref` is the only field without an `Option`: a node with no ref has no
-/// identity and is dropped by `parse_graph` rather than rendered. The fields
-/// listed here are exactly what §2 promises and exactly what the workbench
-/// reads; `metadata`, `context_pack`, `rollup_state`, `owner_rollup`,
+/// identity and is dropped by `parse_graph` rather than rendered.
+///
+/// The struct is the IPC payload contract, not a mirror of Haven's row: it
+/// keeps exactly what the workbench reads, plus `revision` and `public_id`,
+/// which the writes CZ-48 adds will need. Everything else Haven stores —
+/// `body` (about a fifth of a full read on its own), `created_at`,
+/// `archived_at`, `metadata`, `context_pack`, `rollup_state`, `owner_rollup`,
 /// `has_uncommitted_descendants`, `sync_state`, `assignee`, the per-node
-/// `project` and the departing `sort_key` are deliberately absent, so they
-/// never cross IPC.
+/// `project` and the departing `sort_key` — is deliberately absent and never
+/// crosses IPC. `haven_node_carries_exactly_the_agreed_field_set_across_ipc`
+/// pins the set.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct HavenNode {
     #[serde(default)]
@@ -194,17 +209,11 @@ pub struct HavenNode {
     #[serde(default)]
     pub done_looks_like: Option<String>,
     #[serde(default)]
-    pub body: Option<String>,
-    #[serde(default)]
-    pub created_at: Option<String>,
-    #[serde(default)]
     pub updated_at: Option<String>,
     #[serde(default)]
     pub revision: Option<i64>,
     #[serde(default)]
     pub public_id: Option<String>,
-    #[serde(default)]
-    pub archived_at: Option<String>,
 }
 
 /// One edge. `kind` stays a string: a new Haven edge kind renders as itself.
@@ -246,6 +255,18 @@ fn parse_graph(stdout: &str) -> Result<HavenGraph, String> {
     graph
         .edges
         .retain(|e| e.from.is_some() && e.kind.is_some() && e.to.is_some());
+    if graph.truncated == Some(true) {
+        // `--full` lifts the caps, so this should never fire; if it ever does,
+        // the board is quietly incomplete and the log is the only place to say so.
+        let total = |n: Option<u64>| n.map_or_else(|| "?".to_string(), |n| n.to_string());
+        warn!(
+            "haven graph: the CLI reported a truncated read — {} of {} node(s), {} of {} edge(s); the board may be incomplete",
+            graph.nodes.len(),
+            total(graph.node_total),
+            graph.edges.len(),
+            total(graph.edge_total)
+        );
+    }
     let dropped = (nodes_in - graph.nodes.len()) + (edges_in - graph.edges.len());
     if dropped > 0 {
         warn!(
@@ -399,8 +420,9 @@ mod tests {
         assert_eq!(parsed.len(), 1);
         assert_eq!(parsed[0].ref_prefix, None);
 
-        // An element with no key is dropped rather than rendered as a blank row.
-        let keyless = r#"[{"title":"Nameless"},{"key":"ok"}]"#;
+        // An element with no key — or a blank one, which is just as unusable as
+        // a binding — is dropped rather than rendered as a blank row.
+        let keyless = r#"[{"title":"Nameless"},{"key":"","title":"Blank"},{"key":"ok"}]"#;
         let parsed = parse_project_list(keyless).unwrap();
         assert_eq!(parsed.len(), 1);
         assert_eq!(parsed[0].key.as_deref(), Some("ok"));
@@ -559,6 +581,49 @@ mod tests {
         // `sort_key` is not a field of HavenNode, so it cannot cross IPC.
         let round = serde_json::to_string(&g.nodes[0]).unwrap();
         assert!(!round.contains("sort_key"), "got: {round}");
+    }
+
+    #[test]
+    fn haven_node_carries_exactly_the_agreed_field_set_across_ipc() {
+        // The struct is the payload contract, not a mirror of Haven's row:
+        // `body` alone was about a fifth of a full read. Changing this set is a
+        // deliberate act — `revision` and `public_id` are here for the writes
+        // CZ-48 adds, everything else is what the workbench renders.
+        let sample = r#"{"nodes":[{
+          "ref":"RS-1","title":"t","type":"task","status":"ready","priority":2,
+          "committed":true,"owner_kind":"ai","wait_state":"on_human","why":"w",
+          "done_looks_like":"d","body":"a long markdown body","revision":7,
+          "created_at":"2026-08-01 09:00:00","updated_at":"2026-09-07 10:00:00",
+          "public_id":"pid","archived_at":"2026-09-08 11:00:00","sort_key":3,
+          "metadata":{"x":1},"assignee":"tom"
+        }],"edges":[]}"#;
+        let g = parse_graph(sample).unwrap();
+        let value = serde_json::to_value(&g.nodes[0]).unwrap();
+        let mut keys: Vec<&str> = value
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        keys.sort_unstable();
+        assert_eq!(
+            keys,
+            [
+                "committed",
+                "done_looks_like",
+                "owner_kind",
+                "priority",
+                "public_id",
+                "ref",
+                "revision",
+                "status",
+                "title",
+                "type",
+                "updated_at",
+                "wait_state",
+                "why",
+            ]
+        );
     }
 
     #[test]

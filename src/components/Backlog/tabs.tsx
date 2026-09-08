@@ -49,6 +49,7 @@ function Column({
   colour,
   note,
   list,
+  count,
   current,
   reason,
 }: {
@@ -56,6 +57,12 @@ function Column({
   colour: string;
   note: string;
   list: HavenItem[];
+  /**
+   * What the column holds, before the filter. The zone counts elsewhere (and
+   * the mockup) report the tab's contents, not the search result, so a column
+   * heading must not shrink while you type.
+   */
+  count: number;
   current: string | null;
   reason?: boolean;
 }) {
@@ -64,7 +71,7 @@ function Column({
       <div className="hz-colhead">
         <span className="hz-dot" style={{ background: colour }} />
         {label}
-        <span className="hz-n">{list.length}</span>
+        <span className="hz-n">{count}</span>
       </div>
       <div className="hz-colnote">{note}</div>
       <div className="hz-cards">
@@ -97,6 +104,7 @@ export function InFlightBoard({
           colour="var(--accent)"
           note="claimed and moving"
           list={filterList(view, lists.flight.moving, query)}
+          count={lists.flight.moving.length}
           current={current}
         />
         <Column
@@ -104,6 +112,7 @@ export function InFlightBoard({
           colour="var(--warn)"
           note="your review or decision"
           list={filterList(view, lists.flight.you, query)}
+          count={lists.flight.you.length}
           current={current}
           reason
         />
@@ -112,6 +121,7 @@ export function InFlightBoard({
           colour="var(--bad)"
           note="picked up, hit a wall"
           list={filterList(view, lists.flight.stuck, query)}
+          count={lists.flight.stuck.length}
           current={current}
           reason
         />

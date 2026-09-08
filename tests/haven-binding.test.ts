@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   backlogRowMode,
+  linkedKeysOf,
   orderProjectsForPicker,
   pickerLabel,
 } from "../src/lib/havenBinding.ts";
@@ -61,4 +62,22 @@ test("picker labels never render a missing title or prefix", () => {
   const bare = pickerLabel({ key: "retrostack", ref_prefix: null, title: null });
   assert.equal(bare, "retrostack");
   assert.ok(!bare.includes("null"));
+});
+
+test("linkedKeysOf dedupes, ignores unlinked projects and keeps first-seen order", () => {
+  assert.deepEqual(
+    linkedKeysOf([
+      { havenProjectKey: "retrostack" },
+      { havenProjectKey: undefined },
+      { havenProjectKey: "codezilla" },
+      // An empty key is not a binding, and the same key twice is one project's
+      // worth of reads, not two.
+      { havenProjectKey: "" },
+      { havenProjectKey: "retrostack" },
+      {},
+    ]),
+    ["retrostack", "codezilla"],
+  );
+  assert.deepEqual(linkedKeysOf([]), []);
+  assert.deepEqual(linkedKeysOf([{ havenProjectKey: undefined }]), []);
 });

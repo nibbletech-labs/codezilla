@@ -1,7 +1,6 @@
 import React from "react";
 import type { HavenItem } from "../../lib/havenTypes";
 import {
-  ageText,
   epicColour,
   epicShortName,
   isStale,
@@ -74,8 +73,6 @@ export function Waits({ item }: { item: HavenItem }) {
 export interface CardProps {
   item: HavenItem;
   selected: boolean;
-  /** The Done treatment: tick, dimmed title, no owner or meter. */
-  done?: boolean;
   /** Show the reason and the waiting-on chips (On you, Stuck, Blocked, Linked). */
   reason?: boolean;
 }
@@ -83,27 +80,35 @@ export interface CardProps {
 /**
  * Memoised: a jump changes `selected` on two nodes, and nothing else in the
  * board needs to re-render for it.
+ *
+ * There is no Done treatment here: Done is a list of rows, and the Linked-item
+ * view shows a completed item as a live card by ruling.
  */
-export const Card = React.memo(function Card({ item, selected, done, reason }: CardProps) {
+export const Card = React.memo(function Card({ item, selected, reason }: CardProps) {
   const { theme, accentHue, now, select } = useWorkbench();
   const colour = epicColour(item.root, theme, accentHue);
-  const stale = !done && isStale(item.upd, now);
+  const stale = isStale(item.upd, now);
+  const activate = () => select(item.ref);
   return (
     <div
-      className={`hz-card${done ? " hz-done" : ""}${selected ? " hz-sel" : ""}`}
+      className={`hz-card${selected ? " hz-sel" : ""}`}
+      role="button"
       tabIndex={0}
       data-ref={item.ref}
       data-root={item.root ?? ""}
       style={{ "--gc": colour } as React.CSSProperties}
-      onClick={() => select(item.ref)}
+      onClick={activate}
+      onKeyDown={(e) => {
+        if (e.key !== "Enter" && e.key !== " ") return;
+        // Space would scroll the board out from under the card otherwise.
+        e.preventDefault();
+        activate();
+      }}
     >
       <div className="hz-ctop">
-        <span className="hz-cref">
-          {item.ref}
-          {done && <span className="hz-tick"> ✓</span>}
-        </span>
-        {!done && <PriorityMeter priority={item.priority} />}
-        {!done && <OwnerTag item={item} />}
+        <span className="hz-cref">{item.ref}</span>
+        <PriorityMeter priority={item.priority} />
+        <OwnerTag item={item} />
       </div>
       <div className="hz-ct">{item.title}</div>
       {reason && item.why && <div className="hz-why">{item.why}</div>}
@@ -114,7 +119,7 @@ export const Card = React.memo(function Card({ item, selected, done, reason }: C
           {epicShortName(item.rt)}
         </span>
         <span className={stale ? "hz-age hz-stale" : "hz-age"}>
-          {done ? ageText(item.upd, now) : untouchedText(item.upd, now)}
+          {untouchedText(item.upd, now)}
         </span>
       </div>
     </div>

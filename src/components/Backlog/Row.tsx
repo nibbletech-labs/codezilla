@@ -23,14 +23,22 @@ export const Row = React.memo(function Row({ item, selected, done, tag }: RowPro
   const { view, theme, accentHue, now, select } = useWorkbench();
   const colour = epicColour(item.root, theme, accentHue);
   const unmet = done ? 0 : unmetCount(view, item.ref);
+  const activate = () => select(item.ref);
   return (
     <div
       className={`hz-row${done ? " hz-done" : ""}${selected ? " hz-sel" : ""}`}
+      role="button"
       tabIndex={0}
       data-ref={item.ref}
       data-root={item.root ?? ""}
       style={{ "--gc": colour } as React.CSSProperties}
-      onClick={() => select(item.ref)}
+      onClick={activate}
+      onKeyDown={(e) => {
+        if (e.key !== "Enter" && e.key !== " ") return;
+        // Space would scroll the list out from under the row otherwise.
+        e.preventDefault();
+        activate();
+      }}
     >
       <span className="hz-rref">{item.ref}</span>
       <span className="hz-rt">{item.title}</span>

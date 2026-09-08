@@ -110,6 +110,24 @@ impl StoreWatcher {
 /// so "a linked project is open" (§10.5) reduces to watching or not.
 pub type HavenWatcherState = Mutex<Option<(PathBuf, StoreWatcher)>>;
 
+/// The whole of `haven_watch_store` bar the Tauri plumbing, so the idempotence
+/// and the reseat-on-a-new-path rule are testable without an `AppHandle`.
+pub fn watch_store_inner(
+    state: &Mutex<Option<(PathBuf, StoreWatcher)>>,
+    db_path: PathBuf,
+    on_change: impl Fn() + Send + Clone + 'static,
+) -> Result<(), String> {
+    let mut guard = state.lock().map_err(|e| format!("Lock error: {e}"))?;
+    if guard.as_ref().is_some_and(|(watched, _)| watched == &db_path) {
+        return Ok(()); // already watching exactly this store
+    }
+    // Drop any previous watcher first so a relocated store never leaves two.
+    *guard = None;
+    let watcher = StoreWatcher::start(&db_path, on_change)?;
+    *guard = Some((db_path, watcher));
+    Ok(())
+}
+
 /// Start watching the Haven store, idempotently. Called by the frontend once
 /// `haven status` has reported the path, *before* the first graph read.
 #[tauri::command]
@@ -118,21 +136,12 @@ pub fn haven_watch_store(
     app_handle: AppHandle,
     state: State<'_, HavenWatcherState>,
 ) -> Result<(), String> {
-    let path = PathBuf::from(db_path);
-    let mut guard = state.lock().map_err(|e| format!("Lock error: {e}"))?;
-    if guard.as_ref().is_some_and(|(watched, _)| watched == &path) {
-        return Ok(()); // already watching exactly this store
-    }
-    // Drop any previous watcher first so a relocated store never leaves two.
-    *guard = None;
     let app = app_handle.clone();
-    let watcher = StoreWatcher::start(&path, move || {
+    watch_store_inner(state.inner(), PathBuf::from(db_path), move || {
         if let Err(e) = app.emit("haven-graph-changed", ()) {
             warn!("haven watcher: emit failed: {e}");
         }
-    })?;
-    *guard = Some((path, watcher));
-    Ok(())
+    })
 }
 
 #[cfg(test)]
@@ -217,5 +226,61 @@ mod tests {
         // Dropping the watcher disconnects the channel and ends the thread.
         drop(watcher);
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn watch_store_inner_is_idempotent_and_reseats_on_a_new_path() {
+        // Distinct callbacks per call are what makes "idempotent" observable:
+        // if the second registration started a second watcher, its own sender
+        // would fire too.
+        let state: HavenWatcherState = Mutex::new(None);
+        let dir = unique_tmp_dir("watch-cmd");
+        let db = dir.join("haven.db");
+        let (tx1, rx1) = mpsc::channel::<()>();
+        let (tx2, rx2) = mpsc::channel::<()>();
+
+        watch_store_inner(&state, db.clone(), move || {
+            let _ = tx1.send(());
+        })
+        .unwrap();
+        // The same store again: a no-op, not a second watcher.
+        watch_store_inner(&state, db.clone(), move || {
+            let _ = tx2.send(());
+        })
+        .unwrap();
+
+        std::fs::write(dir.join("haven.db-wal"), b"x").unwrap();
+        rx1.recv_timeout(Duration::from_secs(5))
+            .expect("the first watch must still report WAL writes");
+        assert!(
+            rx2.recv_timeout(Duration::from_millis(400)).is_err(),
+            "the second call must not have started a watcher of its own"
+        );
+
+        // Settle and drain past the coalesce window and any FSEvents straggler.
+        std::thread::sleep(Duration::from_millis(300));
+        while rx1.try_recv().is_ok() {}
+
+        // A relocated store: the old watch goes, the new one takes over.
+        let dir2 = unique_tmp_dir("watch-cmd-moved");
+        let db2 = dir2.join("haven.db");
+        let (tx3, rx3) = mpsc::channel::<()>();
+        watch_store_inner(&state, db2.clone(), move || {
+            let _ = tx3.send(());
+        })
+        .unwrap();
+
+        std::fs::write(dir.join("haven.db-wal"), b"y").unwrap();
+        assert!(
+            rx1.recv_timeout(Duration::from_millis(400)).is_err(),
+            "writes to the old store must no longer wake the workbench"
+        );
+        std::fs::write(dir2.join("haven.db-wal"), b"z").unwrap();
+        rx3.recv_timeout(Duration::from_secs(5))
+            .expect("writes to the new store must report");
+
+        drop(state);
+        std::fs::remove_dir_all(dir).unwrap();
+        std::fs::remove_dir_all(dir2).unwrap();
     }
 }

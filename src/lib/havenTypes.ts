@@ -4,7 +4,12 @@
  * its node tests can use them without pulling the webview API into the test.
  */
 
-/** One node of `haven graph --full --all`. Mirrors the Rust `HavenNode`. */
+/**
+ * One node of `haven graph --full --all`. Mirrors the Rust `HavenNode`, which
+ * carries exactly what the workbench reads plus `revision` and `public_id` for
+ * CZ-48's writes — `body`, `created_at` and `archived_at` are deliberately not
+ * part of the payload.
+ */
 export interface HavenNode {
   ref: string;
   title: string | null;
@@ -16,12 +21,9 @@ export interface HavenNode {
   wait_state: string | null;
   why: string | null;
   done_looks_like: string | null;
-  body: string | null;
-  created_at: string | null;
   updated_at: string | null;
   revision: number | null;
   public_id: string | null;
-  archived_at: string | null;
 }
 
 export interface HavenEdge {
@@ -56,6 +58,7 @@ export interface HavenNodeLike {
   done_looks_like?: string | null;
   updated_at?: string | null;
   revision?: number | null;
+  public_id?: string | null;
 }
 
 export interface HavenEdgeLike {

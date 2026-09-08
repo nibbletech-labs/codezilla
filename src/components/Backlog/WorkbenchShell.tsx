@@ -50,6 +50,8 @@ export default function WorkbenchShell({
   result,
   onRefresh,
   errorLine,
+  hoverMode,
+  onHoverMode,
 }: {
   name: string;
   projectKey: string;
@@ -57,6 +59,8 @@ export default function WorkbenchShell({
   onRefresh: () => void;
   /** A failed re-read keeps the last good board; this line says so. */
   errorLine?: React.ReactNode;
+  hoverMode: "tag" | "wire";
+  onHoverMode: (mode: "tag" | "wire") => void;
 }) {
   const theme = useResolvedAppearance();
   const accentColorId = useAppStore((s) => s.accentColorId);
@@ -88,7 +92,6 @@ export default function WorkbenchShell({
   const [nav, dispatch] = useReducer(reduce, undefined, initialNav);
 
   const [order, setOrder] = useState<BacklogOrder>("epic");
-  const [hoverMode, setHoverMode] = useState<"tag" | "wire">("tag");
   const [dw, setDw] = useState(DEFAULT_DRAWER_WIDTH);
 
   // Age chips and day labels are relative; nothing else moves on the tick, and
@@ -152,8 +155,9 @@ export default function WorkbenchShell({
           onQuery={(query) => dispatch({ type: "setQuery", query })}
           hits={counted.hits}
           total={counted.total}
+          tab={nav.tab}
           hoverMode={hoverMode}
-          onHoverMode={setHoverMode}
+          onHoverMode={onHoverMode}
           onRefresh={onRefresh}
           reading={result.entry.reading}
           readAt={result.entry.readAt ?? null}

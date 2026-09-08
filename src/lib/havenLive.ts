@@ -78,9 +78,19 @@ export class RefreshScheduler {
     this.armQuiet();
   }
 
-  /** Swap timings when the project becomes visible or hidden. */
+  /**
+   * Swap timings when the project becomes visible or hidden. Compared field by
+   * field, so a structurally equal timing is a no-op however it was constructed
+   * and a different one always takes effect.
+   */
   setTiming(timing: Timing): void {
-    if (this.timing === timing || this.disposed) return;
+    if (this.disposed) return;
+    if (
+      this.timing.quietMs === timing.quietMs &&
+      this.timing.ceilingMs === timing.ceilingMs
+    ) {
+      return;
+    }
     this.timing = timing;
     // Re-arm both deadlines against the burst that is already running, so
     // becoming visible mid-burst pulls the ceiling in rather than pushing it out.
@@ -166,6 +176,13 @@ interface KeyState {
 export class GraphReadCoordinator<G> {
   private readonly keys = new Map<string, KeyState>();
   private readonly ports: CoordinatorPorts<G>;
+  /**
+   * One counter for the whole coordinator, never per key. A per-key counter
+   * restarts at 1 after `drop`, so a read issued before an unlink would carry
+   * the same token as the one issued after the relink and could be applied over
+   * it (§10.3). Monotonic here means a token is issued once, ever.
+   */
+  private nextToken = 0;
 
   constructor(ports: CoordinatorPorts<G>) {
     this.ports = ports;
@@ -173,7 +190,8 @@ export class GraphReadCoordinator<G> {
 
   request(key: string): void {
     const state = this.keys.get(key) ?? { latest: 0, inFlight: null };
-    state.latest += 1;
+    this.nextToken += 1;
+    state.latest = this.nextToken;
     this.keys.set(key, state);
     // One read at a time per key: a second request while one is running is
     // issued when that one settles, so a burst costs at most one wasted read.
@@ -197,7 +215,12 @@ export class GraphReadCoordinator<G> {
 
   private settle(key: string, token: number, result: GraphReadResult<G>): void {
     const state = this.keys.get(key);
-    if (!state || state.inFlight !== token) return; // unlinked, or already replaced
+    if (!state || state.inFlight !== token) {
+      // Unlinked, or already replaced. Nothing is applied — but if this was the
+      // last read anyone was waiting on, the spinner has to come down with it.
+      if (!state || state.inFlight === null) this.ports.onReading?.(key, false);
+      return;
+    }
     state.inFlight = null;
     if (token === state.latest) {
       this.ports.onReading?.(key, false);
@@ -253,15 +276,16 @@ export class HavenLiveController<G> {
 
   async start(): Promise<void> {
     if (this.started || this.disposed) return;
-    this.unlisten = await this.ports.listen(() => this.onStoreChanged());
-    if (this.disposed) {
-      this.unlisten();
-      this.unlisten = null;
-      return;
-    }
-    // Best-effort: with no watcher the view simply degrades to refresh-on-show
-    // (§10 degradation), so a failure here must not cost us the initial read.
+    // Best-effort, all three of them: with no subscription and no watcher the
+    // view simply degrades to refresh-on-show (§10 degradation), so a failure
+    // anywhere in here must not cost us the initial read.
     try {
+      this.unlisten = await this.ports.listen(() => this.onStoreChanged());
+      if (this.disposed) {
+        this.unlisten();
+        this.unlisten = null;
+        return;
+      }
       const dbPath = await this.ports.statusDbPath();
       await this.ports.watchStore(dbPath);
     } catch (e) {
@@ -304,7 +328,9 @@ export class HavenLiveController<G> {
     if (this.disposed || key === this.visibleKey) return;
     this.visibleKey = key;
     for (const [k, scheduler] of this.schedulers) scheduler.setTiming(this.timingFor(k));
-    if (key !== null) this.schedulers.get(key)?.flush();
+    // Never before `start()`: §10.1 puts the watcher registration ahead of the
+    // first read, and `start()` reads every linked key anyway.
+    if (this.started && key !== null) this.schedulers.get(key)?.flush();
   }
 
   /** The ↻ button. */

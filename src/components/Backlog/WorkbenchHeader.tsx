@@ -1,5 +1,6 @@
-import { useEffect, useState } from "react";
-import { readStamp } from "../../lib/havenWorkbench";
+import { useEffect, useRef, useState } from "react";
+import { PULSE_MS, readStamp, shouldSpin } from "../../lib/havenWorkbench";
+import type { WorkbenchTab } from "../../lib/havenWorkbench";
 
 /**
  * `read 12s ago`. Ticks on its own ten-second timer so the rest of the workbench
@@ -23,6 +24,8 @@ export interface WorkbenchHeaderProps {
   onQuery: (query: string) => void;
   hits: number;
   total: number;
+  /** The tab the count describes; the one-card Linked view has nothing to count. */
+  tab?: WorkbenchTab;
   hoverMode: "tag" | "wire";
   onHoverMode: (mode: "tag" | "wire") => void;
   onRefresh: () => void;
@@ -37,15 +40,36 @@ export default function WorkbenchHeader({
   onQuery,
   hits,
   total,
+  tab,
   hoverMode,
   onHoverMode,
   onRefresh,
   reading,
   readAt,
 }: WorkbenchHeaderProps) {
-  // A short spin on click even when the read comes back instantly.
-  const [pulse, setPulse] = useState(false);
-  const spinning = reading || pulse;
+  // A short spin on click even when the read comes back instantly. The clock
+  // ends it, not `animationend`: clicking while a read is already spinning the
+  // button restarts no animation, so that event would never arrive and the
+  // button would spin for good.
+  const [pulseStartedAt, setPulseStartedAt] = useState<number | null>(null);
+  const pulseTimer = useRef<number | null>(null);
+  const endPulse = () => {
+    if (pulseTimer.current !== null) {
+      window.clearTimeout(pulseTimer.current);
+      pulseTimer.current = null;
+    }
+    setPulseStartedAt(null);
+  };
+  useEffect(
+    () => () => {
+      if (pulseTimer.current !== null) window.clearTimeout(pulseTimer.current);
+    },
+    [],
+  );
+  const spinning = shouldSpin(reading, pulseStartedAt, Date.now());
+
+  // A whitespace-only query filters nothing, so it neither counts nor clears.
+  const trimmed = query.trim();
   return (
     <div className="hz-head">
       <span className="hz-h1">
@@ -61,8 +85,10 @@ export default function WorkbenchHeader({
           placeholder="Filter this tab"
           onChange={(e) => onQuery(e.target.value)}
         />
-        <span className="hz-qn">{query.trim() ? `${hits} of ${total}` : ""}</span>
-        {query !== "" && (
+        <span className="hz-qn">
+          {trimmed !== "" && tab !== "linked" ? `${hits} of ${total}` : ""}
+        </span>
+        {trimmed !== "" && (
           <button className="hz-qx" title="Clear filter" onClick={() => onQuery("")}>
             ✕
           </button>
@@ -89,10 +115,15 @@ export default function WorkbenchHeader({
         className={spinning ? "hz-refresh hz-spin" : "hz-refresh"}
         title="Read from Haven"
         onClick={() => {
-          setPulse(true);
+          if (pulseTimer.current !== null) window.clearTimeout(pulseTimer.current);
+          setPulseStartedAt(Date.now());
+          pulseTimer.current = window.setTimeout(() => {
+            pulseTimer.current = null;
+            setPulseStartedAt(null);
+          }, PULSE_MS);
           onRefresh();
         }}
-        onAnimationEnd={() => setPulse(false)}
+        onAnimationEnd={endPulse}
       >
         ↻
       </button>

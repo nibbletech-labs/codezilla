@@ -44,3 +44,20 @@ export function pickerLabel(project: {
   const name = project.title || project.key;
   return project.ref_prefix ? `${name} · ${project.ref_prefix}` : name;
 }
+
+/**
+ * Every distinct Haven key the open projects are bound to, in the order the
+ * projects first mention them. A missing or empty key is not a binding, and two
+ * projects sharing a key are one read, not two (§10.4).
+ */
+export function linkedKeysOf(projects: { havenProjectKey?: string }[]): string[] {
+  const keys: string[] = [];
+  const seen = new Set<string>();
+  for (const p of projects) {
+    const key = p.havenProjectKey;
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    keys.push(key);
+  }
+  return keys;
+}

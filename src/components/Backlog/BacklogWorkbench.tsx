@@ -1,8 +1,10 @@
 import { useState } from "react";
 import { useAppStore } from "../../store/appStore";
-import { HavenLinkPicker } from "../LeftPanel/BacklogRow";
+import HavenLinkPicker from "./HavenLinkPicker";
 import { useHavenView } from "../../hooks/useHavenView";
 import { refreshHavenGraph } from "../../hooks/useHavenLive";
+import WorkbenchHeader from "./WorkbenchHeader";
+import { WORKBENCH_CSS } from "./workbenchStyles";
 import WorkbenchShell from "./WorkbenchShell";
 
 /**
@@ -14,6 +16,8 @@ export default function BacklogWorkbench({ projectId }: { projectId: string }) {
   const havenInstalled = useAppStore((s) => s.havenInstalled);
   const result = useHavenView(project?.havenProjectKey);
   const [pickerAnchor, setPickerAnchor] = useState<{ x: number; y: number } | null>(null);
+  // Owned here so the header is the real one in both of the states that draw it.
+  const [hoverMode, setHoverMode] = useState<"tag" | "wire">("tag");
 
   if (!project) return null;
 
@@ -92,17 +96,25 @@ export default function BacklogWorkbench({ projectId }: { projectId: string }) {
   ) : null;
 
   if (!result?.view || !result.buckets) {
-    // Linked, but the first read has not landed yet.
+    // Linked, but the first read has not landed yet. The same header as the
+    // board, so it says `never read` and spins while the read runs rather than
+    // being a second, slightly different one.
     return (
-      <div style={styles.container}>
-        <div style={styles.head}>
-          <span style={styles.h1}>
-            Backlog
-            <span style={styles.key}>
-              {project.name} · {project.havenProjectKey}
-            </span>
-          </span>
-        </div>
+      <div className="hz-root" style={styles.container}>
+        <style>{WORKBENCH_CSS}</style>
+        <WorkbenchHeader
+          name={project.name}
+          prefix={project.havenProjectKey}
+          query=""
+          onQuery={() => {}}
+          hits={0}
+          total={0}
+          hoverMode={hoverMode}
+          onHoverMode={setHoverMode}
+          onRefresh={retry}
+          reading={result?.entry.reading ?? false}
+          readAt={result?.entry.readAt ?? null}
+        />
         {errorLine}
         <div style={styles.body} />
       </div>
@@ -116,6 +128,8 @@ export default function BacklogWorkbench({ projectId }: { projectId: string }) {
       result={result}
       onRefresh={retry}
       errorLine={errorLine}
+      hoverMode={hoverMode}
+      onHoverMode={setHoverMode}
     />
   );
 }
@@ -129,24 +143,6 @@ const styles = {
     display: "flex",
     flexDirection: "column" as const,
     overflow: "hidden",
-  } as React.CSSProperties,
-  head: {
-    display: "flex",
-    alignItems: "center",
-    gap: "12px",
-    padding: "11px 16px 0",
-    flex: "0 0 auto",
-  } as React.CSSProperties,
-  h1: {
-    fontSize: "calc(var(--font-size) + 1px)",
-    fontWeight: 600,
-    color: "var(--text-heading)",
-  } as React.CSSProperties,
-  key: {
-    color: "var(--text-secondary)",
-    fontWeight: 400,
-    marginLeft: "7px",
-    fontSize: "var(--font-size-sm)",
   } as React.CSSProperties,
   body: {
     flex: 1,

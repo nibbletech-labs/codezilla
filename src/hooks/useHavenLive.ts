@@ -3,6 +3,7 @@ import { listen } from "@tauri-apps/api/event";
 import { useAppStore } from "../store/appStore";
 import { havenGraph, havenStatusDbPath, havenWatchStore } from "../lib/haven";
 import type { HavenGraph } from "../lib/havenTypes";
+import { linkedKeysOf } from "../lib/havenBinding";
 import { HavenLiveController } from "../lib/havenLive";
 
 /**
@@ -16,13 +17,6 @@ let controllerHandle: HavenLiveController<HavenGraph> | null = null;
 /** Refresh one Haven project now. A no-op when nothing is live. */
 export function refreshHavenGraph(key: string): void {
   controllerHandle?.refresh(key);
-}
-
-/** Every distinct Haven key the open projects are bound to. */
-function linkedKeysOf(projects: { havenProjectKey?: string }[]): string[] {
-  const keys = new Set<string>();
-  for (const p of projects) if (p.havenProjectKey) keys.add(p.havenProjectKey);
-  return [...keys].sort();
 }
 
 /**
@@ -63,15 +57,24 @@ export function useHavenLive() {
       return project?.havenProjectKey ?? null;
     };
 
-    let lastKeys = "";
+    let lastKeys: string[] = [];
+    let lastJoined = "";
     let lastVisible: string | null = null;
     const sync = () => {
       const state = store();
       const keys = linkedKeysOf(state.projects);
       const joined = keys.join(" ");
-      if (joined !== lastKeys) {
-        lastKeys = joined;
+      if (joined !== lastJoined) {
+        const unlinked = lastKeys.filter((key) => !keys.includes(key));
+        // Recorded before the calls below: dropping an entry re-enters `sync`
+        // through the store subscription, and it must find nothing left to do.
+        lastKeys = keys;
+        lastJoined = joined;
+        // `setLinkedKeys` disposes the scheduler and discards anything in
+        // flight; the store has to forget the key too, or relinking shows the
+        // old entry's stale `reading: true` until the next read lands.
         controller.setLinkedKeys(keys);
+        for (const key of unlinked) store().dropHavenGraph(key);
       }
       const visible = visibleKeyOf(state);
       if (visible !== lastVisible) {

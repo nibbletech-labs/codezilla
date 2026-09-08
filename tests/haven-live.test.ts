@@ -184,6 +184,31 @@ test("becoming visible mid-burst re-arms the ceiling from the burst start", () =
   s.dispose();
 });
 
+test("setTiming compares timings by field, not by identity", () => {
+  const c = fakeClock();
+  const fires: number[] = [];
+  const s = new RefreshScheduler(() => fires.push(c.nowMs()), c.clock, HIDDEN_TIMING);
+  s.notifyChange();
+  c.advance(100);
+  // A structurally equal copy is still the visible timing: the quiet period has
+  // to drop from 2 s to 500 ms even though the object is a different one.
+  s.setTiming({ ...VISIBLE_TIMING });
+  c.advance(400);
+  assert.deepEqual(fires, [500]);
+  s.dispose();
+
+  // And a copy of the timing already in force is a no-op, not a re-arm.
+  const c2 = fakeClock();
+  const fires2: number[] = [];
+  const s2 = new RefreshScheduler(() => fires2.push(c2.nowMs()), c2.clock, VISIBLE_TIMING);
+  s2.notifyChange();
+  c2.advance(400);
+  s2.setTiming({ ...VISIBLE_TIMING });
+  c2.advance(100);
+  assert.deepEqual(fires2, [500]);
+  s2.dispose();
+});
+
 test("flush fires immediately and dispose clears everything", () => {
   const c = fakeClock();
   const fires: number[] = [];
@@ -256,6 +281,38 @@ test("a response for a project unlinked while in flight is discarded", async () 
   await flush();
   assert.deepEqual(applied, []);
   assert.equal(reads.length, 1);
+});
+
+test("a response issued before a drop cannot beat the read issued after it", async () => {
+  // Tokens are monotonic across the coordinator, not per key: an unlink and a
+  // relink must not reset the counter and let the pre-drop read look current.
+  const reads: Array<ReturnType<typeof deferred<string>>> = [];
+  const applied: Array<[string, unknown]> = [];
+  const reading: Array<[string, boolean]> = [];
+  const co = new GraphReadCoordinator<string>({
+    read: () => {
+      const d = deferred<string>();
+      reads.push(d);
+      return d.promise;
+    },
+    onResult: (key, r) => applied.push([key, r]),
+    onReading: (key, busy) => reading.push([key, busy]),
+  });
+
+  co.request("A");
+  co.drop("A");
+  co.request("A");
+  assert.equal(reads.length, 2);
+
+  reads[0].resolve("stale");
+  await flush();
+  assert.deepEqual(applied, []);
+
+  reads[1].resolve("fresh");
+  await flush();
+  assert.deepEqual(applied, [["A", { graph: "fresh" }]]);
+  // The spinner ends: the discarded settle must not leave `reading` stuck on.
+  assert.deepEqual(reading[reading.length - 1], ["A", false]);
 });
 
 test("results for different keys never cross", async () => {
@@ -455,4 +512,42 @@ test("selecting a project refreshes it immediately; linking and unlinking add an
   await flush();
   assert.deepEqual(h.calls, []);
   assert.equal(h.clock.pending(), 0);
+});
+
+test("a failed listen still leaves the initial read", async () => {
+  // §10 degradation is uniform: losing the change signal costs the live
+  // refresh, never the first read.
+  const h = controllerHarness();
+  const ports = {
+    ...h.ports,
+    listen: async () => {
+      h.calls.push("listen");
+      throw "no such event";
+    },
+  };
+  const ctrl = new HavenLiveController(ports, h.clock.clock);
+  ctrl.setLinkedKeys(["retrostack"]);
+  await ctrl.start();
+  await flush();
+  assert.deepEqual(h.calls, ["listen", "read:retrostack"]);
+  assert.deepEqual(h.applied, [["retrostack", { graph: "graph-retrostack" }]]);
+  ctrl.dispose();
+});
+
+test("showing a project before start does not read ahead of the watcher", async () => {
+  const h = controllerHarness();
+  const ctrl = new HavenLiveController(h.ports, h.clock.clock);
+  ctrl.setLinkedKeys(["retrostack"]);
+  ctrl.setVisibleKey("retrostack");
+  await flush();
+  assert.deepEqual(h.calls, []); // §10.1: nothing before listen and watch
+  await ctrl.start();
+  await flush();
+  assert.deepEqual(h.calls, [
+    "listen",
+    "statusDbPath",
+    "watchStore:/Users/tom/.haven/haven.db",
+    "read:retrostack",
+  ]);
+  ctrl.dispose();
 });
