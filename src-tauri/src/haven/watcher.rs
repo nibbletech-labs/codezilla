@@ -121,9 +121,17 @@ pub fn watch_store_inner(
     if guard.as_ref().is_some_and(|(watched, _)| watched == &db_path) {
         return Ok(()); // already watching exactly this store
     }
-    // Drop any previous watcher first so a relocated store never leaves two.
-    *guard = None;
+    // Start the new watcher *before* dropping the old one. If the new path
+    // cannot be watched the `?` returns with the existing watch untouched,
+    // rather than leaving the state `None` and the store unwatched.
+    //
+    // "Never two live watchers on different dirs" survives this: the two
+    // overlap only between `start` returning and the assignment below, which is
+    // a few instructions under the lock nobody else can take — no observer sees
+    // the overlap, and no caller can register a third. A brief overlap is the
+    // cheaper trade against a window with no watch at all.
     let watcher = StoreWatcher::start(&db_path, on_change)?;
+    // Assignment drops the previous `(path, watcher)` pair, ending the old watch.
     *guard = Some((db_path, watcher));
     Ok(())
 }
@@ -278,6 +286,29 @@ mod tests {
         std::fs::write(dir2.join("haven.db-wal"), b"z").unwrap();
         rx3.recv_timeout(Duration::from_secs(5))
             .expect("writes to the new store must report");
+
+        // Settle and drain again before the failure case below.
+        std::thread::sleep(Duration::from_millis(300));
+        while rx3.try_recv().is_ok() {}
+
+        // A store we cannot watch must not cost us the watch we already have:
+        // start-then-swap keeps the existing watcher when the new one fails.
+        let missing = std::env::temp_dir()
+            .join(format!("cz-haven-missing-{}", uuid::Uuid::new_v4()))
+            .join("haven.db");
+        let (tx4, rx4) = mpsc::channel::<()>();
+        let err = watch_store_inner(&state, missing, move || {
+            let _ = tx4.send(());
+        })
+        .expect_err("a store whose parent does not exist cannot be watched");
+        assert!(err.contains("Failed to watch"), "unexpected error: {err}");
+        std::fs::write(dir2.join("haven.db-wal"), b"w").unwrap();
+        rx3.recv_timeout(Duration::from_secs(5))
+            .expect("a failed reseat must leave the working watch in place");
+        assert!(
+            rx4.recv_timeout(Duration::from_millis(400)).is_err(),
+            "the failed call must not have left a watcher of its own"
+        );
 
         drop(state);
         std::fs::remove_dir_all(dir).unwrap();

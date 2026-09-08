@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 const MIN_DRAWER = 240;
 const MIN_MAIN = 260;
@@ -25,6 +25,15 @@ export default function Splitter({
 }) {
   const [dragging, setDragging] = useState(false);
 
+  // `onWidth` is read through a ref refreshed after every render, so the drag
+  // effect below does not depend on it: a caller passing a fresh closure each
+  // render would otherwise re-run the effect mid-gesture, tearing down the
+  // overlay and both listeners in the middle of a drag.
+  const onWidthRef = useRef(onWidth);
+  useEffect(() => {
+    onWidthRef.current = onWidth;
+  });
+
   useEffect(() => {
     if (!dragging) return;
     const root = rootRef.current;
@@ -48,7 +57,7 @@ export default function Splitter({
     };
     const onMouseUp = () => {
       setDragging(false);
-      if (width > 0) onWidth(width);
+      if (width > 0) onWidthRef.current(width);
     };
     window.addEventListener("mousemove", onMouseMove);
     window.addEventListener("mouseup", onMouseUp);
@@ -59,7 +68,7 @@ export default function Splitter({
       overlay.remove();
       document.body.style.cursor = "";
     };
-  }, [dragging, rootRef, onWidth]);
+  }, [dragging, rootRef]);
 
   return (
     <div

@@ -24,7 +24,11 @@ export const WORKBENCH_CSS = `
 .hz-qx:hover { color: var(--text-primary); }
 .hz-refresh { background: none; border: none; color: var(--text-secondary); cursor: pointer; font-size: 13px; padding: 2px 4px; }
 .hz-refresh:hover { color: var(--text-primary); }
-.hz-refresh.hz-spin { animation: hz-sp .6s linear; }
+/* Loops for as long as the class is on: a single .6s turn left the button
+   spun-out whenever a read outlasted it. shouldSpin (clock-based) still
+   decides when the class comes off, and the reduced-motion rule at the foot of
+   this sheet still disables it. */
+.hz-refresh.hz-spin { animation: hz-sp .6s linear infinite; }
 @keyframes hz-sp { to { transform: rotate(360deg); } }
 .hz-stamp { font-size: 11px; color: var(--text-hint); }
 .hz-mode { font: inherit; font-size: 11px; background: none; cursor: pointer; border: 1px solid var(--border-default); border-radius: 3px; padding: 1px 7px; color: var(--text-secondary); }

@@ -80,6 +80,8 @@ export default function HavenLinkPicker({
 
   // The menu takes focus so its keys are its own: a listener on `document`
   // would swallow the arrow keys of everything else on screen while it is open.
+  // It is also the listbox itself (see below), so the focused element and the
+  // one carrying `aria-activedescendant` are one and the same.
   useEffect(() => {
     menuRef.current?.focus();
   }, []);
@@ -107,10 +109,19 @@ export default function HavenLinkPicker({
   const suggestionListed = suggestedKey !== null && projects.some((p) => p.key === suggestedKey);
   const optionId = (key: string) => `haven-project-${project.id}-${key}`;
 
+  // Focus, `role="listbox"` and `aria-activedescendant` all live on this one
+  // element: a screen reader only announces the active option when the element
+  // it is reading from is the focused one. The loading, error, empty and
+  // suggestion lines are non-option children of the listbox — the alternative,
+  // an inner listbox that exists only once options load, is what left the
+  // active option unannounced.
   return createPortal(
     <div
       ref={menuRef}
       tabIndex={-1}
+      role="listbox"
+      aria-label="Haven projects"
+      aria-activedescendant={highlightedKey ? optionId(highlightedKey) : undefined}
       onKeyDown={onKeyDown}
       style={{ ...styles.menu, left: anchor.x, top: anchor.y }}
     >
@@ -124,32 +135,25 @@ export default function HavenLinkPicker({
           This looks like Haven project <code style={styles.code}>{suggestedKey}</code> — link?
         </div>
       )}
-      {!loading && !error && ordered.length > 0 && (
-        <div
-          role="listbox"
-          aria-label="Haven projects"
-          aria-activedescendant={highlightedKey ? optionId(highlightedKey) : undefined}
-        >
-          {ordered.map((p) => (
-            <div
-              key={p.key}
-              id={optionId(p.key)}
-              role="option"
-              aria-selected={p.key === highlightedKey}
-              style={{
-                ...styles.menuItem,
-                backgroundColor:
-                  p.key === highlightedKey ? "var(--accent-selection)" : "transparent",
-              }}
-              onMouseEnter={() => setHighlightedKey(p.key)}
-              onClick={() => choose(p.key)}
-            >
-              <span style={styles.menuItemLabel}>{pickerLabel(p)}</span>
-              <span style={styles.menuItemKey}>{p.key}</span>
-            </div>
-          ))}
-        </div>
-      )}
+      {!loading &&
+        !error &&
+        ordered.map((p) => (
+          <div
+            key={p.key}
+            id={optionId(p.key)}
+            role="option"
+            aria-selected={p.key === highlightedKey}
+            style={{
+              ...styles.menuItem,
+              backgroundColor: p.key === highlightedKey ? "var(--accent-selection)" : "transparent",
+            }}
+            onMouseEnter={() => setHighlightedKey(p.key)}
+            onClick={() => choose(p.key)}
+          >
+            <span style={styles.menuItemLabel}>{pickerLabel(p)}</span>
+            <span style={styles.menuItemKey}>{p.key}</span>
+          </div>
+        ))}
     </div>,
     document.body,
   );
