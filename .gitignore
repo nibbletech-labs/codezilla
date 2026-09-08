@@ -24,6 +24,8 @@ tests/*
 !tests/haven-binding.test.ts
 !tests/haven-graph.test.ts
 !tests/haven-live.test.ts
+!tests/haven-workbench.test.ts
+!tests/haven-nav.test.ts
 CLAUDE.md
 .claude/
 src-tauri/gen/schemas/

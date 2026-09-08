@@ -15,6 +15,8 @@
     "test:haven-binding": "node --experimental-strip-types --test tests/haven-binding.test.ts",
     "test:haven-graph": "node --experimental-strip-types --test tests/haven-graph.test.ts",
     "test:haven-live": "node --experimental-strip-types --test tests/haven-live.test.ts",
+    "test:haven-workbench": "node --experimental-strip-types --test tests/haven-workbench.test.ts",
+    "test:haven-nav": "node --experimental-strip-types --test tests/haven-nav.test.ts",
     "replay:transcript": "node --experimental-strip-types scripts/replay-transcript.ts",
     "test:thread-activity:e2e": "node --experimental-strip-types scripts/e2e-thread-activity.ts"
   },

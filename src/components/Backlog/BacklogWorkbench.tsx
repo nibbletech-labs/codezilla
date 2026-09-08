@@ -3,28 +3,16 @@ import { useAppStore } from "../../store/appStore";
 import { HavenLinkPicker } from "../LeftPanel/BacklogRow";
 import { useHavenView } from "../../hooks/useHavenView";
 import { refreshHavenGraph } from "../../hooks/useHavenLive";
-import type { HavenTabCounts } from "../../lib/havenTypes";
-
-const TABS = ["In flight", "Blocked", "Backlog", "Done"] as const;
-type Tab = (typeof TABS)[number];
-
-/** Which derived count each tab badge shows. */
-const COUNT_KEY: Record<Tab, keyof HavenTabCounts> = {
-  "In flight": "inFlight",
-  Blocked: "blocked",
-  Backlog: "backlog",
-  Done: "done",
-};
+import WorkbenchShell from "./WorkbenchShell";
 
 /**
- * The centre-area Haven workbench. CZ-45 builds the shell only — header, tab
- * strip and an empty body. CZ-46 feeds it a graph and CZ-47 fills the body.
+ * The centre-area Haven workbench. This file owns the four whole-view states
+ * (§9); state 3 — the board itself — is `WorkbenchShell`.
  */
 export default function BacklogWorkbench({ projectId }: { projectId: string }) {
   const project = useAppStore((s) => s.projects.find((p) => p.id === projectId));
   const havenInstalled = useAppStore((s) => s.havenInstalled);
   const result = useHavenView(project?.havenProjectKey);
-  const [activeTab, setActiveTab] = useState<Tab>(TABS[0]);
   const [pickerAnchor, setPickerAnchor] = useState<{ x: number; y: number } | null>(null);
 
   if (!project) return null;
@@ -86,62 +74,49 @@ export default function BacklogWorkbench({ projectId }: { projectId: string }) {
     );
   }
 
-  // State 3 — linked. The shell: header, tabs, and a body CZ-47 fills.
-  return (
-    <div style={styles.container}>
-      <div style={styles.head}>
-        <span style={styles.h1}>
-          Backlog
-          <span style={styles.key}>
-            {project.name} · {project.havenProjectKey}
-          </span>
-        </span>
-      </div>
-      {error && (
-        // A failed re-read keeps the last good board; this line says so rather
-        // than throwing the view away.
-        <div style={styles.errorLine}>
-          <span style={styles.errorText}>{error}</span>
-          <button
-            style={styles.retryInline}
-            className="icon-btn"
-            onClick={retry}
-            title="Read the graph again"
-          >
-            Retry
-          </button>
-        </div>
-      )}
-      <div style={styles.tabs} role="tablist">
-        {TABS.map((tab) => {
-          const selected = tab === activeTab;
-          return (
-            <button
-              key={tab}
-              role="tab"
-              aria-selected={selected}
-              style={{
-                ...styles.tab,
-                color: selected ? "var(--text-heading)" : "var(--text-secondary)",
-                borderBottomColor: selected ? "var(--accent)" : "transparent",
-              }}
-              onClick={() => setActiveTab(tab)}
-            >
-              {tab}
-              <span
-                style={{
-                  ...styles.tabCount,
-                  color: selected ? "var(--text-primary)" : "var(--text-secondary)",
-                }}
-              >
-                {result?.counts ? result.counts[COUNT_KEY[tab]] : "—"}
-              </span>
-            </button>
-          );
-        })}
-      </div>
-      <div style={styles.body} />
+  // State 3 — linked: the board (§5–§9).
+  const errorLine = error ? (
+    // A failed re-read keeps the last good board; this line says so rather than
+    // throwing the view away.
+    <div style={styles.errorLine}>
+      <span style={styles.errorText}>{error}</span>
+      <button
+        style={styles.retryInline}
+        className="icon-btn"
+        onClick={retry}
+        title="Read the graph again"
+      >
+        Retry
+      </button>
     </div>
+  ) : null;
+
+  if (!result?.view || !result.buckets) {
+    // Linked, but the first read has not landed yet.
+    return (
+      <div style={styles.container}>
+        <div style={styles.head}>
+          <span style={styles.h1}>
+            Backlog
+            <span style={styles.key}>
+              {project.name} · {project.havenProjectKey}
+            </span>
+          </span>
+        </div>
+        {errorLine}
+        <div style={styles.body} />
+      </div>
+    );
+  }
+
+  return (
+    <WorkbenchShell
+      name={project.name}
+      projectKey={project.havenProjectKey}
+      result={result}
+      onRefresh={retry}
+      errorLine={errorLine}
+    />
   );
 }
 
@@ -172,34 +147,6 @@ const styles = {
     fontWeight: 400,
     marginLeft: "7px",
     fontSize: "var(--font-size-sm)",
-  } as React.CSSProperties,
-  tabs: {
-    display: "flex",
-    gap: "2px",
-    padding: "10px 16px 0",
-    flex: "0 0 auto",
-    borderBottom: "1px solid var(--border-default)",
-  } as React.CSSProperties,
-  tab: {
-    font: "inherit",
-    fontSize: "var(--font-size)",
-    background: "none",
-    border: "none",
-    cursor: "pointer",
-    padding: "6px 12px 8px",
-    borderBottom: "2px solid transparent",
-    display: "flex",
-    alignItems: "center",
-    gap: "7px",
-  } as React.CSSProperties,
-  tabCount: {
-    fontSize: "11px",
-    minWidth: "19px",
-    textAlign: "center" as const,
-    padding: "1px 5px",
-    borderRadius: "9px",
-    background: "var(--bg-elevated)",
-    fontVariantNumeric: "tabular-nums",
   } as React.CSSProperties,
   body: {
     flex: 1,
