@@ -352,6 +352,7 @@ pub fn run() {
         .manage(watcher_state)
         .manage(transcript_state)
         .manage(usage_state)
+        .manage(haven::watcher::HavenWatcherState::default())
         .manage(MenuState {
             remember_window: std::sync::Mutex::new(None),
             appearance_items: std::sync::Mutex::new(Vec::new()),
@@ -637,6 +638,9 @@ pub fn run() {
             haven::haven_detect,
             haven::haven_list_projects,
             haven::haven_suggest_project_key,
+            haven::haven_graph,
+            haven::haven_status_db_path,
+            haven::watcher::haven_watch_store,
             transcript::watch_transcript,
             transcript::unwatch_transcript,
             transcript::switch_transcript,

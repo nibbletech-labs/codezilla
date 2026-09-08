@@ -1,8 +1,20 @@
 import { useState } from "react";
 import { useAppStore } from "../../store/appStore";
 import { HavenLinkPicker } from "../LeftPanel/BacklogRow";
+import { useHavenView } from "../../hooks/useHavenView";
+import { refreshHavenGraph } from "../../hooks/useHavenLive";
+import type { HavenTabCounts } from "../../lib/havenTypes";
 
 const TABS = ["In flight", "Blocked", "Backlog", "Done"] as const;
+type Tab = (typeof TABS)[number];
+
+/** Which derived count each tab badge shows. */
+const COUNT_KEY: Record<Tab, keyof HavenTabCounts> = {
+  "In flight": "inFlight",
+  Blocked: "blocked",
+  Backlog: "backlog",
+  Done: "done",
+};
 
 /**
  * The centre-area Haven workbench. CZ-45 builds the shell only — header, tab
@@ -11,7 +23,8 @@ const TABS = ["In flight", "Blocked", "Backlog", "Done"] as const;
 export default function BacklogWorkbench({ projectId }: { projectId: string }) {
   const project = useAppStore((s) => s.projects.find((p) => p.id === projectId));
   const havenInstalled = useAppStore((s) => s.havenInstalled);
-  const [activeTab, setActiveTab] = useState<string>(TABS[0]);
+  const result = useHavenView(project?.havenProjectKey);
+  const [activeTab, setActiveTab] = useState<Tab>(TABS[0]);
   const [pickerAnchor, setPickerAnchor] = useState<{ x: number; y: number } | null>(null);
 
   if (!project) return null;
@@ -55,6 +68,24 @@ export default function BacklogWorkbench({ projectId }: { projectId: string }) {
     );
   }
 
+  // State 4 — the read failed with nothing to keep on screen: the stderr text
+  // verbatim (that is how store-skew errors reach the user), and a retry.
+  const error = result?.entry.error ?? null;
+  const retry = () => refreshHavenGraph(project.havenProjectKey!);
+  if (error && !result?.entry.graph) {
+    return (
+      <div style={styles.container}>
+        <div style={styles.centred}>
+          <div style={styles.stateTitle}>Haven could not read this project</div>
+          <div style={styles.errorText}>{error}</div>
+          <button style={styles.linkButton} onClick={retry} title="Read the graph again">
+            Retry
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   // State 3 — linked. The shell: header, tabs, and a body CZ-47 fills.
   return (
     <div style={styles.container}>
@@ -66,6 +97,21 @@ export default function BacklogWorkbench({ projectId }: { projectId: string }) {
           </span>
         </span>
       </div>
+      {error && (
+        // A failed re-read keeps the last good board; this line says so rather
+        // than throwing the view away.
+        <div style={styles.errorLine}>
+          <span style={styles.errorText}>{error}</span>
+          <button
+            style={styles.retryInline}
+            className="icon-btn"
+            onClick={retry}
+            title="Read the graph again"
+          >
+            Retry
+          </button>
+        </div>
+      )}
       <div style={styles.tabs} role="tablist">
         {TABS.map((tab) => {
           const selected = tab === activeTab;
@@ -88,7 +134,7 @@ export default function BacklogWorkbench({ projectId }: { projectId: string }) {
                   color: selected ? "var(--text-primary)" : "var(--text-secondary)",
                 }}
               >
-                —
+                {result?.counts ? result.counts[COUNT_KEY[tab]] : "—"}
               </span>
             </button>
           );
@@ -172,6 +218,30 @@ const styles = {
   stateTitle: {
     color: "var(--text-primary)",
     fontSize: "calc(var(--font-size) + 2px)",
+  } as React.CSSProperties,
+  errorLine: {
+    display: "flex",
+    alignItems: "flex-start",
+    gap: "10px",
+    padding: "6px 16px 0",
+    flex: "0 0 auto",
+  } as React.CSSProperties,
+  errorText: {
+    fontFamily: "var(--font-mono, monospace)",
+    fontSize: "var(--font-size-sm)",
+    color: "var(--text-secondary)",
+    whiteSpace: "pre-wrap" as const,
+    userSelect: "text" as const,
+    maxWidth: "620px",
+  } as React.CSSProperties,
+  retryInline: {
+    font: "inherit",
+    fontSize: "var(--font-size-sm)",
+    background: "none",
+    border: "none",
+    color: "var(--accent)",
+    cursor: "pointer",
+    padding: "0 4px",
   } as React.CSSProperties,
   install: {
     fontFamily: "var(--font-mono, monospace)",

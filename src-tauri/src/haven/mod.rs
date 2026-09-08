@@ -2,6 +2,8 @@
 //! `_haven/items` binding suggestion. CZ-46 adds `haven_graph`, the store
 //! watcher and `haven_status_db_path` on top of `run_haven`.
 
+pub mod watcher;
+
 use log::warn;
 use serde::{Deserialize, Serialize};
 use std::ffi::{OsStr, OsString};
@@ -35,11 +37,6 @@ async fn run_haven_bin(bin: &OsStr, args: &[&str]) -> Result<Output, String> {
         .await
         .map_err(|_| format!("haven {} timed out", args.first().unwrap_or(&"")))?
         .map_err(|e| format!("Failed to run haven: {}", e))
-}
-
-#[allow(dead_code)] // CZ-46 calls this for `graph` and `status`.
-async fn run_haven(args: &[&str]) -> Result<Output, String> {
-    run_haven_bin(&haven_bin(), args).await
 }
 
 /// First line of `haven --version` with a leading binary name stripped
@@ -112,12 +109,7 @@ async fn list_projects_with(bin: &OsStr) -> Result<Vec<HavenProject>, String> {
     let out = run_haven_bin(bin, &["project", "list"]).await?;
     if !out.status.success() {
         // Surface stderr verbatim — that is how store-skew errors reach the user.
-        let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
-        return Err(if stderr.is_empty() {
-            format!("haven project list exited {}", out.status)
-        } else {
-            stderr
-        });
+        return Err(failure_text("project list", &out));
     }
     parse_project_list(&String::from_utf8_lossy(&out.stdout))
 }
@@ -153,6 +145,158 @@ fn suggest_key_for_repo(repo: &Path) -> Option<String> {
 pub async fn haven_suggest_project_key(path: String) -> Result<Option<String>, String> {
     let repo = crate::fs::canonicalize_path(&path)?;
     Ok(suggest_key_for_repo(&repo))
+}
+
+/// Non-zero exit: `stderr` verbatim is what surfaces store-skew errors like
+/// `store_too_new` to the user (§2, §9 state 4). Only when stderr is empty do
+/// we invent text of our own.
+fn failure_text(what: &str, out: &Output) -> String {
+    let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
+    if stderr.is_empty() {
+        format!("haven {} exited {}", what, out.status)
+    } else {
+        stderr
+    }
+}
+
+/// One node of `haven graph --full --all`. Every field is `Option` with
+/// `#[serde(default)]` and every enum-ish field is a plain `String` (§2's
+/// non-negotiable parsing rules) — Haven changes shape roughly monthly and a
+/// lost or added field must cost nothing.
+///
+/// `ref` is the only field without an `Option`: a node with no ref has no
+/// identity and is dropped by `parse_graph` rather than rendered. The fields
+/// listed here are exactly what §2 promises and exactly what the workbench
+/// reads; `metadata`, `context_pack`, `rollup_state`, `owner_rollup`,
+/// `has_uncommitted_descendants`, `sync_state`, `assignee`, the per-node
+/// `project` and the departing `sort_key` are deliberately absent, so they
+/// never cross IPC.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct HavenNode {
+    #[serde(default)]
+    pub r#ref: String,
+    #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default, rename = "type")]
+    pub node_type: Option<String>,
+    #[serde(default)]
+    pub status: Option<String>,
+    #[serde(default)]
+    pub priority: Option<i64>,
+    #[serde(default)]
+    pub committed: Option<bool>,
+    #[serde(default)]
+    pub owner_kind: Option<String>,
+    #[serde(default)]
+    pub wait_state: Option<String>,
+    #[serde(default)]
+    pub why: Option<String>,
+    #[serde(default)]
+    pub done_looks_like: Option<String>,
+    #[serde(default)]
+    pub body: Option<String>,
+    #[serde(default)]
+    pub created_at: Option<String>,
+    #[serde(default)]
+    pub updated_at: Option<String>,
+    #[serde(default)]
+    pub revision: Option<i64>,
+    #[serde(default)]
+    pub public_id: Option<String>,
+    #[serde(default)]
+    pub archived_at: Option<String>,
+}
+
+/// One edge. `kind` stays a string: a new Haven edge kind renders as itself.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct HavenEdge {
+    #[serde(default)]
+    pub from: Option<String>,
+    #[serde(default)]
+    pub kind: Option<String>,
+    #[serde(default)]
+    pub to: Option<String>,
+}
+
+/// The whole graph read. Totals are hints for logging, never load-bearing.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct HavenGraph {
+    #[serde(default)]
+    pub nodes: Vec<HavenNode>,
+    #[serde(default)]
+    pub edges: Vec<HavenEdge>,
+    #[serde(default)]
+    pub node_total: Option<u64>,
+    #[serde(default)]
+    pub edge_total: Option<u64>,
+    #[serde(default)]
+    pub truncated: Option<bool>,
+    #[serde(default)]
+    pub project: Option<String>,
+}
+
+/// Parse a graph, dropping rows with no identity: a node needs a `ref`, an edge
+/// needs all three of `from`/`kind`/`to`. Everything else is optional, so a
+/// field appearing or disappearing changes nothing here.
+fn parse_graph(stdout: &str) -> Result<HavenGraph, String> {
+    let mut graph: HavenGraph =
+        serde_json::from_str(stdout).map_err(|e| format!("Could not read haven graph: {e}"))?;
+    let (nodes_in, edges_in) = (graph.nodes.len(), graph.edges.len());
+    graph.nodes.retain(|n| !n.r#ref.is_empty());
+    graph
+        .edges
+        .retain(|e| e.from.is_some() && e.kind.is_some() && e.to.is_some());
+    let dropped = (nodes_in - graph.nodes.len()) + (edges_in - graph.edges.len());
+    if dropped > 0 {
+        warn!(
+            "haven graph: dropped {} row(s) with no identity ({} node(s), {} edge(s))",
+            dropped,
+            nodes_in - graph.nodes.len(),
+            edges_in - graph.edges.len()
+        );
+    }
+    Ok(graph)
+}
+
+async fn graph_with(bin: &OsStr, project_key: &str) -> Result<HavenGraph, String> {
+    // §2: one read, one shape. `--full` lifts the size caps, `--all` includes
+    // archived and superseded nodes so dependency navigation can resolve them.
+    let out = run_haven_bin(bin, &["graph", "--full", "--all", "--project", project_key]).await?;
+    if !out.status.success() {
+        return Err(failure_text("graph", &out));
+    }
+    parse_graph(&String::from_utf8_lossy(&out.stdout))
+}
+
+#[tauri::command]
+pub async fn haven_graph(project_key: String) -> Result<HavenGraph, String> {
+    graph_with(&haven_bin(), &project_key).await
+}
+
+/// `haven status`, of which the workbench needs exactly one field.
+#[derive(Debug, Clone, Default, Deserialize)]
+struct HavenStatus {
+    #[serde(default)]
+    db: Option<String>,
+}
+
+async fn status_db_path_with(bin: &OsStr) -> Result<String, String> {
+    let out = run_haven_bin(bin, &["status"]).await?;
+    if !out.status.success() {
+        return Err(failure_text("status", &out));
+    }
+    let parsed: HavenStatus = serde_json::from_str(&String::from_utf8_lossy(&out.stdout))
+        .map_err(|e| format!("Could not read haven status: {e}"))?;
+    parsed
+        .db
+        .filter(|p| !p.is_empty())
+        .ok_or_else(|| "haven status reported no store path".to_string())
+}
+
+/// Where the store file lives (§10) — the directory the watcher watches.
+#[tauri::command]
+pub async fn haven_status_db_path() -> Result<String, String> {
+    status_db_path_with(&haven_bin()).await
 }
 
 #[cfg(test)]
@@ -323,6 +467,149 @@ mod tests {
             .block_on(list_projects_with(bin.as_os_str()))
             .unwrap_err();
         assert!(err.contains("store_too_new"), "got: {err}");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// The CZ-46 capture of `haven graph --full --all --project retrostack`
+    /// (§15 fixture). Read from disk rather than `include_str!` so a 1.7 MB
+    /// blob never lands in the shipped binary.
+    fn read_raw_fixture() -> String {
+        std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/haven/retrostack-2026-09-07.raw.json"
+        ))
+        .expect("raw graph fixture")
+    }
+
+    #[test]
+    fn graph_fixture_parses_to_1041_nodes_and_1235_edges() {
+        let g = parse_graph(&read_raw_fixture()).unwrap();
+        assert_eq!(g.nodes.len(), 1041);
+        assert_eq!(g.edges.len(), 1235);
+        assert_eq!(g.node_total, Some(1041));
+        assert_eq!(g.edge_total, Some(1235));
+        assert_eq!(g.truncated, Some(false));
+        assert_eq!(g.project.as_deref(), Some("retrostack"));
+
+        // Edge kinds stay strings; the capture holds exactly these three.
+        let mut kinds: Vec<String> = g
+            .edges
+            .iter()
+            .filter_map(|e| e.kind.clone())
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        kinds.sort();
+        assert_eq!(kinds, vec!["decomposition", "dependency", "grouping"]);
+
+        // Node identity plus the plain-string enums §2 insists on.
+        let first = &g.nodes[0];
+        assert!(first.node_type.is_some());
+        assert!(first.status.is_some());
+        assert!(g.nodes.iter().all(|n| !n.r#ref.is_empty()));
+    }
+
+    #[test]
+    fn graph_parses_with_a_field_removed_and_a_field_added() {
+        // Haven changes shape roughly monthly (§2). Both directions must be free.
+        let mut v: serde_json::Value = serde_json::from_str(&read_raw_fixture()).unwrap();
+        for node in v["nodes"].as_array_mut().unwrap() {
+            let obj = node.as_object_mut().unwrap();
+            obj.remove("title");
+            obj.remove("revision");
+            obj.insert("tomorrows_field".into(), serde_json::json!({ "x": 1 }));
+        }
+        v.as_object_mut().unwrap().remove("truncated");
+        v.as_object_mut()
+            .unwrap()
+            .insert("grooming_v2".into(), serde_json::json!([]));
+
+        let g = parse_graph(&serde_json::to_string(&v).unwrap()).unwrap();
+        assert_eq!(g.nodes.len(), 1041);
+        assert_eq!(g.edges.len(), 1235);
+        assert_eq!(g.truncated, None);
+        assert!(g.nodes.iter().all(|n| n.title.is_none()));
+        assert!(g.nodes.iter().all(|n| n.revision.is_none()));
+    }
+
+    #[test]
+    fn graph_drops_rows_without_identity() {
+        let sample = r#"{
+          "nodes": [{"ref":"RS-1","title":"Keep"},{"title":"No ref"}],
+          "edges": [{"from":"RS-1","kind":"dependency","to":"RS-2"},
+                    {"from":"RS-1","kind":"dependency"},
+                    {"kind":"dependency","to":"RS-2"},
+                    {"from":"RS-1","to":"RS-2"}]
+        }"#;
+        let g = parse_graph(sample).unwrap();
+        assert_eq!(g.nodes.len(), 1);
+        assert_eq!(g.nodes[0].r#ref, "RS-1");
+        assert_eq!(g.edges.len(), 1);
+        assert_eq!(g.edges[0].to.as_deref(), Some("RS-2"));
+    }
+
+    #[test]
+    fn graph_ignores_sort_key_and_unknown_status() {
+        // `sort_key` is on its way out of Haven and must never be read; an
+        // unknown status renders as itself rather than failing the parse.
+        let sample = r#"{"nodes":[{"ref":"RS-9","sort_key":3,"status":"quarantined","type":"task"}],"edges":[]}"#;
+        let g = parse_graph(sample).unwrap();
+        assert_eq!(g.nodes.len(), 1);
+        assert_eq!(g.nodes[0].status.as_deref(), Some("quarantined"));
+        // `sort_key` is not a field of HavenNode, so it cannot cross IPC.
+        let round = serde_json::to_string(&g.nodes[0]).unwrap();
+        assert!(!round.contains("sort_key"), "got: {round}");
+    }
+
+    #[test]
+    fn graph_reads_stub_output() {
+        let dir = unique_tmp_dir("graph-ok");
+        let bin = stub_bin(
+            &dir,
+            &format!(
+                "#!/bin/sh\ncat {}\n",
+                concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/tests/fixtures/haven/retrostack-2026-09-07.raw.json"
+                )
+            ),
+        );
+        let g = rt()
+            .block_on(graph_with(bin.as_os_str(), "retrostack"))
+            .unwrap();
+        assert_eq!(g.nodes.len(), 1041);
+        assert_eq!(g.edges.len(), 1235);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn graph_surfaces_stderr_verbatim() {
+        let dir = unique_tmp_dir("graph-err");
+        let bin = stub_bin(
+            &dir,
+            "#!/bin/sh\necho '{\"error\":{\"code\":\"not_found\",\"message\":\"no such project\"}}' >&2\nexit 1\n",
+        );
+        let err = rt()
+            .block_on(graph_with(bin.as_os_str(), "nope"))
+            .unwrap_err();
+        assert!(err.contains("not_found"), "got: {err}");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn status_db_path_parses_stub() {
+        let dir = unique_tmp_dir("status-ok");
+        let bin = stub_bin(&dir, "#!/bin/sh\necho '{\"db\":\"/x/haven.db\",\"projects\":18}'\n");
+        assert_eq!(
+            rt().block_on(status_db_path_with(bin.as_os_str())),
+            Ok("/x/haven.db".to_string())
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+
+        // A status envelope without `db` is an error, not an empty path.
+        let dir = unique_tmp_dir("status-nodb");
+        let bin = stub_bin(&dir, "#!/bin/sh\necho '{\"projects\":18}'\n");
+        assert!(rt().block_on(status_db_path_with(bin.as_os_str())).is_err());
         std::fs::remove_dir_all(dir).unwrap();
     }
 }

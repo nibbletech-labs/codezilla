@@ -7,6 +7,7 @@ import type { RepoHealth, WorktreeInfo } from "../lib/tauri";
 import { getGitWorktrees } from "../lib/tauri";
 import { attributeEnv } from "../lib/worktree";
 import type { AccentColorId, AppearanceMode } from "../lib/themes";
+import type { HavenGraph } from "../lib/havenTypes";
 
 const MAX_EXITED_THREADS_PER_PROJECT = 50;
 
@@ -16,6 +17,22 @@ const MAX_EXITED_THREADS_PER_PROJECT = 50;
 export const SLOW_GIT_MS = 400;
 const SLOW_GIT_STREAK = 3;
 const gitSlowStreaks = new Map<string, number>();
+
+/**
+ * The last graph read for one Haven project key. Keyed by the *Haven* key, not
+ * the Codezilla project id, so two projects bound to the same key share one
+ * read and a response can never land under the wrong project.
+ */
+export interface HavenGraphEntry {
+  /** The last good graph; kept on screen while an error is shown. */
+  graph: HavenGraph | null;
+  /** Epoch ms of the last successful read - CZ-47's `read 12s ago`. */
+  readAt: number | null;
+  /** stderr verbatim from a failed read (§9, state 4). */
+  error: string | null;
+  /** A read is running - CZ-47's spinner on the refresh button. */
+  reading: boolean;
+}
 
 export interface RepoHealthDismissal {
   dismissedAt: number;
@@ -142,6 +159,12 @@ interface AppState {
   setHavenInstalled: (installed: boolean) => void;
   activeBacklogProjectId: string | null;
   selectBacklog: (projectId: string) => void;
+  /** Keyed by Haven project key. Not persisted - always re-read on launch. */
+  havenGraphs: Record<string, HavenGraphEntry>;
+  setHavenGraph: (key: string, graph: HavenGraph, readAt: number) => void;
+  setHavenGraphError: (key: string, error: string) => void;
+  setHavenGraphReading: (key: string, reading: boolean) => void;
+  dropHavenGraph: (key: string) => void;
 
   // Launch presets
   launchPresets: LaunchPreset[];
@@ -211,6 +234,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   activeJobId: null,
   havenInstalled: null,
   activeBacklogProjectId: null,
+  havenGraphs: {},
   launchPresets: [],
   usage: null,
   setUsage: (snapshot) => set({ usage: snapshot }),
@@ -916,6 +940,59 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   setHavenInstalled: (installed) => set({ havenInstalled: installed }),
+
+  // A successful read clears any error but keeps the entry identity per key,
+  // so `useHavenView`'s WeakMap only re-derives when the graph object changes.
+  setHavenGraph: (key, graph, readAt) =>
+    set((s) => ({
+      havenGraphs: {
+        ...s.havenGraphs,
+        [key]: { graph, readAt, error: null, reading: false },
+      },
+    })),
+
+  // §9 state 4 keeps the last good graph: an error replaces the board only when
+  // there is nothing to keep.
+  setHavenGraphError: (key, error) =>
+    set((s) => {
+      const prev = s.havenGraphs[key];
+      return {
+        havenGraphs: {
+          ...s.havenGraphs,
+          [key]: {
+            graph: prev?.graph ?? null,
+            readAt: prev?.readAt ?? null,
+            error,
+            reading: false,
+          },
+        },
+      };
+    }),
+
+  setHavenGraphReading: (key, reading) =>
+    set((s) => {
+      const prev = s.havenGraphs[key];
+      if (!prev && !reading) return {};
+      if (prev?.reading === reading) return {};
+      return {
+        havenGraphs: {
+          ...s.havenGraphs,
+          [key]: {
+            graph: prev?.graph ?? null,
+            readAt: prev?.readAt ?? null,
+            error: prev?.error ?? null,
+            reading,
+          },
+        },
+      };
+    }),
+
+  dropHavenGraph: (key) =>
+    set((s) => {
+      if (!(key in s.havenGraphs)) return {};
+      const { [key]: _dropped, ...rest } = s.havenGraphs;
+      return { havenGraphs: rest };
+    }),
 
   // Mirrors setActiveJob: own selector on, the other two off, project follows.
   selectBacklog: (projectId) => {

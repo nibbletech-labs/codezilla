@@ -22,6 +22,8 @@ scripts/*
 tests/*
 !tests/usage-activity.test.ts
 !tests/haven-binding.test.ts
+!tests/haven-graph.test.ts
+!tests/haven-live.test.ts
 CLAUDE.md
 .claude/
 src-tauri/gen/schemas/

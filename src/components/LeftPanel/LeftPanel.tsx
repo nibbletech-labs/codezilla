@@ -8,6 +8,7 @@ import ThreadItem from "./ThreadItem";
 import ThreadIcon from "./ThreadIcons";
 import JobItem from "./JobItem";
 import ProjectBacklogRow from "./BacklogRow";
+import { useHavenLiveCount } from "../../hooks/useHavenView";
 import ProjectIcon from "../ProjectIcon";
 import PresetIconButton from "../LaunchPresets/PresetIconButton";
 import { IconPicker } from "../IconPicker";
@@ -305,6 +306,9 @@ function SortableProjectItem({
 
   const isActive = project.id === activeProjectId;
   const backlogSelected = useAppStore((s) => s.activeBacklogProjectId === project.id);
+  // The Backlog row count, from this project's Haven graph. Called here rather
+  // than inline in the JSX so it stays an unconditional top-level hook.
+  const liveCount = useHavenLiveCount(project.havenProjectKey);
 
   return (
     <div ref={setNodeRef} style={style} {...attributes} {...listeners}>
@@ -355,7 +359,7 @@ function SortableProjectItem({
         </button>
       </div>
 
-      <ProjectBacklogRow project={project} />
+      <ProjectBacklogRow project={project} liveCount={liveCount} />
       {betaFeatures.scheduledJobs && jobIds.length > 0 && (
         <ScheduledSection jobIds={jobIds} activeJobId={activeJobId} setActiveJob={setActiveJob} />
       )}
