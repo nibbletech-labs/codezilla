@@ -296,7 +296,7 @@ mod tests {
         let missing = std::env::temp_dir()
             .join(format!("cz-haven-missing-{}", uuid::Uuid::new_v4()))
             .join("haven.db");
-        let (tx4, rx4) = mpsc::channel::<()>();
+        let (tx4, _rx4) = mpsc::channel::<()>();
         let err = watch_store_inner(&state, missing, move || {
             let _ = tx4.send(());
         })
@@ -305,9 +305,14 @@ mod tests {
         std::fs::write(dir2.join("haven.db-wal"), b"w").unwrap();
         rx3.recv_timeout(Duration::from_secs(5))
             .expect("a failed reseat must leave the working watch in place");
-        assert!(
-            rx4.recv_timeout(Duration::from_millis(400)).is_err(),
-            "the failed call must not have left a watcher of its own"
+        // The guard still names the store we last reseated onto, so the failed
+        // call stored nothing of its own. Asserting on `rx4` instead would be
+        // vacuous: the failed call drops its callback, so that channel is
+        // disconnected whether or not a watcher was left behind.
+        assert_eq!(
+            state.lock().unwrap().as_ref().map(|(p, _)| p.clone()),
+            Some(dir2.join("haven.db")),
+            "the failed call must not have replaced the watched path"
         );
 
         drop(state);

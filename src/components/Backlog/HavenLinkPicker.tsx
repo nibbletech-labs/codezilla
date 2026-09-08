@@ -23,7 +23,8 @@ export default function HavenLinkPicker({
   onClose: () => void;
 }) {
   const setProjectHavenKey = useAppStore((s) => s.setProjectHavenKey);
-  const menuRef = useRef<HTMLDivElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const listboxRef = useRef<HTMLDivElement>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [projects, setProjects] = useState<HavenProject[]>([]);
@@ -72,19 +73,26 @@ export default function HavenLinkPicker({
   // Outside click closes, matching the thread-type menu.
   useEffect(() => {
     const handleClick = (e: MouseEvent) => {
-      if (menuRef.current && !menuRef.current.contains(e.target as Node)) onClose();
+      if (containerRef.current && !containerRef.current.contains(e.target as Node)) onClose();
     };
     document.addEventListener("mousedown", handleClick);
     return () => document.removeEventListener("mousedown", handleClick);
   }, [onClose]);
 
+  const suggestionListed = suggestedKey !== null && projects.some((p) => p.key === suggestedKey);
+  const optionId = (key: string) => `haven-project-${project.id}-${key}`;
+  const hasOptions = !loading && !error && ordered.length > 0;
+
   // The menu takes focus so its keys are its own: a listener on `document`
   // would swallow the arrow keys of everything else on screen while it is open.
-  // It is also the listbox itself (see below), so the focused element and the
-  // one carrying `aria-activedescendant` are one and the same.
+  // Exactly one element is focused per state: the listbox once there are
+  // options to point `aria-activedescendant` at, and the outer container while
+  // loading, on an error, or when the list is empty — so Escape still works
+  // before any option exists. The single `onKeyDown` lives on the container and
+  // sees the listbox's keys by bubbling, so it never runs twice.
   useEffect(() => {
-    menuRef.current?.focus();
-  }, []);
+    (hasOptions ? listboxRef.current : containerRef.current)?.focus();
+  }, [hasOptions]);
 
   const onKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Escape") {
@@ -106,22 +114,17 @@ export default function HavenLinkPicker({
     }
   };
 
-  const suggestionListed = suggestedKey !== null && projects.some((p) => p.key === suggestedKey);
-  const optionId = (key: string) => `haven-project-${project.id}-${key}`;
-
-  // Focus, `role="listbox"` and `aria-activedescendant` all live on this one
-  // element: a screen reader only announces the active option when the element
-  // it is reading from is the focused one. The loading, error, empty and
-  // suggestion lines are non-option children of the listbox — the alternative,
-  // an inner listbox that exists only once options load, is what left the
-  // active option unannounced.
+  // A `listbox` may only own `option`/`group` children, so the loading, error,
+  // empty and suggestion lines are children of the outer container and the
+  // listbox holds nothing but options. Focus and `aria-activedescendant` stay
+  // together on the listbox — a screen reader only announces the active option
+  // when it is reading from the focused element.
   return createPortal(
     <div
-      ref={menuRef}
+      ref={containerRef}
       tabIndex={-1}
-      role="listbox"
-      aria-label="Haven projects"
-      aria-activedescendant={highlightedKey ? optionId(highlightedKey) : undefined}
+      role="dialog"
+      aria-label="Link to Haven"
       onKeyDown={onKeyDown}
       style={{ ...styles.menu, left: anchor.x, top: anchor.y }}
     >
@@ -135,25 +138,35 @@ export default function HavenLinkPicker({
           This looks like Haven project <code style={styles.code}>{suggestedKey}</code> — link?
         </div>
       )}
-      {!loading &&
-        !error &&
-        ordered.map((p) => (
-          <div
-            key={p.key}
-            id={optionId(p.key)}
-            role="option"
-            aria-selected={p.key === highlightedKey}
-            style={{
-              ...styles.menuItem,
-              backgroundColor: p.key === highlightedKey ? "var(--accent-selection)" : "transparent",
-            }}
-            onMouseEnter={() => setHighlightedKey(p.key)}
-            onClick={() => choose(p.key)}
-          >
-            <span style={styles.menuItemLabel}>{pickerLabel(p)}</span>
-            <span style={styles.menuItemKey}>{p.key}</span>
-          </div>
-        ))}
+      {hasOptions && (
+        <div
+          ref={listboxRef}
+          tabIndex={-1}
+          role="listbox"
+          aria-label="Haven projects"
+          aria-activedescendant={highlightedKey ? optionId(highlightedKey) : undefined}
+          style={styles.listbox}
+        >
+          {ordered.map((p) => (
+            <div
+              key={p.key}
+              id={optionId(p.key)}
+              role="option"
+              aria-selected={p.key === highlightedKey}
+              style={{
+                ...styles.menuItem,
+                backgroundColor:
+                  p.key === highlightedKey ? "var(--accent-selection)" : "transparent",
+              }}
+              onMouseEnter={() => setHighlightedKey(p.key)}
+              onClick={() => choose(p.key)}
+            >
+              <span style={styles.menuItemLabel}>{pickerLabel(p)}</span>
+              <span style={styles.menuItemKey}>{p.key}</span>
+            </div>
+          ))}
+        </div>
+      )}
     </div>,
     document.body,
   );
@@ -172,6 +185,9 @@ const styles = {
     maxWidth: "320px",
     maxHeight: "320px",
     overflowY: "auto" as const,
+    outline: "none",
+  } as React.CSSProperties,
+  listbox: {
     outline: "none",
   } as React.CSSProperties,
   menuNote: {
