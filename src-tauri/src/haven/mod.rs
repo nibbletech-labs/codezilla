@@ -191,11 +191,13 @@ pub async fn haven_repo_binding(path: String) -> Result<Option<String>, String> 
     Ok(binding_from(&repo))
 }
 
-/// `^[A-Za-z0-9_-]+$`, checked by hand so no regex crate is needed. A key is
-/// about to become an argument to a subprocess, so anything else is refused
-/// before the spawn rather than handed to the CLI.
+/// `^[A-Za-z0-9_][A-Za-z0-9_-]*$`, checked by hand so no regex crate is needed.
+/// A key is about to become an argument to a subprocess, so anything else is
+/// refused before the spawn rather than handed to the CLI — including a key
+/// that merely *starts* with `-`, which would reach the CLI's argv as a flag.
 fn valid_project_key(key: &str) -> bool {
     !key.is_empty()
+        && !key.starts_with('-')
         && key
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
@@ -589,9 +591,13 @@ mod tests {
     fn link_refuses_a_malformed_key_before_spawning() {
         assert!(valid_project_key("article-to-video"));
         assert!(valid_project_key("tom_bar2"));
+        assert!(valid_project_key("tom-bar"));
         assert!(!valid_project_key(""));
         assert!(!valid_project_key("a b"));
         assert!(!valid_project_key("../x"));
+        // A flag-shaped key must never reach the CLI's argv.
+        assert!(!valid_project_key("-p"));
+        assert!(!valid_project_key("--help"));
 
         let dir = physical_tmp_dir("link-badkey");
         let bin = stub_bin(&dir, "#!/bin/sh\ntouch \"$(pwd)/spawned\"\n");
