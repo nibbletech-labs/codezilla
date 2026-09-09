@@ -17,9 +17,28 @@ export function havenListProjects(): Promise<HavenProject[]> {
   return invoke("haven_list_projects");
 }
 
-/** The key this repo's gitignored `_haven/items` symlink points at, if any. */
-export function havenSuggestProjectKey(path: string): Promise<string | null> {
-  return invoke("haven_suggest_project_key", { path });
+/**
+ * The Haven project this repo is bound to, read from the nearest
+ * `.haven-project` walking up from `path`. `null` means checked and unbound; a
+ * rejection means the path could not be resolved at all, which is not the same
+ * thing — the caller keeps whatever it last knew.
+ */
+export function havenRepoBinding(path: string): Promise<string | null> {
+  return invoke("haven_repo_binding", { path });
+}
+
+/** What `haven link` prints on success. Informative only; exit 0 is the truth. */
+export interface HavenLinkResult {
+  workspace: string | null;
+  binding: string | null;
+}
+
+/**
+ * `haven link -p <key>`, run inside the repo. Rejects with the CLI's stderr
+ * verbatim, which is what the project page shows under the button.
+ */
+export function havenLink(path: string, key: string): Promise<HavenLinkResult> {
+  return invoke("haven_link", { path, key });
 }
 
 // The graph shapes live in `havenTypes.ts` so the pure derivation and its node

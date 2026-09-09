@@ -1,6 +1,7 @@
-//! Haven CLI client: detection, project listing, the repo-local `_haven/items`
-//! binding suggestion, the graph read behind the workbench (`haven_graph`) and
-//! the store path the watcher in `watcher.rs` needs (`haven_status_db_path`).
+//! Haven CLI client: detection, project listing, the repo binding read from and
+//! written to `.haven-project` (`haven_repo_binding` / `haven_link`), the graph
+//! read behind the workbench (`haven_graph`) and the store path the watcher in
+//! `watcher.rs` needs (`haven_status_db_path`).
 
 pub mod watcher;
 
@@ -26,6 +27,17 @@ fn haven_bin() -> OsString {
 /// Dock launch inherits none of the user's shell setup. kill_on_drop reaps the
 /// child if the timeout fires.
 async fn run_haven_bin(bin: &OsStr, args: &[&str]) -> Result<Output, String> {
+    run_haven_bin_in(bin, args, None).await
+}
+
+/// Same, run inside `cwd` when one is given. `haven link` binds whatever
+/// directory it runs in, so the cwd is the argument that matters — modelled on
+/// `run_git`'s `current_dir`.
+async fn run_haven_bin_in(
+    bin: &OsStr,
+    args: &[&str],
+    cwd: Option<&Path>,
+) -> Result<Output, String> {
     // augmented_path() blocks on a thread join (up to 5s on the first call,
     // while it sources the login shell) — keep it off the async workers.
     let path = match tokio::task::spawn_blocking(crate::cli_detect::augmented_path).await {
@@ -39,6 +51,9 @@ async fn run_haven_bin(bin: &OsStr, args: &[&str]) -> Result<Output, String> {
     };
     let mut cmd = tokio::process::Command::new(bin);
     cmd.args(args).env("PATH", path).kill_on_drop(true);
+    if let Some(dir) = cwd {
+        cmd.current_dir(dir);
+    }
     tokio::time::timeout(HAVEN_TIMEOUT, cmd.output())
         .await
         .map_err(|_| format!("haven {} timed out", args.first().unwrap_or(&"")))?
@@ -129,32 +144,95 @@ pub async fn haven_list_projects() -> Result<Vec<HavenProject>, String> {
     list_projects_with(&haven_bin()).await
 }
 
-/// The Haven project key implied by a `_haven/items` symlink target of the form
-/// `.../.haven/<key>/items`. Purely a path-component check, so a relocated
-/// Haven home simply yields no suggestion.
-fn key_from_items_link(target: &Path) -> Option<String> {
-    if target.file_name()? != OsStr::new("items") {
-        return None;
+/// The marker file `haven link -p <key>` writes at the root of a bound repo.
+pub const BINDING_FILE: &str = ".haven-project";
+
+/// Mirror of the CLI's `repo_binding()`: the nearest `.haven-project` walking up
+/// from `start` wins (`Path::ancestors()` yields `start` itself first, then each
+/// parent). For each ancestor, an entry of that name that is not a *file* — a
+/// directory, or a broken symlink — is not a marker and the walk continues past
+/// it. A file that is there is the decision, whatever it holds: trimmed
+/// non-empty content is the key; a blank file means unbound and stops the walk;
+/// a file that cannot be read (mode 000, say) is logged and also means unbound
+/// and stops the walk — the one place Codezilla is more tolerant than the CLI,
+/// which would error.
+fn binding_from(start: &Path) -> Option<String> {
+    for dir in start.ancestors() {
+        let marker = dir.join(BINDING_FILE);
+        // `is_file()` follows symlinks and is false for a directory, matching
+        // the CLI's own test.
+        if !marker.is_file() {
+            continue;
+        }
+        return match std::fs::read_to_string(&marker) {
+            Ok(text) => {
+                let trimmed = text.trim();
+                if trimmed.is_empty() {
+                    None
+                } else {
+                    Some(trimmed.to_string())
+                }
+            }
+            Err(e) => {
+                warn!("haven: could not read {}: {e}", marker.display());
+                None
+            }
+        };
     }
-    let key_dir = target.parent()?;
-    if key_dir.parent()?.file_name()? != OsStr::new(".haven") {
-        return None;
-    }
-    Some(key_dir.file_name()?.to_string_lossy().to_string())
+    None
 }
 
-/// Suggest the key this repo is already linked to, via the gitignored
-/// `_haven/items` symlink `haven link` writes. `None` when there is no link.
-fn suggest_key_for_repo(repo: &Path) -> Option<String> {
-    std::fs::read_link(repo.join("_haven").join("items"))
-        .ok()
-        .and_then(|target| key_from_items_link(&target))
+/// The Haven project this repo is bound to, per its own `.haven-project` file.
+/// A path that cannot be resolved is an `Err`, never `Ok(None)`: an unreachable
+/// repo is not an unbound one, and the frontend keeps its last known value.
+#[tauri::command]
+pub async fn haven_repo_binding(path: String) -> Result<Option<String>, String> {
+    let repo = crate::fs::canonicalize_path(&path)?;
+    Ok(binding_from(&repo))
+}
+
+/// `^[A-Za-z0-9_-]+$`, checked by hand so no regex crate is needed. A key is
+/// about to become an argument to a subprocess, so anything else is refused
+/// before the spawn rather than handed to the CLI.
+fn valid_project_key(key: &str) -> bool {
+    !key.is_empty()
+        && key
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+}
+
+/// What `haven link` prints on success. Tolerant and informative only: exit 0
+/// is the truth, and the frontend re-reads `.haven-project` afterwards anyway.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct HavenLinkResult {
+    #[serde(default)]
+    pub workspace: Option<String>,
+    #[serde(default)]
+    pub binding: Option<String>,
+}
+
+/// `haven link -p <key>`, run *inside* `repo` — the CLI binds whatever
+/// directory it runs in. A non-zero exit surfaces the CLI's stderr verbatim,
+/// JSON error envelope and all, which is what the user sees under the button.
+async fn link_with(bin: &OsStr, repo: &Path, key: &str) -> Result<HavenLinkResult, String> {
+    if !valid_project_key(key) {
+        return Err(format!("Not a Haven project key: {key}"));
+    }
+    let out = run_haven_bin_in(bin, &["link", "-p", key], Some(repo)).await?;
+    if !out.status.success() {
+        return Err(failure_text("link", &out));
+    }
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    Ok(serde_json::from_str(&stdout).unwrap_or_else(|e| {
+        warn!("haven link: could not read the success envelope ({e}); ignoring it");
+        HavenLinkResult::default()
+    }))
 }
 
 #[tauri::command]
-pub async fn haven_suggest_project_key(path: String) -> Result<Option<String>, String> {
+pub async fn haven_link(path: String, key: String) -> Result<HavenLinkResult, String> {
     let repo = crate::fs::canonicalize_path(&path)?;
-    Ok(suggest_key_for_repo(&repo))
+    link_with(&haven_bin(), &repo, &key).await
 }
 
 /// Non-zero exit: `stderr` verbatim is what surfaces store-skew errors like
@@ -345,53 +423,185 @@ mod tests {
         tokio::runtime::Runtime::new().unwrap()
     }
 
+    /// `binding_from` mirrors the CLI's `repo_binding()`: the nearest
+    /// `.haven-project` walking up wins.
     #[test]
-    fn key_from_items_link_reads_parent_dir_name() {
-        assert_eq!(
-            key_from_items_link(Path::new("/Users/tom/.haven/retrostack/items")),
-            Some("retrostack".to_string())
-        );
+    fn binding_walks_up_from_a_nested_path() {
+        let root = unique_tmp_dir("bind-walk");
+        let repo = root.join("repo");
+        std::fs::create_dir_all(repo.join("a").join("b")).unwrap();
+        std::fs::write(repo.join(BINDING_FILE), "retro\n").unwrap();
+        assert_eq!(binding_from(&repo.join("a").join("b")), Some("retro".to_string()));
+        assert_eq!(binding_from(&repo), Some("retro".to_string()));
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
-    fn key_from_items_link_rejects_non_haven_targets() {
-        // No <key> segment between `.haven` and `items`.
-        assert_eq!(key_from_items_link(Path::new("/Users/tom/.haven/items")), None);
-        // Grandparent isn't `.haven`.
-        assert_eq!(key_from_items_link(Path::new("/x/retrostack/items")), None);
-        // Not the `items` entry.
+    fn binding_nearest_file_wins() {
+        let root = unique_tmp_dir("bind-nearest");
+        let repo = root.join("repo");
+        std::fs::create_dir_all(repo.join("sub").join("x")).unwrap();
+        std::fs::write(repo.join(BINDING_FILE), "outer\n").unwrap();
+        std::fs::write(repo.join("sub").join(BINDING_FILE), "inner\n").unwrap();
         assert_eq!(
-            key_from_items_link(Path::new("/Users/tom/.haven/retrostack/backlog.md")),
-            None
+            binding_from(&repo.join("sub").join("x")),
+            Some("inner".to_string())
         );
-        // Component check, not a HOME check: a relative target still resolves.
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn binding_is_none_without_a_file() {
+        let root = unique_tmp_dir("bind-none");
+        let bare = root.join("bare").join("a");
+        std::fs::create_dir_all(&bare).unwrap();
+        assert_eq!(binding_from(&bare), None);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn binding_blank_file_means_unbound_and_stops_the_walk() {
+        // The CLI treats a blank marker as "unbound" and stops there rather than
+        // inheriting the parent's key.
+        let root = unique_tmp_dir("bind-blank");
+        let repo = root.join("repo");
+        std::fs::create_dir_all(repo.join("sub")).unwrap();
+        std::fs::write(repo.join(BINDING_FILE), "retro\n").unwrap();
+        std::fs::write(repo.join("sub").join(BINDING_FILE), "  \n").unwrap();
+        assert_eq!(binding_from(&repo.join("sub")), None);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn binding_walks_past_a_directory_named_haven_project() {
+        // `is_file()` is the CLI's test, so an entry of that name that is not a
+        // file is not a marker at all: the walk continues past it.
+        let root = unique_tmp_dir("bind-dir");
+        let repo = root.join("repo");
+        std::fs::create_dir_all(repo.join("sub").join(BINDING_FILE)).unwrap();
+        std::fs::write(repo.join(BINDING_FILE), "retro\n").unwrap();
         assert_eq!(
-            key_from_items_link(Path::new(".haven/retro/items")),
+            binding_from(&repo.join("sub").join("x")),
             Some("retro".to_string())
         );
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
-    fn suggest_key_for_repo_follows_symlink() {
-        let root = unique_tmp_dir("suggest");
-        let store_items = root.join(".haven/retro/items");
-        std::fs::create_dir_all(&store_items).unwrap();
+    fn binding_unreadable_file_stops_the_walk() {
+        // A real file that cannot be read IS a marker; we stop and report
+        // unbound rather than inheriting the parent's key. (The CLI would error;
+        // this is the one place Codezilla is more tolerant.)
+        if std::env::var("USER").as_deref() == Ok("root") {
+            return; // root can read a mode-000 file, so the case cannot be staged.
+        }
+        use std::os::unix::fs::PermissionsExt;
+        let root = unique_tmp_dir("bind-unreadable");
         let repo = root.join("repo");
-        std::fs::create_dir_all(repo.join("_haven")).unwrap();
-        std::os::unix::fs::symlink(&store_items, repo.join("_haven").join("items")).unwrap();
-        assert_eq!(suggest_key_for_repo(&repo), Some("retro".to_string()));
-
-        // No `_haven/` at all.
-        let bare = root.join("bare");
-        std::fs::create_dir_all(&bare).unwrap();
-        assert_eq!(suggest_key_for_repo(&bare), None);
-
-        // `_haven/items` present but a real directory, not a link.
-        let plain = root.join("plain");
-        std::fs::create_dir_all(plain.join("_haven").join("items")).unwrap();
-        assert_eq!(suggest_key_for_repo(&plain), None);
-
+        std::fs::create_dir_all(repo.join("sub")).unwrap();
+        std::fs::write(repo.join(BINDING_FILE), "retro\n").unwrap();
+        let blocked = repo.join("sub").join(BINDING_FILE);
+        std::fs::write(&blocked, "inner\n").unwrap();
+        std::fs::set_permissions(&blocked, std::fs::Permissions::from_mode(0o000)).unwrap();
+        assert_eq!(binding_from(&repo.join("sub")), None);
+        std::fs::set_permissions(&blocked, std::fs::Permissions::from_mode(0o644)).unwrap();
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn binding_is_trimmed() {
+        let root = unique_tmp_dir("bind-trim");
+        std::fs::write(root.join(BINDING_FILE), "  codezilla \n\n").unwrap();
+        assert_eq!(binding_from(&root), Some("codezilla".to_string()));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn repo_binding_errors_on_a_missing_dir() {
+        // A project directory that cannot be resolved is an error, not "unbound":
+        // the frontend keeps the last known value rather than flipping to the button.
+        let err = rt()
+            .block_on(haven_repo_binding("/nonexistent/cz-xyz".to_string()))
+            .unwrap_err();
+        assert!(err.contains("Cannot resolve path"), "got: {err}");
+    }
+
+    /// A repo directory whose path is already physical, so `$(pwd)` inside the
+    /// stub and the path we assert against are the same string.
+    fn physical_tmp_dir(tag: &str) -> PathBuf {
+        std::fs::canonicalize(unique_tmp_dir(tag)).unwrap()
+    }
+
+    #[test]
+    fn link_runs_in_the_repo_and_parses_the_result() {
+        let dir = physical_tmp_dir("link-ok");
+        let bin = stub_bin(
+            &dir,
+            "#!/bin/sh\n[ \"$1 $2\" = \"link -p\" ] || exit 9\nprintf '%s\\n' \"$3\" > \"$(pwd)/.haven-project\"\necho \"{\\\"workspace\\\":\\\"$(pwd)/_haven\\\",\\\"binding\\\":\\\"$(pwd)/.haven-project\\\",\\\"note\\\":\\\"x\\\"}\"\n",
+        );
+        let repo = dir.join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        let out = rt()
+            .block_on(link_with(bin.as_os_str(), &repo, "retro"))
+            .unwrap();
+        assert_eq!(
+            out.binding.as_deref(),
+            Some(repo.join(BINDING_FILE).to_string_lossy().as_ref())
+        );
+        // The cwd is the point: the marker landed in the repo, not anywhere else.
+        assert_eq!(binding_from(&repo), Some("retro".to_string()));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn link_surfaces_stderr_verbatim() {
+        let dir = physical_tmp_dir("link-err");
+        let bin = stub_bin(
+            &dir,
+            "#!/bin/sh\necho '{\"error\":{\"code\":\"not_found\",\"message\":\"no such project\"}}' >&2\nexit 1\n",
+        );
+        let repo = dir.join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        let err = rt()
+            .block_on(link_with(bin.as_os_str(), &repo, "nope"))
+            .unwrap_err();
+        assert!(err.contains("\"code\":\"not_found\""), "got: {err}");
+        assert!(err.contains("no such project"), "got: {err}");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn link_tolerates_non_json_success_output() {
+        // Exit 0 is the truth; the frontend re-reads the marker file anyway.
+        let dir = physical_tmp_dir("link-plain");
+        let bin = stub_bin(&dir, "#!/bin/sh\necho done\n");
+        let repo = dir.join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        let out = rt()
+            .block_on(link_with(bin.as_os_str(), &repo, "retro"))
+            .unwrap();
+        assert_eq!(out.workspace, None);
+        assert_eq!(out.binding, None);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn link_refuses_a_malformed_key_before_spawning() {
+        assert!(valid_project_key("article-to-video"));
+        assert!(valid_project_key("tom_bar2"));
+        assert!(!valid_project_key(""));
+        assert!(!valid_project_key("a b"));
+        assert!(!valid_project_key("../x"));
+
+        let dir = physical_tmp_dir("link-badkey");
+        let bin = stub_bin(&dir, "#!/bin/sh\ntouch \"$(pwd)/spawned\"\n");
+        let repo = dir.join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        assert!(rt()
+            .block_on(link_with(bin.as_os_str(), &repo, "bad key;"))
+            .is_err());
+        assert!(!repo.join("spawned").exists(), "the CLI was spawned anyway");
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

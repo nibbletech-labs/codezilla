@@ -53,8 +53,7 @@ export function useHavenLive() {
 
     const visibleKeyOf = (state: ReturnType<typeof store>): string | null => {
       if (document.hidden || !state.activeBacklogProjectId) return null;
-      const project = state.projects.find((p) => p.id === state.activeBacklogProjectId);
-      return project?.havenProjectKey ?? null;
+      return state.havenBindings[state.activeBacklogProjectId] ?? null;
     };
 
     let lastKeys: string[] = [];
@@ -62,7 +61,7 @@ export function useHavenLive() {
     let lastVisible: string | null = null;
     const sync = () => {
       const state = store();
-      const keys = linkedKeysOf(state.projects);
+      const keys = linkedKeysOf(state.havenBindings);
       const joined = keys.join(" ");
       if (joined !== lastJoined) {
         const unlinked = lastKeys.filter((key) => !keys.includes(key));

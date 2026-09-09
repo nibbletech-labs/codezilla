@@ -8,6 +8,8 @@ import { getGitWorktrees } from "../lib/tauri";
 import { attributeEnv } from "../lib/worktree";
 import type { AccentColorId, AppearanceMode } from "../lib/themes";
 import type { HavenGraph } from "../lib/havenTypes";
+import type { HavenProject } from "../lib/haven";
+import type { HavenBindings } from "../lib/havenBinding";
 
 const MAX_EXITED_THREADS_PER_PROJECT = 50;
 
@@ -111,7 +113,6 @@ interface AppState {
   touchThread: (threadId: string) => void;
 
   setProjectIcon: (projectId: string, icon: ProjectIcon | undefined) => void;
-  setProjectHavenKey: (projectId: string, key: string | undefined) => void;
   markProjectMissing: (projectId: string, missing: boolean) => void;
 
   // File tree actions
@@ -159,6 +160,17 @@ interface AppState {
   setHavenInstalled: (installed: boolean) => void;
   activeBacklogProjectId: string | null;
   selectBacklog: (projectId: string) => void;
+  /**
+   * Keyed by Codezilla project id: the Haven key its repo's `.haven-project`
+   * resolves to, `null` once checked and unbound, absent until first checked.
+   * Never persisted — the repo file is the only binding, always re-read.
+   */
+  havenBindings: HavenBindings;
+  /** Merge a batch of reads in one store update (so `useHavenLive` syncs once). */
+  setHavenBindings: (patch: HavenBindings) => void;
+  /** `haven project list`, refreshed with the bindings; null before the first read. */
+  havenProjects: HavenProject[] | null;
+  setHavenProjects: (projects: HavenProject[]) => void;
   /** Keyed by Haven project key. Not persisted - always re-read on launch. */
   havenGraphs: Record<string, HavenGraphEntry>;
   setHavenGraph: (key: string, graph: HavenGraph, readAt: number) => void;
@@ -234,6 +246,8 @@ export const useAppStore = create<AppState>((set, get) => ({
   activeJobId: null,
   havenInstalled: null,
   activeBacklogProjectId: null,
+  havenBindings: {},
+  havenProjects: null,
   havenGraphs: {},
   launchPresets: [],
   usage: null,
@@ -489,8 +503,14 @@ export const useAppStore = create<AppState>((set, get) => ({
           (j) => j.id === s.activeJobId && j.projectId === projectId,
         );
 
+      // Drop the binding too, or `linkedKeysOf` keeps a removed project's key
+      // alive and the live controller keeps reading its graph.
+      const nextHavenBindings = { ...s.havenBindings };
+      delete nextHavenBindings[projectId];
+
       return {
         projects: remainingProjects,
+        havenBindings: nextHavenBindings,
         threads: remainingThreads,
         scheduledJobs: s.scheduledJobs.filter((j) => j.projectId !== projectId),
         expandedPaths: nextExpandedPaths,
@@ -796,14 +816,6 @@ export const useAppStore = create<AppState>((set, get) => ({
     }));
   },
 
-  setProjectHavenKey: (projectId, key) => {
-    set((s) => ({
-      projects: s.projects.map((p) =>
-        p.id === projectId ? { ...p, havenProjectKey: key } : p,
-      ),
-    }));
-  },
-
   markProjectMissing: (projectId, missing) => {
     set((s) => ({
       projects: s.projects.map((p) =>
@@ -940,6 +952,24 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   setHavenInstalled: (installed) => set({ havenInstalled: installed }),
+
+  // A batch merge, filtered to projects that still exist: a read that lands
+  // after its project was removed must never re-add an entry.
+  setHavenBindings: (patch) =>
+    set((s) => {
+      const live = new Set(s.projects.map((p) => p.id));
+      const next = { ...s.havenBindings };
+      let changed = false;
+      for (const [id, key] of Object.entries(patch)) {
+        if (!live.has(id)) continue;
+        if (id in next && next[id] === key) continue;
+        next[id] = key;
+        changed = true;
+      }
+      return changed ? { havenBindings: next } : {};
+    }),
+
+  setHavenProjects: (projects) => set({ havenProjects: projects }),
 
   // A successful read clears any error but keeps the entry identity per key,
   // so `useHavenView`'s WeakMap only re-derives when the graph object changes.

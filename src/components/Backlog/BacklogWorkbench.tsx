@@ -1,6 +1,5 @@
 import { useState } from "react";
 import { useAppStore } from "../../store/appStore";
-import HavenLinkPicker from "./HavenLinkPicker";
 import { useHavenView } from "../../hooks/useHavenView";
 import { refreshHavenGraph } from "../../hooks/useHavenLive";
 import WorkbenchHeader from "./WorkbenchHeader";
@@ -14,8 +13,8 @@ import WorkbenchShell from "./WorkbenchShell";
 export default function BacklogWorkbench({ projectId }: { projectId: string }) {
   const project = useAppStore((s) => s.projects.find((p) => p.id === projectId));
   const havenInstalled = useAppStore((s) => s.havenInstalled);
-  const result = useHavenView(project?.havenProjectKey);
-  const [pickerAnchor, setPickerAnchor] = useState<{ x: number; y: number } | null>(null);
+  const havenKey = useAppStore((s) => s.havenBindings[projectId] ?? null);
+  const result = useHavenView(havenKey ?? undefined);
   // Owned here so the header is the real one in both of the states that draw it.
   const [hoverMode, setHoverMode] = useState<"tag" | "wire">("tag");
 
@@ -33,29 +32,16 @@ export default function BacklogWorkbench({ projectId }: { projectId: string }) {
     );
   }
 
-  // State 2 — installed, but this project has no binding yet.
-  if (!project.havenProjectKey) {
+  // State 2 — installed, but this project's repo carries no binding. Linking is
+  // the project page's job, so this state only says where to do it.
+  if (!havenKey) {
     return (
       <div style={styles.container}>
         <div style={styles.centred}>
-          <div style={styles.stateTitle}>This project isn't linked to Haven</div>
-          <button
-            style={styles.linkButton}
-            onClick={(e) => {
-              const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-              setPickerAnchor({ x: rect.left, y: rect.bottom + 4 });
-            }}
-          >
-            Link to Haven
-          </button>
+          <div style={styles.stateTitle}>
+            Not linked to Haven — link it from the project page
+          </div>
         </div>
-        {pickerAnchor && (
-          <HavenLinkPicker
-            project={project}
-            anchor={pickerAnchor}
-            onClose={() => setPickerAnchor(null)}
-          />
-        )}
       </div>
     );
   }
@@ -63,7 +49,7 @@ export default function BacklogWorkbench({ projectId }: { projectId: string }) {
   // State 4 — the read failed with nothing to keep on screen: the stderr text
   // verbatim (that is how store-skew errors reach the user), and a retry.
   const error = result?.entry.error ?? null;
-  const retry = () => refreshHavenGraph(project.havenProjectKey!);
+  const retry = () => refreshHavenGraph(havenKey);
   if (error && !result?.entry.graph) {
     return (
       <div style={styles.container}>
@@ -104,7 +90,7 @@ export default function BacklogWorkbench({ projectId }: { projectId: string }) {
         <style>{WORKBENCH_CSS}</style>
         <WorkbenchHeader
           name={project.name}
-          prefix={project.havenProjectKey}
+          prefix={havenKey}
           query=""
           onQuery={() => {}}
           hits={0}
@@ -124,7 +110,7 @@ export default function BacklogWorkbench({ projectId }: { projectId: string }) {
   return (
     <WorkbenchShell
       name={project.name}
-      projectKey={project.havenProjectKey}
+      projectKey={havenKey}
       result={result}
       onRefresh={retry}
       errorLine={errorLine}

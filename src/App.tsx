@@ -15,6 +15,7 @@ import { useTheme } from "./hooks/useTheme";
 import { useMenuEvents } from "./hooks/useMenuEvents";
 import { useUsage } from "./hooks/useUsage";
 import { useHavenDetect } from "./hooks/useHavenDetect";
+import { useHavenBindings } from "./hooks/useHavenBindings";
 import { useHavenLive } from "./hooks/useHavenLive";
 import { PANEL_WIDTHS, getLeftPanelWidth } from "./lib/constants";
 import { useAppStore } from "./store/appStore";
@@ -31,6 +32,7 @@ function App() {
   useMenuEvents();
   useUsage();
   useHavenDetect();
+  useHavenBindings();
   useHavenLive();
 
   const [rightPanelWidth, setRightPanelWidth] = useState<number>(PANEL_WIDTHS.right);

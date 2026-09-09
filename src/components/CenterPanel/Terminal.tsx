@@ -33,6 +33,7 @@ import ProjectIcon from "../ProjectIcon";
 import { IconPicker } from "../IconPicker";
 import { JobDetailPanel, JobCreationForm } from "../ScheduledJobs";
 import { BacklogWorkbench } from "../Backlog";
+import HavenLinkLine from "./HavenLinkLine";
 import PresetsManager from "../LaunchPresets/PresetsManager";
 import BetaFeaturesManager from "../BetaFeaturesManager";
 import {
@@ -996,6 +997,7 @@ export default function TerminalMultiplexer() {
               ))}
             </div>
           )}
+          {activeProject && <HavenLinkLine project={activeProject} />}
           {betaFeatures.scheduledJobs && activeProjectId && <ScheduledJobsSummary projectId={activeProjectId} getProjectJobs={getProjectJobs} setActiveJob={setActiveJob} onNewJob={() => setShowJobForm(true)} />}
           {activeProjectId && (
             <RemoveProjectButton onClick={() => removeProject(activeProjectId)} />

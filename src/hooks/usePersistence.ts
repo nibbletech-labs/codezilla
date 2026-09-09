@@ -91,7 +91,16 @@ export function usePersistence() {
         const store = await load(STORE_FILE);
         const saved = await store.get<Project[]>(PROJECTS_KEY);
         if (saved && saved.length > 0) {
-          loadProjects(saved);
+          // Pre-CZ-99 configs carry a `havenProjectKey` per project. The repo's
+          // `.haven-project` file is the only binding now, so drop the field on
+          // load — it is gone from the file on the next save.
+          const stripped = saved.map((p) => {
+            const { havenProjectKey: _legacy, ...rest } = p as Project & {
+              havenProjectKey?: unknown;
+            };
+            return rest as Project;
+          });
+          loadProjects(stripped);
         }
 
         const savedPaths = await store.get<Record<string, string[]>>(EXPANDED_PATHS_KEY);
