@@ -185,10 +185,21 @@ fn binding_from(start: &Path) -> Option<String> {
 /// The Haven project this repo is bound to, per its own `.haven-project` file.
 /// A path that cannot be resolved is an `Err`, never `Ok(None)`: an unreachable
 /// repo is not an unbound one, and the frontend keeps its last known value.
+///
+/// Both halves are blocking filesystem work — resolving the path and walking it
+/// for the marker can each stall for seconds on an unmounted network volume —
+/// so they run on the blocking pool, the same precedent `run_haven_bin_in` sets
+/// for `augmented_path()`. This command fires for every open project on launch,
+/// on every window focus and on every project selection; none of that may sit
+/// on an async worker.
 #[tauri::command]
 pub async fn haven_repo_binding(path: String) -> Result<Option<String>, String> {
-    let repo = crate::fs::canonicalize_path(&path)?;
-    Ok(binding_from(&repo))
+    tokio::task::spawn_blocking(move || -> Result<Option<String>, String> {
+        let repo = crate::fs::canonicalize_path(&path)?;
+        Ok(binding_from(&repo))
+    })
+    .await
+    .map_err(|e| format!("Could not read the repo binding: {e}"))?
 }
 
 /// `^[A-Za-z0-9_][A-Za-z0-9_-]*$`, checked by hand so no regex crate is needed.
@@ -203,20 +214,15 @@ fn valid_project_key(key: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
 }
 
-/// What `haven link` prints on success. Tolerant and informative only: exit 0
-/// is the truth, and the frontend re-reads `.haven-project` afterwards anyway.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct HavenLinkResult {
-    #[serde(default)]
-    pub workspace: Option<String>,
-    #[serde(default)]
-    pub binding: Option<String>,
-}
-
 /// `haven link -p <key>`, run *inside* `repo` — the CLI binds whatever
 /// directory it runs in. A non-zero exit surfaces the CLI's stderr verbatim,
 /// JSON error envelope and all, which is what the user sees under the button.
-async fn link_with(bin: &OsStr, repo: &Path, key: &str) -> Result<HavenLinkResult, String> {
+///
+/// Success carries nothing: whatever the CLI printed is informative only, and
+/// the caller re-reads `.haven-project` — the one source of truth — straight
+/// afterwards. A run that exits 0 without writing the marker is caught there,
+/// not here.
+async fn link_with(bin: &OsStr, repo: &Path, key: &str) -> Result<(), String> {
     if !valid_project_key(key) {
         return Err(format!("Not a Haven project key: {key}"));
     }
@@ -224,15 +230,11 @@ async fn link_with(bin: &OsStr, repo: &Path, key: &str) -> Result<HavenLinkResul
     if !out.status.success() {
         return Err(failure_text("link", &out));
     }
-    let stdout = String::from_utf8_lossy(&out.stdout);
-    Ok(serde_json::from_str(&stdout).unwrap_or_else(|e| {
-        warn!("haven link: could not read the success envelope ({e}); ignoring it");
-        HavenLinkResult::default()
-    }))
+    Ok(())
 }
 
 #[tauri::command]
-pub async fn haven_link(path: String, key: String) -> Result<HavenLinkResult, String> {
+pub async fn haven_link(path: String, key: String) -> Result<(), String> {
     let repo = crate::fs::canonicalize_path(&path)?;
     link_with(&haven_bin(), &repo, &key).await
 }
@@ -535,23 +537,34 @@ mod tests {
     }
 
     #[test]
-    fn link_runs_in_the_repo_and_parses_the_result() {
+    fn link_runs_in_the_repo() {
+        // The cwd is the whole contract: `haven link` binds whatever directory
+        // it runs in, and what it prints is not read at all.
         let dir = physical_tmp_dir("link-ok");
         let bin = stub_bin(
             &dir,
-            "#!/bin/sh\n[ \"$1 $2\" = \"link -p\" ] || exit 9\nprintf '%s\\n' \"$3\" > \"$(pwd)/.haven-project\"\necho \"{\\\"workspace\\\":\\\"$(pwd)/_haven\\\",\\\"binding\\\":\\\"$(pwd)/.haven-project\\\",\\\"note\\\":\\\"x\\\"}\"\n",
+            "#!/bin/sh\n[ \"$1 $2\" = \"link -p\" ] || exit 9\nprintf '%s\\n' \"$3\" > \"$(pwd)/.haven-project\"\necho \"{\\\"workspace\\\":\\\"$(pwd)/_haven\\\"}\"\n",
         );
         let repo = dir.join("repo");
         std::fs::create_dir_all(&repo).unwrap();
-        let out = rt()
-            .block_on(link_with(bin.as_os_str(), &repo, "retro"))
-            .unwrap();
-        assert_eq!(
-            out.binding.as_deref(),
-            Some(repo.join(BINDING_FILE).to_string_lossy().as_ref())
-        );
-        // The cwd is the point: the marker landed in the repo, not anywhere else.
+        assert_eq!(rt().block_on(link_with(bin.as_os_str(), &repo, "retro")), Ok(()));
+        // The marker landed in the repo, not in the stub's own directory.
         assert_eq!(binding_from(&repo), Some("retro".to_string()));
+        assert_eq!(binding_from(&dir), None);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn link_success_without_marker_is_reported_by_the_reread() {
+        // Exit 0 with no marker written is a success as far as the command goes
+        // — the re-read is what catches it, and that is the condition the
+        // project page turns into "haven link succeeded but ... was not found".
+        let dir = physical_tmp_dir("link-nomarker");
+        let bin = stub_bin(&dir, "#!/bin/sh\nexit 0\n");
+        let repo = dir.join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        assert_eq!(rt().block_on(link_with(bin.as_os_str(), &repo, "retro")), Ok(()));
+        assert_eq!(binding_from(&repo), None);
         std::fs::remove_dir_all(dir).unwrap();
     }
 
@@ -569,21 +582,6 @@ mod tests {
             .unwrap_err();
         assert!(err.contains("\"code\":\"not_found\""), "got: {err}");
         assert!(err.contains("no such project"), "got: {err}");
-        std::fs::remove_dir_all(dir).unwrap();
-    }
-
-    #[test]
-    fn link_tolerates_non_json_success_output() {
-        // Exit 0 is the truth; the frontend re-reads the marker file anyway.
-        let dir = physical_tmp_dir("link-plain");
-        let bin = stub_bin(&dir, "#!/bin/sh\necho done\n");
-        let repo = dir.join("repo");
-        std::fs::create_dir_all(&repo).unwrap();
-        let out = rt()
-            .block_on(link_with(bin.as_os_str(), &repo, "retro"))
-            .unwrap();
-        assert_eq!(out.workspace, None);
-        assert_eq!(out.binding, None);
         std::fs::remove_dir_all(dir).unwrap();
     }
 

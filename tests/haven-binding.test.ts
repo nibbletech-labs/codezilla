@@ -1,13 +1,21 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import {
+  type BindingRead,
+  type HavenBindings,
   chooserSections,
   folderNameOf,
+  linkedCounts,
   linkedKeysOf,
   linkedLineSegments,
+  mergeBindings,
   showBacklogRow,
   takenByOthers,
 } from "../src/lib/havenBinding.ts";
+import { bucketView, deriveView } from "../src/lib/havenGraph.ts";
+import type { HavenGraphLike } from "../src/lib/havenTypes.ts";
 
 // --- CZ-99: the repo file is the binding -------------------------------------
 
@@ -157,4 +165,82 @@ test("linkedLineSegments reads as the mockup's line", () => {
     linkedLineSegments("Heed", "HD", 0, 0).join(" · "),
     "Heed · HD · 0 live · 0 ready",
   );
+});
+
+// --- mergeBindings: only a real read may move the map ------------------------
+
+const LIVE = ["p1", "p2"];
+
+test("mergeBindings: a superseded read writes nothing", () => {
+  const current: HavenBindings = {};
+  const next = mergeBindings(current, { p1: { status: "superseded" } }, LIVE);
+  assert.deepEqual(next, {});
+  assert.equal(next, current, "an empty merge keeps the same object");
+});
+
+test("mergeBindings: a failed read keeps the last known value", () => {
+  // An unreachable repo is not an unbound one — the line must not flip back to
+  // the Link button for it.
+  const current: HavenBindings = { p1: "retrostack" };
+  const failed: Record<string, BindingRead> = {
+    p1: { status: "failed", error: "Cannot resolve path" },
+    p2: { status: "failed", error: "Cannot resolve path" },
+  };
+  const next = mergeBindings(current, failed, LIVE);
+  assert.deepEqual(next, { p1: "retrostack" });
+  assert.equal(next, current);
+  // And a project with no entry yet gains none.
+  assert.equal("p2" in next, false);
+});
+
+test("mergeBindings: a read of null is an entry, not an absence", () => {
+  // `null` is "checked and unbound" — that is what shows the Link button.
+  const next = mergeBindings({}, { p1: { status: "read", key: null } }, LIVE);
+  assert.deepEqual(next, { p1: null });
+});
+
+test("mergeBindings: a read key lands", () => {
+  const next = mergeBindings({ p1: null }, { p1: { status: "read", key: "retrostack" } }, LIVE);
+  assert.deepEqual(next, { p1: "retrostack" });
+});
+
+test("mergeBindings: an id that is no longer a project is dropped", () => {
+  // A read landing after its project was removed must never re-add it, and the
+  // stale entry goes with it.
+  const next = mergeBindings(
+    { p1: "retrostack", gone: "heed" },
+    { gone: { status: "read", key: "heed" } },
+    LIVE,
+  );
+  assert.deepEqual(next, { p1: "retrostack" });
+});
+
+test("mergeBindings: an unchanged read returns the very same object", () => {
+  // Identity is the contract the store leans on: no new object, no re-render.
+  const current: HavenBindings = { p1: "retrostack", p2: null };
+  const next = mergeBindings(
+    current,
+    { p1: { status: "read", key: "retrostack" }, p2: { status: "read", key: null } },
+    LIVE,
+  );
+  assert.equal(next, current);
+});
+
+// --- linkedCounts: the two numbers the project page's line shows -------------
+
+const FIXTURES = path.join(import.meta.dirname, "../src-tauri/tests/fixtures/haven");
+const FIXTURE_NOW = Date.parse("2026-09-07T23:00:00Z");
+
+test("linkedCounts reads live and ready off the derived fixture", () => {
+  const view = deriveView(
+    JSON.parse(
+      readFileSync(path.join(FIXTURES, "retrostack-2026-09-07.raw.json"), "utf8"),
+    ) as HavenGraphLike,
+  );
+  assert.deepEqual(linkedCounts(bucketView(view, FIXTURE_NOW)), { live: 29, ready: 68 });
+});
+
+test("linkedCounts: no read yet is a dash on both, not a zero", () => {
+  assert.deepEqual(linkedCounts(null), { live: null, ready: null });
+  assert.deepEqual(linkedCounts(undefined), { live: null, ready: null });
 });

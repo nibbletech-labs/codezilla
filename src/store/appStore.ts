@@ -9,7 +9,7 @@ import { attributeEnv } from "../lib/worktree";
 import type { AccentColorId, AppearanceMode } from "../lib/themes";
 import type { HavenGraph } from "../lib/havenTypes";
 import type { HavenProject } from "../lib/haven";
-import type { HavenBindings } from "../lib/havenBinding";
+import { mergeBindings, type BindingRead, type HavenBindings } from "../lib/havenBinding";
 
 const MAX_EXITED_THREADS_PER_PROJECT = 50;
 
@@ -167,7 +167,7 @@ interface AppState {
    */
   havenBindings: HavenBindings;
   /** Merge a batch of reads in one store update (so `useHavenLive` syncs once). */
-  setHavenBindings: (patch: HavenBindings) => void;
+  setHavenBindings: (reads: Record<string, BindingRead>) => void;
   /** `haven project list`, refreshed with the bindings; null before the first read. */
   havenProjects: HavenProject[] | null;
   setHavenProjects: (projects: HavenProject[]) => void;
@@ -953,21 +953,13 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   setHavenInstalled: (installed) => set({ havenInstalled: installed }),
 
-  // A batch merge, filtered to projects that still exist: a read that lands
-  // after its project was removed must never re-add an entry.
-  setHavenBindings: (patch) =>
-    set((s) => {
-      const live = new Set(s.projects.map((p) => p.id));
-      const next = { ...s.havenBindings };
-      let changed = false;
-      for (const [id, key] of Object.entries(patch)) {
-        if (!live.has(id)) continue;
-        if (id in next && next[id] === key) continue;
-        next[id] = key;
-        changed = true;
-      }
-      return changed ? { havenBindings: next } : {};
-    }),
+  // Every rule about which reads may move the map lives in `mergeBindings`,
+  // where it is testable under plain node; the store just supplies the current
+  // map and the ids that are still projects.
+  setHavenBindings: (reads) =>
+    set((s) => ({
+      havenBindings: mergeBindings(s.havenBindings, reads, s.projects.map((p) => p.id)),
+    })),
 
   setHavenProjects: (projects) => set({ havenProjects: projects }),
 

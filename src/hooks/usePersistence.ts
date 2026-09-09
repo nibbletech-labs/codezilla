@@ -98,7 +98,7 @@ export function usePersistence() {
             const { havenProjectKey: _legacy, ...rest } = p as Project & {
               havenProjectKey?: unknown;
             };
-            return rest as Project;
+            return rest;
           });
           loadProjects(stripped);
         }

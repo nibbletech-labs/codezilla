@@ -308,8 +308,8 @@ function SortableProjectItem({
   const backlogSelected = useAppStore((s) => s.activeBacklogProjectId === project.id);
   // The Backlog row count, from this project's Haven graph. Called here rather
   // than inline in the JSX so it stays an unconditional top-level hook.
-  const havenKey = useAppStore((s) => s.havenBindings[project.id] ?? undefined);
-  const liveCount = useHavenLiveCount(havenKey);
+  const havenKey = useAppStore((s) => s.havenBindings[project.id]);
+  const liveCount = useHavenLiveCount(havenKey ?? undefined);
 
   return (
     <div ref={setNodeRef} style={style} {...attributes} {...listeners}>
@@ -360,7 +360,7 @@ function SortableProjectItem({
         </button>
       </div>
 
-      <ProjectBacklogRow project={project} havenKey={havenKey} liveCount={liveCount} />
+      <ProjectBacklogRow projectId={project.id} havenKey={havenKey} liveCount={liveCount} />
       {betaFeatures.scheduledJobs && jobIds.length > 0 && (
         <ScheduledSection jobIds={jobIds} activeJobId={activeJobId} setActiveJob={setActiveJob} />
       )}

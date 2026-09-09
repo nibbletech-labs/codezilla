@@ -2,11 +2,15 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useAppStore } from "../../store/appStore";
 import type { Project } from "../../store/types";
-import { havenListProjects, type HavenProject } from "../../lib/haven";
+import type { HavenProject } from "../../lib/haven";
 import { chooserSections, folderNameOf } from "../../lib/havenBinding";
+import { refreshHavenProjects } from "../../hooks/useHavenBindings";
 
 /** Roughly the popup's full height, so a short window never clips the footer. */
 const CHOOSER_HEIGHT = 380;
+
+/** One shared empty list, so "not read yet" is a stable reference too. */
+const NO_PROJECTS: HavenProject[] = [];
 
 /**
  * Always-visible scrollbar on the option list. macOS hides overlay scrollbars
@@ -45,26 +49,22 @@ export default function HavenProjectChooser({
   onChoose: (key: string) => void;
   onClose: () => void;
 }) {
-  const cached = useAppStore((s) => s.havenProjects);
-  const setHavenProjects = useAppStore((s) => s.setHavenProjects);
+  // The store's copy is the list — `refreshHavenProjects` is its single owner,
+  // so the rows here and the linked line's title can never disagree.
+  const projects = useAppStore((s) => s.havenProjects) ?? NO_PROJECTS;
   const containerRef = useRef<HTMLDivElement>(null);
   const listboxRef = useRef<HTMLDivElement>(null);
   // Only a cold open waits: with a cached list the rows are there immediately
   // and the fresh read swaps in behind them.
-  const [loading, setLoading] = useState(cached === null);
+  const [loading, setLoading] = useState(() => useAppStore.getState().havenProjects === null);
   const [error, setError] = useState<string | null>(null);
-  const [projects, setProjects] = useState<HavenProject[]>(cached ?? []);
   const [highlightedKey, setHighlightedKey] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
-    havenListProjects()
-      .then((listed) => {
-        if (cancelled) return;
-        setProjects(listed);
-        // Keep the store's copy current so the linked line's title is too.
-        setHavenProjects(listed);
-        setLoading(false);
+    refreshHavenProjects()
+      .then(() => {
+        if (!cancelled) setLoading(false);
       })
       .catch((e) => {
         if (cancelled) return;
@@ -75,8 +75,12 @@ export default function HavenProjectChooser({
     return () => {
       cancelled = true;
     };
-  }, [setHavenProjects]);
+  }, []);
 
+  // Worth keeping now that both inputs are stable references: `projects` is the
+  // store's own array and `takenBy` is memoised by the caller, so this only
+  // re-sorts when the list or the bindings actually change — not on every
+  // keystroke that moves the highlight.
   const sections = useMemo(
     () => chooserSections(projects, takenBy, folderNameOf(project.path)),
     [projects, takenBy, project.path],

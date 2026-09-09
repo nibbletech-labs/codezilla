@@ -1,8 +1,8 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useAppStore } from "../../store/appStore";
 import type { Project } from "../../store/types";
 import { havenLink } from "../../lib/haven";
-import { linkedLineSegments, takenByOthers } from "../../lib/havenBinding";
+import { linkedCounts, linkedLineSegments, takenByOthers } from "../../lib/havenBinding";
 import { refreshHavenBindings } from "../../hooks/useHavenBindings";
 import { useHavenView } from "../../hooks/useHavenView";
 import HavenProjectChooser from "./HavenProjectChooser";
@@ -36,7 +36,10 @@ export default function HavenLinkLine({ project }: { project: Project }) {
   const [linking, setLinking] = useState(false);
   const [linkError, setLinkError] = useState<string | null>(null);
   const [chooserAnchor, setChooserAnchor] = useState<{ x: number; y: number } | null>(null);
-  // The user can switch projects mid-link; nothing may be written after that.
+  // The user can leave the project page mid-link — start a session, open the
+  // backlog — and nothing may be written after that. Switching to *another*
+  // project is a different matter: the `key` on this component in Terminal.tsx
+  // remounts it, so this ref never has to reason about whose link it was.
   const mounted = useRef(true);
   useEffect(() => {
     mounted.current = true;
@@ -44,6 +47,19 @@ export default function HavenLinkLine({ project }: { project: Project }) {
       mounted.current = false;
     };
   }, []);
+
+  // A binding that has landed is the answer, whatever the last attempt said —
+  // including a link the user completed in a terminal after an in-app failure.
+  useEffect(() => {
+    if (binding) setLinkError(null);
+  }, [binding]);
+
+  // Stable across the chooser's own renders, so its `chooserSections` memo
+  // actually holds.
+  const takenBy = useMemo(
+    () => takenByOthers(projects, bindings, project.id),
+    [projects, bindings, project.id],
+  );
 
   if (havenInstalled !== true) return null;
 
@@ -53,9 +69,12 @@ export default function HavenLinkLine({ project }: { project: Project }) {
     setLinking(true);
     try {
       await havenLink(project.path, key);
-      await refreshHavenBindings(project.id);
+      const outcome = await refreshHavenBindings(project.id);
       if (!mounted.current) return;
-      if (!useAppStore.getState().havenBindings[project.id]) {
+      // Only a *successful* re-read that came back unbound proves the marker
+      // file is missing. A read that failed or was superseded says nothing
+      // about the repo, and must not be reported as a broken link.
+      if (outcome.status === "read" && outcome.key === null) {
         setLinkError(`haven link succeeded but ${project.path}/.haven-project was not found`);
       }
     } catch (e) {
@@ -73,11 +92,12 @@ export default function HavenLinkLine({ project }: { project: Project }) {
     if (binding === undefined) return null;
     if (binding) {
       const listed = havenProjects?.find((p) => p.key === binding);
+      const { live, ready } = linkedCounts(view?.buckets);
       const segments = linkedLineSegments(
         listed?.title || binding,
         listed?.ref_prefix ?? null,
-        view?.buckets?.live ?? null,
-        view?.buckets?.ready.length ?? null,
+        live,
+        ready,
       );
       return (
         <>
@@ -95,7 +115,12 @@ export default function HavenLinkLine({ project }: { project: Project }) {
               tabIndex={0}
               onClick={() => selectBacklog(project.id)}
               onKeyDown={(e) => {
-                if (e.key === "Enter" || e.key === " ") selectBacklog(project.id);
+                // Space would scroll the page and Enter can submit an ancestor
+                // form; the key press is ours either way.
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  selectBacklog(project.id);
+                }
               }}
             >
               Open backlog
@@ -122,7 +147,7 @@ export default function HavenLinkLine({ project }: { project: Project }) {
       {chooserAnchor && (
         <HavenProjectChooser
           project={project}
-          takenBy={takenByOthers(projects, bindings, project.id)}
+          takenBy={takenBy}
           anchor={chooserAnchor}
           onChoose={onChoose}
           onClose={() => setChooserAnchor(null)}

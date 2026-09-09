@@ -27,17 +27,14 @@ export function havenRepoBinding(path: string): Promise<string | null> {
   return invoke("haven_repo_binding", { path });
 }
 
-/** What `haven link` prints on success. Informative only; exit 0 is the truth. */
-export interface HavenLinkResult {
-  workspace: string | null;
-  binding: string | null;
-}
-
 /**
- * `haven link -p <key>`, run inside the repo. Rejects with the CLI's stderr
- * verbatim, which is what the project page shows under the button.
+ * `haven link -p <key>`, run inside the repo. Resolving means exit 0 and
+ * nothing more: what the CLI printed is informative only, and the caller
+ * re-reads `.haven-project` — the only source of truth — afterwards. Rejects
+ * with the CLI's stderr verbatim, which is what the project page shows under
+ * the button.
  */
-export function havenLink(path: string, key: string): Promise<HavenLinkResult> {
+export function havenLink(path: string, key: string): Promise<void> {
   return invoke("haven_link", { path, key });
 }
 

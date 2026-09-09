@@ -997,7 +997,9 @@ export default function TerminalMultiplexer() {
               ))}
             </div>
           )}
-          {activeProject && <HavenLinkLine project={activeProject} />}
+          {/* The key is load-bearing: linking/linkError/chooser are per-project
+              transient state and must not survive a switch to another project. */}
+          {activeProject && <HavenLinkLine key={activeProject.id} project={activeProject} />}
           {betaFeatures.scheduledJobs && activeProjectId && <ScheduledJobsSummary projectId={activeProjectId} getProjectJobs={getProjectJobs} setActiveJob={setActiveJob} onNewJob={() => setShowJobForm(true)} />}
           {activeProjectId && (
             <RemoveProjectButton onClick={() => removeProject(activeProjectId)} />

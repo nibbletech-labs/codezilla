@@ -1,6 +1,5 @@
 import { useState } from "react";
 import { useAppStore } from "../../store/appStore";
-import type { Project } from "../../store/types";
 import { showBacklogRow } from "../../lib/havenBinding";
 
 /**
@@ -10,18 +9,22 @@ import { showBacklogRow } from "../../lib/havenBinding";
  * sidebar affordance for an unbound project.
  */
 export default function ProjectBacklogRow({
-  project,
+  projectId,
   havenKey,
   liveCount,
 }: {
-  project: Project;
-  /** The Haven key this project's repo is bound to, from `store.havenBindings`. */
-  havenKey?: string;
+  projectId: string;
+  /**
+   * The Haven key this project's repo is bound to, straight from
+   * `store.havenBindings`: a key, `null` for checked-and-unbound, `undefined`
+   * before the first read.
+   */
+  havenKey: string | null | undefined;
   /** Live item count, once the graph read lands. `—` until then. */
   liveCount?: number | null;
 }) {
   const havenInstalled = useAppStore((s) => s.havenInstalled);
-  const isActive = useAppStore((s) => s.activeBacklogProjectId === project.id);
+  const isActive = useAppStore((s) => s.activeBacklogProjectId === projectId);
   const selectBacklog = useAppStore((s) => s.selectBacklog);
   const [hovered, setHovered] = useState(false);
 
@@ -40,7 +43,7 @@ export default function ProjectBacklogRow({
     <div style={styles.body}>
       <div
         style={rowStyle}
-        onClick={() => selectBacklog(project.id)}
+        onClick={() => selectBacklog(projectId)}
         onMouseEnter={() => setHovered(true)}
         onMouseLeave={() => setHovered(false)}
         title="Haven backlog"

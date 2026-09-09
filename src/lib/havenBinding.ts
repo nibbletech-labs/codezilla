@@ -6,6 +6,8 @@
  * appears at all are assertable under plain node (tests/haven-binding.test.ts).
  */
 
+import type { HavenBuckets } from "./havenTypes";
+
 /**
  * Every distinct Haven key the open projects are bound to, in the order the
  * bindings map first mentions them. An unbound or empty entry is not a binding,
@@ -30,6 +32,50 @@ export function linkedKeysOf(bindings: HavenBindings): string[] {
  * unbound, and absent until the first read lands.
  */
 export type HavenBindings = Record<string, string | null>;
+
+/**
+ * The outcome of one binding read, tagged so the caller cannot mistake the
+ * three for each other:
+ *
+ * - `read` — the repo was reached. `key` is its Haven key, or `null` for
+ *   "checked and unbound", which is the only thing that shows the Link button.
+ * - `superseded` — a newer read for the same project started first, so this
+ *   result is stale and must not be written.
+ * - `failed` — the repo path could not be resolved at all (an unmounted volume,
+ *   say). An unreachable repo is not an unbound one, so the last known value
+ *   stands rather than the page flipping back to the Link button.
+ */
+export type BindingRead =
+  | { status: "read"; key: string | null }
+  | { status: "superseded" }
+  | { status: "failed"; error: string };
+
+/**
+ * Fold a batch of reads into the bindings map. Only `read` outcomes are
+ * written; ids that are no longer projects are dropped, so a read landing after
+ * its project was removed can never re-add it. Returns `current` itself when
+ * nothing moved — the store leans on that identity to skip a re-render.
+ */
+export function mergeBindings(
+  current: HavenBindings,
+  reads: Record<string, BindingRead>,
+  liveIds: string[],
+): HavenBindings {
+  const live = new Set(liveIds);
+  const next: HavenBindings = {};
+  let changed = false;
+  for (const [id, key] of Object.entries(current)) {
+    if (live.has(id)) next[id] = key;
+    else changed = true;
+  }
+  for (const [id, read] of Object.entries(reads)) {
+    if (read.status !== "read" || !live.has(id)) continue;
+    if (id in next && next[id] === read.key) continue;
+    next[id] = read.key;
+    changed = true;
+  }
+  return changed ? next : current;
+}
 
 /**
  * The sidebar's Backlog row: only for a project that is actually bound, and
@@ -125,4 +171,15 @@ export function linkedLineSegments(
   if (prefix) segments.push(prefix);
   segments.push(`${count(live)} live`, `${count(ready)} ready`);
   return segments;
+}
+
+/**
+ * The two numbers the linked line shows. `null` — no graph read has landed yet
+ * — renders as a dash, while a real zero renders as a zero.
+ */
+export function linkedCounts(
+  buckets: HavenBuckets | null | undefined,
+): { live: number | null; ready: number | null } {
+  if (!buckets) return { live: null, ready: null };
+  return { live: buckets.live, ready: buckets.ready.length };
 }
