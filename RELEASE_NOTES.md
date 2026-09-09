@@ -1,3 +1,21 @@
+## v0.5.0 — Haven Backlog View
+
+Codezilla can show a project's Haven backlog in the app.
+
+**New**
+
+- **Backlog view** — linked projects get a Backlog row in the sidebar. It opens four tabs: In flight, Blocked, Backlog (by epic), Done.
+- **Updates live** — changes made from any terminal appear within a second.
+- **Dependency links** — click through what an item waits on and what it unblocks, with a back trail.
+- **Search and hover** — search filters the current tab; hover highlights an item's epic.
+- **Link a repo from the project page** — repos linked with `haven link` are detected. Unlinked repos show a Link to Haven button.
+- **Read-only** — the view shows what Haven holds. No edits yet.
+
+**Fixes**
+
+- Codex usage now loads when Codezilla is started from the Dock.
+- Skills & Plugins Manager removed.
+
 ## v0.4.9 — Heed and Usage Follow-Ups
 
 Small fixes from the 0.4.8 review, shipped together.
