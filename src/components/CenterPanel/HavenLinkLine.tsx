@@ -6,11 +6,7 @@ import { linkedCounts, linkedLineSegments, takenByOthers } from "../../lib/haven
 import { refreshHavenBindings } from "../../hooks/useHavenBindings";
 import { useHavenView } from "../../hooks/useHavenView";
 import HavenProjectChooser from "./HavenProjectChooser";
-
-const LINE_CSS = `
-@keyframes cz-hv-spin { to { transform: rotate(360deg); } }
-.cz-hv-busy::before { content: "↻ "; display: inline-block; animation: cz-hv-spin 0.6s linear infinite; }
-`;
+import "../../styles/havenLinkLine.css";
 
 /**
  * The project page's one line about Haven, under the session buttons.
@@ -141,7 +137,6 @@ export default function HavenLinkLine({ project }: { project: Project }) {
 
   return (
     <div style={styles.wrap}>
-      <style>{LINE_CSS}</style>
       <div style={styles.line}>{body()}</div>
       {linkError && <div style={styles.errorText}>{linkError}</div>}
       {chooserAnchor && (

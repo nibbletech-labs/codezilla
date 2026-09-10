@@ -11,6 +11,7 @@ import { useGitStatus } from "../../hooks/useGitStatus";
 import { resolveProjectRootForPath } from "../../lib/worktree";
 import DiffView from "./DiffView";
 import type { MarkdownSourceEditorHandle } from "./MarkdownSourceEditor";
+import "../../styles/filePreview.css";
 
 const MarkdownSourceEditor = lazy(() => import("./MarkdownSourceEditor"));
 
@@ -586,23 +587,6 @@ export default function FilePreview({ filePath, line, initialMode = "preview", o
 
   return (
     <div style={styles.backdrop} onClick={handleBackdropClick}>
-      <style>{`
-        @keyframes preview-backdrop-in {
-          from { opacity: 0; }
-          to { opacity: 1; }
-        }
-        @keyframes preview-modal-in {
-          from { opacity: 0; transform: scale(0.96); }
-          to { opacity: 1; transform: scale(1); }
-        }
-        @keyframes highlight-fade {
-          0% { background-color: rgba(255, 213, 79, 0.3); }
-          100% { background-color: transparent; }
-        }
-        .highlight-line {
-          animation: highlight-fade 2s ease-out forwards;
-        }
-      `}</style>
       <div style={styles.modal}>
         <div style={styles.header}>
           <div style={styles.headerLeft}>

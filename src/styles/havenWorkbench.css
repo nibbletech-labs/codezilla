@@ -1,16 +1,21 @@
 /**
  * The r13 mockup's treatment, ported token-for-token with an `hz-` prefix.
  *
- * One `<style>` block rather than the codebase's usual inline style objects,
- * because the mockup depends on `:hover`, `::before` epic edges, attribute-driven
- * dimming, `-webkit-line-clamp`, keyframes and per-container scrollbars — none of
- * which an inline style can express. `FilePreview.tsx` sets the precedent for a
- * component-owned `<style>` element.
+ * A stylesheet rather than the codebase's usual inline style objects, because
+ * the mockup depends on `:hover`, `::before` epic edges, attribute-driven
+ * dimming, `-webkit-line-clamp`, keyframes and per-container scrollbars — none
+ * of which an inline style can express.
+ *
+ * It is a static `.css` file, not a component-owned `<style>` element: Tauri
+ * stamps a nonce into the packaged app's `style-src`, and a nonce source makes
+ * the CSP ignore `'unsafe-inline'`, so any `<style>` React injects at runtime is
+ * blocked in a packaged build. Vite bundles this file and links it, which
+ * `'self'` allows.
  *
  * `--gc` is the epic colour, set per node; `--dw` is the detail column's width,
  * set on the root.
  */
-export const WORKBENCH_CSS = `
+
 .hz-root { position: relative; }
 
 .hz-head { display: flex; align-items: center; gap: 12px; padding: 11px 16px 0; flex: 0 0 auto; }
@@ -160,10 +165,9 @@ export const WORKBENCH_CSS = `
 .hz-seq .hz-step { display: inline-flex; align-items: center; gap: 5px; border: 1px solid var(--border-default); border-radius: 11px; padding: 2px 9px; font-size: 11px; color: var(--text-primary); cursor: pointer; white-space: nowrap; font-variant-numeric: tabular-nums; background: none; font-family: inherit; }
 .hz-seq .hz-step:hover { border-color: var(--accent); }
 .hz-seq .hz-step.hz-from { border-color: var(--accent); border-style: dashed; }
-.hz-seq .hz-step.hz-from::before { content: "\\2039 "; color: var(--accent); }
+.hz-seq .hz-step.hz-from::before { content: "\2039 "; color: var(--accent); }
 .hz-seq .hz-step .hz-sl { color: var(--text-hint); }
 .hz-offview { margin: 10px 0 0; padding: 7px 9px; border-radius: 4px; font-size: 12px; line-height: 1.45; background: var(--bg-elevated); border: 1px solid var(--border-default); color: var(--text-secondary); }
 
 .hz-row:focus-visible, .hz-card:focus-visible, .hz-tab:focus-visible, .hz-ghead:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 @media (prefers-reduced-motion: reduce) { .hz-root * { animation: none !important; transition: none !important; } }
-`;

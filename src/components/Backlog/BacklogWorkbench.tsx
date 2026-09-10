@@ -3,8 +3,8 @@ import { useAppStore } from "../../store/appStore";
 import { useHavenView } from "../../hooks/useHavenView";
 import { refreshHavenGraph } from "../../hooks/useHavenLive";
 import WorkbenchHeader from "./WorkbenchHeader";
-import { WORKBENCH_CSS } from "./workbenchStyles";
 import WorkbenchShell from "./WorkbenchShell";
+import "../../styles/havenWorkbench.css";
 
 /**
  * The centre-area Haven workbench. This file owns the four whole-view states
@@ -87,7 +87,6 @@ export default function BacklogWorkbench({ projectId }: { projectId: string }) {
     // being a second, slightly different one.
     return (
       <div className="hz-root" style={styles.container}>
-        <style>{WORKBENCH_CSS}</style>
         <WorkbenchHeader
           name={project.name}
           prefix={havenKey}

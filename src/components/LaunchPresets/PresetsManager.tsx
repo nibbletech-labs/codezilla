@@ -5,7 +5,8 @@ import type { ThreadType, LaunchPreset, ProjectIcon } from "../../store/types";
 import ThreadIcon from "../LeftPanel/ThreadIcons";
 import { IconPicker } from "../IconPicker";
 import PresetIconButton from "./PresetIconButton";
-import { modalStyles, modalKeyframes } from "../../styles/modal";
+import { modalStyles } from "../../styles/modal";
+import "../../styles/modal.css";
 import { useModalBackdrop } from "../../hooks/useModalBackdrop";
 
 const TYPE_OPTIONS: { type: ThreadType; label: string }[] = [
@@ -40,7 +41,6 @@ export default function PresetsManager() {
         if (e.target === e.currentTarget) closeManager();
       }}
     >
-      <style>{modalKeyframes}</style>
       <div style={styles.modal}>
         {/* Header */}
         <div style={styles.header}>

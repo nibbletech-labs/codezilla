@@ -3,6 +3,7 @@ import { getCommitInfo } from "../../lib/tauri";
 import type { CommitInfo } from "../../lib/tauri";
 import { useAppStore } from "../../store/appStore";
 import { timeAgo } from "../../lib/timeAgo";
+import "../../styles/commitPreview.css";
 
 interface CommitPreviewProps {
   commitHash: string;
@@ -121,16 +122,6 @@ export default function CommitPreview({ commitHash, onClose }: CommitPreviewProp
 
   return (
     <div style={styles.backdrop} onClick={handleBackdropClick}>
-      <style>{`
-        @keyframes preview-backdrop-in {
-          from { opacity: 0; }
-          to { opacity: 1; }
-        }
-        @keyframes preview-modal-in {
-          from { opacity: 0; transform: scale(0.96); }
-          to { opacity: 1; transform: scale(1); }
-        }
-      `}</style>
       <div style={styles.modal}>
         {/* Header */}
         <div style={styles.header}>

@@ -1,0 +1,14 @@
+/**
+ * Always-visible scrollbar on the Haven project chooser's option list. macOS
+ * hides overlay scrollbars until you scroll, and the list is the one place the
+ * user has to be able to see there is more below — the same trick the workbench
+ * uses for `.hz-scroll`.
+ *
+ * Static stylesheet, not an inline `<style>`: Tauri stamps a nonce into the
+ * packaged app's `style-src`, and a nonce source makes the CSP ignore
+ * `'unsafe-inline'`, so a runtime `<style>` element is blocked in a build.
+ */
+
+.cz-chooser-list::-webkit-scrollbar { width: 9px; }
+.cz-chooser-list::-webkit-scrollbar-thumb { background: var(--border-default); border-radius: 5px; }
+.cz-chooser-list::-webkit-scrollbar-thumb:hover { background: var(--border-medium); }

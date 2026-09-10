@@ -16,8 +16,8 @@ import {
 } from "../../lib/havenWorkbench";
 import { type NavCtx, initialNav, navReduce } from "../../lib/havenNav";
 import { WorkbenchContext, type WorkbenchCtx } from "./WorkbenchContext";
-import { WORKBENCH_CSS } from "./workbenchStyles";
 import WorkbenchHeader from "./WorkbenchHeader";
+import "../../styles/havenWorkbench.css";
 import TabStrip, { type RealTab } from "./TabStrip";
 import DetailColumn from "./DetailColumn";
 import Splitter from "./Splitter";
@@ -146,7 +146,6 @@ export default function WorkbenchShell({
       className="hz-root"
       style={{ ...containerStyle, "--dw": `${dw}px` } as React.CSSProperties}
     >
-      <style>{WORKBENCH_CSS}</style>
       <WorkbenchContext.Provider value={contextValue}>
         <WorkbenchHeader
           name={name}

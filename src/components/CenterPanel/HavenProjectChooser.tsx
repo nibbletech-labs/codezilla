@@ -5,23 +5,13 @@ import type { Project } from "../../store/types";
 import type { HavenProject } from "../../lib/haven";
 import { chooserSections, folderNameOf } from "../../lib/havenBinding";
 import { refreshHavenProjects } from "../../hooks/useHavenBindings";
+import "../../styles/havenChooser.css";
 
 /** Roughly the popup's full height, so a short window never clips the footer. */
 const CHOOSER_HEIGHT = 380;
 
 /** One shared empty list, so "not read yet" is a stable reference too. */
 const NO_PROJECTS: HavenProject[] = [];
-
-/**
- * Always-visible scrollbar on the option list. macOS hides overlay scrollbars
- * until you scroll, and the list is the one place the user has to be able to
- * see there is more below — the same trick the workbench uses for `.hz-scroll`.
- */
-const CHOOSER_CSS = `
-.cz-chooser-list::-webkit-scrollbar { width: 9px; }
-.cz-chooser-list::-webkit-scrollbar-thumb { background: var(--border-default); border-radius: 5px; }
-.cz-chooser-list::-webkit-scrollbar-thumb:hover { background: var(--border-medium); }
-`;
 
 /**
  * The Haven project chooser behind the project page's `Link to Haven` button,
@@ -186,7 +176,6 @@ export default function HavenProjectChooser({
         top: Math.max(8, Math.min(anchor.y, window.innerHeight - CHOOSER_HEIGHT)),
       }}
     >
-      <style>{CHOOSER_CSS}</style>
       <div style={styles.header}>
         <span style={styles.headerTitle}>Link {project.name} to a Haven project</span>
         <span style={styles.headerCount}>

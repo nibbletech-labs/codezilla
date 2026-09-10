@@ -1,7 +1,8 @@
 import { useEffect, useCallback } from "react";
 import { useAppStore } from "../store/appStore";
 import type { BetaFeatures } from "../store/types";
-import { modalStyles, modalKeyframes } from "../styles/modal";
+import { modalStyles } from "../styles/modal";
+import "../styles/modal.css";
 import { useModalBackdrop } from "../hooks/useModalBackdrop";
 import { removeLaunchdEntry } from "../lib/tauri";
 import { syncLaunchdEntries } from "../lib/launchdSync";
@@ -52,7 +53,6 @@ export default function BetaFeaturesManager() {
         if (e.target === e.currentTarget) close();
       }}
     >
-      <style>{modalKeyframes}</style>
       <div style={{ ...modalStyles.modal, maxWidth: "480px" }}>
         <div style={modalStyles.header}>
           <span style={{ fontSize: "var(--font-size)", fontWeight: 600, color: "var(--text-primary)" }}>

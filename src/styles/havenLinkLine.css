@@ -1,0 +1,10 @@
+/**
+ * The project page's Haven line: the spinner shown while `haven link` runs.
+ *
+ * Static stylesheet, not an inline `<style>`: Tauri stamps a nonce into the
+ * packaged app's `style-src`, and a nonce source makes the CSP ignore
+ * `'unsafe-inline'`, so a runtime `<style>` element is blocked in a build.
+ */
+
+@keyframes cz-hv-spin { to { transform: rotate(360deg); } }
+.cz-hv-busy::before { content: "↻ "; display: inline-block; animation: cz-hv-spin 0.6s linear infinite; }

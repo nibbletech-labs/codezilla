@@ -15,9 +15,9 @@ const SAFE = /^[A-Za-z0-9_-]+$/;
  *
  * Hovering ~170 nodes through React state would redraw the whole tab twice per
  * mouse move. Instead one rule set is written into a `<style>` element that React
- * renders **childless** — React owns an empty element and only its `textContent`
- * is set imperatively — and `data-fx` is toggled on the workbench root, which
- * React never renders, so the two never fight over the attribute.
+ * renders **childless** — React owns an empty element and its rules are inserted
+ * imperatively through the CSSOM — and `data-fx` is toggled on the workbench
+ * root, which React never renders, so the two never fight over the attribute.
  *
  * Both of the mockup's guards are kept: an ungrouped item dims nothing in epic
  * mode, and an item with no tracked dependencies dims nothing in wire mode.
@@ -48,9 +48,23 @@ export default function HoverFx({
     const style = styleRef.current;
     if (!root || !style) return;
 
+    // Rules are inserted through the CSSOM, never written as text children.
+    // Tauri stamps a nonce into the packaged app's `style-src`, and a nonce
+    // source makes the CSP ignore `'unsafe-inline'`, so a `<style>` element
+    // carrying text is blocked in a build. `insertRule` is not governed by
+    // `style-src`, so the element stays childless and the rules still apply.
+    // Every ref and root reaching a selector is `SAFE`-checked first, so a rule
+    // can never be malformed.
+    const write = (rules: string[]) => {
+      const sheet = style.sheet;
+      if (!sheet) return;
+      while (sheet.cssRules.length) sheet.deleteRule(0);
+      for (const rule of rules) sheet.insertRule(rule, sheet.cssRules.length);
+    };
+
     const clear = () => {
       root.removeAttribute("data-fx");
-      style.textContent = "";
+      write([]);
       setWires([]);
     };
 
@@ -66,10 +80,11 @@ export default function HoverFx({
         // The mockup early-returns on an empty root: an ungrouped item has no
         // siblings to light up, so dimming everything else would say nothing.
         if (!root_ || !SAFE.test(root_)) return clear();
-        style.textContent =
-          `[data-fx] [data-ref] { opacity: .26 }\n` +
-          `[data-fx] [data-root="${root_}"], [data-fx] [data-ref="${ref}"], [data-fx] .hz-sel { opacity: 1 }\n` +
-          `[data-fx="tag"] .hz-card[data-root="${root_}"] { border-color: var(--gc) }`;
+        write([
+          `[data-fx] [data-ref] { opacity: .26 }`,
+          `[data-fx] [data-root="${root_}"], [data-fx] [data-ref="${ref}"], [data-fx] .hz-sel { opacity: 1 }`,
+          `[data-fx="tag"] .hz-card[data-root="${root_}"] { border-color: var(--gc) }`,
+        ]);
         setWires([]);
         root.setAttribute("data-fx", "tag");
         return;
@@ -103,10 +118,11 @@ export default function HoverFx({
       const bordered = [ref, ...lit]
         .map((r) => `[data-fx="wire"] .hz-card[data-ref="${r}"]`)
         .join(", ");
-      style.textContent =
-        `[data-fx] [data-ref] { opacity: .26 }\n` +
-        `${keep}, [data-fx] .hz-sel { opacity: 1 }\n` +
-        `${bordered} { border-color: var(--accent) }`;
+      write([
+        `[data-fx] [data-ref] { opacity: .26 }`,
+        `${keep}, [data-fx] .hz-sel { opacity: 1 }`,
+        `${bordered} { border-color: var(--accent) }`,
+      ]);
       setWires(drawn);
       root.setAttribute("data-fx", "wire");
     };

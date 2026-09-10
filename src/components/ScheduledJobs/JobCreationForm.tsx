@@ -5,7 +5,8 @@ import type { ScheduleConfig } from "../../lib/scheduleHelpers";
 import type { ThreadType, ScheduledJob } from "../../store/types";
 import { writeLaunchdEntry, runJobNow } from "../../lib/tauri";
 import ThreadIcon from "../LeftPanel/ThreadIcons";
-import { modalStyles, modalKeyframes } from "../../styles/modal";
+import { modalStyles } from "../../styles/modal";
+import "../../styles/modal.css";
 import { useModalBackdrop } from "../../hooks/useModalBackdrop";
 
 interface JobCreationFormProps {
@@ -148,7 +149,6 @@ export default function JobCreationForm({ projectId, onClose, editJob }: JobCrea
         if (e.target === e.currentTarget) onClose();
       }}
     >
-      <style>{modalKeyframes}</style>
       <div style={{ ...modalStyles.modal, maxWidth: "400px" }}>
         <div style={modalStyles.header}>
           <span style={{ fontSize: "var(--font-size)", fontWeight: 600, color: "var(--text-primary)" }}>
