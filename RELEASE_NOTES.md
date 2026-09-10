@@ -1,3 +1,7 @@
+## v0.5.1 — Backlog View Styling Fix
+
+- The Backlog view now renders with its styling in the installed app. It appeared as unstyled text in 0.5.0.
+
 ## v0.5.0 — Haven Backlog View
 
 Codezilla can show a project's Haven backlog in the app.
