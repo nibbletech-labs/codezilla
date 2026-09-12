@@ -1,4 +1,4 @@
-import type { Terminal, ILinkProvider, ILink, IBufferLine } from "@xterm/xterm";
+import type { Terminal, ILinkProvider, ILink, IBuffer } from "@xterm/xterm";
 import { parsePathCandidates, type ParsedPath } from "./parsePaths.ts";
 
 // Positive-result cache for disk-existence checks: once a path is confirmed to
@@ -34,12 +34,12 @@ export function createFilePathLinkProviderForTerminal(
     return check;
   };
 
-  const toLink = (p: ParsedPath, bufferLineNumber: number, lineText: string, line: IBufferLine): ILink => ({
+  const toLink = (p: ParsedPath, line: WrappedLine): ILink => ({
     range: {
-      start: { x: stringOffsetToCell(line, p.startCol) + 1, y: bufferLineNumber },
-      end: { x: stringOffsetToCell(line, p.endCol), y: bufferLineNumber },
+      start: line.starts[p.startCol],
+      end: line.ends[p.endCol - 1],
     },
-    text: lineText.slice(p.startCol, p.endCol),
+    text: line.text.slice(p.startCol, p.endCol),
     decorations: {
       pointerCursor: true,
       underline: true,
@@ -67,20 +67,20 @@ export function createFilePathLinkProviderForTerminal(
       callback: (links: ILink[] | undefined) => void,
     ) {
       const buffer = terminal.buffer.active;
-      const line: IBufferLine | undefined = buffer.getLine(bufferLineNumber - 1);
+      const line = readWrappedLine(buffer, bufferLineNumber);
       if (!line) {
         callback(undefined);
         return;
       }
 
-      const lineText = line.translateToString(true);
       const fileIndex = dependencies.getFileIndex();
 
       const emit = (paths: ParsedPath[]) =>
-        callback(paths.length > 0 ? paths.map((p) => toLink(p, bufferLineNumber, lineText, line)) : undefined);
+        callback(paths.length > 0 ? paths.map((p) => toLink(p, line)).filter(({ range }) =>
+          range.start.y <= bufferLineNumber && range.end.y >= bufferLineNumber) : undefined);
 
       // Fast path: matches that resolve against the file index (sync, no IPC).
-      const { resolved, unresolved: candidates } = parsePathCandidates(lineText, projectPath, fileIndex);
+      const { resolved, unresolved: candidates } = parsePathCandidates(line.text, projectPath, fileIndex);
 
       // Fallback: syntactically-valid paths the index doesn't know about (just
       // created, or gitignored). Verify each on disk and link the ones that
@@ -96,7 +96,7 @@ export function createFilePathLinkProviderForTerminal(
         const results = await Promise.all(unchecked.map((c) => exists(c.resolved)));
         // Output can replace a row while IPC is in flight. Never publish links
         // whose ranges now refer to different text.
-        if (terminal.buffer.active !== buffer || buffer.getLine(bufferLineNumber - 1)?.translateToString(true) !== lineText) {
+        if (terminal.buffer.active !== buffer || readWrappedLine(buffer, bufferLineNumber)?.snapshot !== line.snapshot) {
           callback(undefined);
           return;
         }
@@ -106,15 +106,55 @@ export function createFilePathLinkProviderForTerminal(
   };
 }
 
-// Regex offsets count UTF-16 characters; xterm ranges count screen cells.
-// Wide characters and combining marks before a path must not shift its hitbox.
-function stringOffsetToCell(line: IBufferLine, offset: number): number {
-  let stringIndex = 0;
-  for (let cellIndex = 0; cellIndex < line.length; cellIndex++) {
-    const cell = line.getCell(cellIndex);
-    if (!cell || cell.getWidth() === 0) continue;
-    if (stringIndex >= offset) return cellIndex;
-    stringIndex += cell.getChars().length || 1;
+interface WrappedLine {
+  text: string;
+  starts: { x: number; y: number }[];
+  ends: { x: number; y: number }[];
+  snapshot: string;
+}
+
+/** Reassemble soft wraps only; actual newlines still separate paths. */
+function readWrappedLine(buffer: IBuffer, row: number): WrappedLine | undefined {
+  let first = row - 1;
+  let line = buffer.getLine(first);
+  if (!line) return;
+  while (first > 0 && line.isWrapped) {
+    const previous = buffer.getLine(first - 1);
+    if (!previous) break;
+    line = previous;
+    first--;
   }
-  return line.length;
+
+  const result: WrappedLine = { text: "", starts: [], ends: [], snapshot: "" };
+  const rows = [];
+  for (let y = first; line; y++) {
+    const next = buffer.getLine(y + 1);
+    const continues = !!next?.isWrapped;
+    let text = line.translateToString(!continues);
+    // xterm leaves an empty cell when a wide character wraps early. It isn't
+    // part of the text, unlike an actual trailing space in a directory name.
+    if (continues && line.getCell(line.length - 1)?.getChars() === "" && next?.getCell(0)?.getWidth() === 2) {
+      text = text.slice(0, -1);
+    }
+    rows.push([y, line.isWrapped, line.length, text]);
+    let offset = 0;
+    for (let x = 0; x < line.length && offset < text.length; x++) {
+      const cell = line.getCell(x);
+      if (!cell || cell.getWidth() === 0) continue;
+      // Regex offsets use UTF-16 characters; hitboxes use terminal cells.
+      const length = Math.min(cell.getChars().length || 1, text.length - offset);
+      for (let i = 0; i < length; i++) {
+        result.starts.push({ x: x + 1, y: y + 1 });
+        result.ends.push({ x: x + cell.getWidth(), y: y + 1 });
+      }
+      offset += length;
+    }
+    result.text += text;
+    if (!continues) break;
+    line = next!;
+  }
+  // Include row boundaries and cell coordinates so output and reflow invalidate
+  // in-flight disk checks even if the concatenated path text stays the same.
+  result.snapshot = JSON.stringify([rows, result.starts, result.ends]);
+  return result;
 }
