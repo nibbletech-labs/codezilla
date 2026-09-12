@@ -1,3 +1,10 @@
+## v0.5.2 — Terminal Reliability Fixes
+
+- File links that wrap onto another terminal row are now clickable across the full path.
+- Clicking a terminal file link now responds on the first click, even before link detection has finished.
+- Fixed occasional garbled terminal output after switching back to a busy background session.
+- Unicode characters no longer become corrupted when terminal output arrives in separate chunks.
+
 ## v0.5.1 — Backlog View Styling Fix
 
 - The Backlog view now renders with its styling in the installed app. It appeared as unstyled text in 0.5.0.
