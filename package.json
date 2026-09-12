@@ -11,6 +11,7 @@
     "test:usage": "node --experimental-strip-types --test tests/usage-activity.test.ts",
     "test:thread-activity": "node --experimental-strip-types --test tests/thread-activity.test.ts",
     "test:prose-copy": "node --experimental-strip-types --test tests/prose-copy.test.ts",
+    "test:terminal-output": "node --experimental-strip-types --test tests/terminal-output.test.ts",
     "test:file-path-link": "node --experimental-strip-types --test tests/file-path-link.test.ts tests/terminal-link-click.test.ts",
     "test:haven-binding": "node --experimental-strip-types --test tests/haven-binding.test.ts",
     "test:haven-graph": "node --experimental-strip-types --test tests/haven-graph.test.ts",

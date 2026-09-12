@@ -49,6 +49,7 @@ import {
 
 import { createFilePathLinkProviderForTerminal } from "../../lib/filePathLinkProvider";
 import { createTerminalLinkClickAddon } from "../../lib/terminalLinkClickAddon";
+import { createTerminalOutputAddon } from "../../lib/terminalOutput";
 import { createCommitHashLinkProviderForTerminal } from "../../lib/commitHashLinkProvider";
 import { copyText } from "../../lib/clipboard";
 import { collapseProseWraps } from "../../lib/proseCopy";
@@ -206,8 +207,6 @@ interface TerminalInstance {
   /** User intentionally scrolled up — suppresses auto-scroll until they return to the bottom. */
   userScrolledUp: boolean;
   visible: boolean;
-  /** Drain any buffered output (call when making terminal visible). */
-  flushPendingOutput: () => void;
   hasSelection: boolean;
 }
 
@@ -271,26 +270,6 @@ function terminalTailHasActivityHint(
     if (hasThreadActivityFallbackHint(threadType, text)) return true;
   }
   return false;
-}
-
-/** Scan the tail of the raw output queue for activity hints.
- *  Used for hidden terminals whose xterm buffer is stale (not being written to). */
-const QUEUE_HINT_TAIL_BYTES = 4096;
-function outputQueueTailHasActivityHint(
-  queue: Uint8Array[],
-  threadType: ThreadType,
-): boolean {
-  if (queue.length === 0) return false;
-  // Decode the last few KB of queued output — enough to cover the spinner line.
-  let remaining = QUEUE_HINT_TAIL_BYTES;
-  let tail = "";
-  for (let i = queue.length - 1; i >= 0 && remaining > 0; i--) {
-    const chunk = queue[i];
-    const slice = remaining >= chunk.length ? chunk : chunk.subarray(chunk.length - remaining);
-    tail = new TextDecoder("utf-8", { fatal: false }).decode(slice) + tail;
-    remaining -= slice.length;
-  }
-  return hasThreadActivityFallbackHint(threadType, tail);
 }
 
 function isTerminalAtBottom(terminal: Terminal): boolean {
@@ -811,15 +790,15 @@ export default function TerminalMultiplexer() {
 
     for (const [sessionId, instance] of instances) {
       if (sessionId === activeSessionId) {
+        instance.container.style.display = "block";
         instance.container.style.visibility = "visible";
         instance.container.style.pointerEvents = "auto";
         instance.container.style.zIndex = "2";
         instance.visible = true;
+        instance.terminal.options.fontSize = useAppStore.getState().baseFontSize;
         // Attach WebGL on first visibility (deferred from creation to avoid
         // expensive GPU context init for background terminals on launch).
         ensureWebgl(sessionId, instance.terminal);
-        // Drain any output that accumulated while hidden
-        instance.flushPendingOutput();
         if (sessionChanged) {
           if (activeThread) {
             suppressOutputActivity(activeThread.id, RESIZE_ACTIVITY_SUPPRESS_MS);
@@ -851,6 +830,9 @@ export default function TerminalMultiplexer() {
         }
       } else {
         instance.visible = false;
+        // Unlike visibility:hidden, display:none lets xterm's intersection
+        // observer pause rendering while its parser keeps consuming output.
+        instance.container.style.display = "none";
         instance.container.style.visibility = "hidden";
         instance.container.style.pointerEvents = "none";
         instance.container.style.zIndex = "1";
@@ -862,6 +844,9 @@ export default function TerminalMultiplexer() {
   const baseFontSize = useAppStore((s) => s.baseFontSize);
   useEffect(() => {
     for (const [sessionId, instance] of instancesRef.current) {
+      // Hidden terminals keep their font metrics and PTY dimensions until
+      // shown; measuring a display:none terminal can return zero dimensions.
+      if (!instance.visible) continue;
       const thread = useAppStore.getState().threads.find((t) => t.sessionId === sessionId);
       if (thread) {
         suppressOutputActivity(thread.id, RESIZE_ACTIVITY_SUPPRESS_MS);
@@ -1309,6 +1294,8 @@ function createTerminalInstance(
   terminal.loadAddon(fitAddon);
   terminal.loadAddon(new WebLinksAddon(openTerminalLink));
   terminal.open(container);
+  // Open while measurable but invisible, then let xterm pause its renderer.
+  container.style.display = "none";
 
   // Let key combos with 3+ modifiers pass through to macOS so global
   // shortcuts (e.g. Ctrl+Option+Cmd+Space) aren't swallowed by xterm.
@@ -1329,7 +1316,7 @@ function createTerminalInstance(
   // is marked visible and the browser has had a frame to settle layout.
   const instance: TerminalInstance = {
     terminal, fitAddon, container, isAtBottom: true, userScrolledUp: false,
-    visible: false, flushPendingOutput: () => {}, hasSelection: false,
+    visible: false, hasSelection: false,
   };
   instances.set(thread.sessionId, instance);
 
@@ -1362,7 +1349,7 @@ function createTerminalInstance(
 
   // Detect intentional user scroll-up via wheel events.  When the user
   // scrolls up we set a sticky flag that prevents auto-scroll in
-  // flushOutput, so they can read previous output while new content
+  // the output callback, so they can read previous output while new content
   // streams in.  The flag is cleared when they scroll back to the bottom
   // (handled in checkScrollState above) or click the "↓ Latest" button.
   container.addEventListener("wheel", (e: WheelEvent) => {
@@ -1414,25 +1401,20 @@ function createTerminalInstance(
     terminal.registerLinkProvider(commitLinkProvider);
   }
 
-  // --- Output buffering strategy ---
-  // Visible terminal: output is written to xterm.js via requestAnimationFrame,
-  //   capped at MAX_WRITE_PER_FRAME per frame to avoid blocking the main thread
-  //   during output bursts (e.g. Claude resume replaying conversation history).
-  // Hidden terminal: output accumulates in the queue but is NOT written to
-  //   xterm.js (no parsing, no WebGL rendering, no CPU cost). The queue is
-  //   flushed when the terminal becomes visible via instance.flushPendingOutput().
-  //   The queue evicts oldest chunks to stay under cap, so the latest output is
-  //   always preserved.
-  // Activity tracking (badges, status, touchThread) runs regardless of
-  //   visibility. The activity-hint fallback (star spinner detection) uses
-  //   outputQueueTailHasActivityHint() to scan raw queue bytes when the xterm
-  //   buffer is stale.
-  const outputQueue: Uint8Array[] = [];
-  let outputQueueBytes = 0;
-  const MAX_OUTPUT_QUEUE_BYTES = 8 * 1024 * 1024; // 8MB cap
-  const MAX_WRITE_PER_FRAME = 256 * 1024; // 256KB — avoid blocking UI with huge terminal.write() calls
-  let flushScheduled = false;
-  let evictedSinceFlush = false;
+  // Parse output even while hidden: cursor moves, escape sequences and UTF-8
+  // bytes must stay intact. xterm pauses drawing for display:none containers.
+  // The addon serializes bounded writes and is disposed with the terminal.
+  const output = createTerminalOutputAddon({
+    onWrite: () => {
+      if (!instance.visible) return;
+      if (instance.isAtBottom && !instance.userScrolledUp) terminal.scrollToBottom();
+      checkScrollState();
+    },
+    onError: (err) => {
+      console.error(`[terminal] failed flushing PTY output for ${thread.id}:`, err);
+    },
+  });
+  terminal.loadAddon(output);
   let markerEventsObserved = false;
   let waitingForCommandStart = false;
   let progressActive = false;
@@ -1441,78 +1423,6 @@ function createTerminalInstance(
   let lastCtrlCAt = 0;
   let inputEchoSuppressUntil = 0;
   let hasReceivedOutput = false;
-
-  const flushOutput = () => {
-    if (flushScheduled) return;
-    flushScheduled = true;
-
-    requestAnimationFrame(() => {
-      flushScheduled = false;
-      if (outputQueue.length === 0) return;
-      // Skip write for hidden terminals — data stays buffered in the queue
-      // and will be flushed when the terminal becomes visible.
-      if (!instance.visible) return;
-
-      // Merge pending chunks up to MAX_WRITE_PER_FRAME.
-      // Capping the write size keeps the main thread responsive during
-      // bursts (e.g. Claude resume replaying conversation history).
-      // Remaining data is drained on subsequent frames.
-      let writeBytes = 0;
-      let writeChunks = 0;
-      for (const chunk of outputQueue) {
-        if (writeBytes + chunk.length > MAX_WRITE_PER_FRAME && writeChunks > 0) break;
-        writeBytes += chunk.length;
-        writeChunks++;
-      }
-
-      const chunks = outputQueue.splice(0, writeChunks);
-      outputQueueBytes -= writeBytes;
-
-      // If eviction dropped oldest chunks, the remaining data may start
-      // mid-escape-sequence. Prepend an SGR reset so xterm's parser
-      // doesn't inherit corrupted state (wrong colors/attributes).
-      const needsReset = evictedSinceFlush;
-      if (needsReset) evictedSinceFlush = false;
-      const SGR_RESET = [0x1b, 0x5b, 0x30, 0x6d]; // \x1b[0m
-
-      let merged: Uint8Array;
-      if (chunks.length === 1 && !needsReset) {
-        merged = chunks[0];
-      } else {
-        merged = new Uint8Array(writeBytes + (needsReset ? SGR_RESET.length : 0));
-        let off = 0;
-        if (needsReset) {
-          merged.set(SGR_RESET, 0);
-          off = SGR_RESET.length;
-        }
-        for (const chunk of chunks) {
-          merged.set(chunk, off);
-          off += chunk.length;
-        }
-      }
-
-      const shouldAutoScroll = instance.isAtBottom && !instance.userScrolledUp;
-      try {
-        terminal.write(merged, () => {
-          if (shouldAutoScroll) terminal.scrollToBottom();
-          checkScrollState();
-          // If more data remains (capped write or new arrivals), schedule next frame
-          if (outputQueue.length > 0) flushOutput();
-        });
-      } catch (err) {
-        console.error(`[terminal] failed flushing PTY output for ${thread.id}:`, err);
-        outputQueue.length = 0;
-        outputQueueBytes = 0;
-      }
-    });
-  };
-
-  // Expose flush for visibility transitions
-  instance.flushPendingOutput = () => {
-    if (outputQueue.length === 0) return;
-    flushScheduled = false;
-    flushOutput();
-  };
 
   // PTY channel
   const channel = new Channel<PtyEvent>();
@@ -1531,19 +1441,7 @@ function createTerminalInstance(
         sessionsWithOutput.add(sessionId);
         onFirstOutput?.(sessionId);
       }
-      // Always keep the latest output: evict oldest chunks when over cap
-      // (old behaviour dropped new data, losing the latest output for hidden terminals)
-      outputQueue.push(outputChunk);
-      outputQueueBytes += outputChunk.length;
-      while (outputQueueBytes > MAX_OUTPUT_QUEUE_BYTES && outputQueue.length > 1) {
-        outputQueueBytes -= outputQueue.shift()!.length;
-        evictedSinceFlush = true;
-      }
-      // Only drive the RAF flush loop for the visible terminal.
-      // Hidden terminals accumulate in the queue and drain on switch.
-      if (instance.visible) {
-        flushOutput();
-      }
+      output.write(outputChunk);
       recordOutput(thread.id);
       lastOutputAt = Date.now();
       // Only count unsuppressed PTY output as real activity.
@@ -1573,13 +1471,11 @@ function createTerminalInstance(
       const fromProgress = source === "progress";
       const now = Date.now();
       // Check for activity hints (star spinner, "esc to interrupt", etc.).
-      // For hidden terminals the xterm buffer is stale (output is queued but
-      // not written), so we scan the raw output queue tail instead.
+      // Parsing is asynchronous, so also inspect bytes still awaiting parsing.
       const interruptFallbackActive = thread.type !== "shell"
         && now - lastOutputAt <= INTERRUPT_HINT_ACTIVE_MS
-        && (instance.visible
-          ? terminalTailHasActivityHint(terminal, thread.type, INTERRUPT_HINT_LOOKBACK_LINES)
-          : outputQueueTailHasActivityHint(outputQueue, thread.type));
+        && (terminalTailHasActivityHint(terminal, thread.type, INTERRUPT_HINT_LOOKBACK_LINES)
+          || hasThreadActivityFallbackHint(thread.type, output.getPendingText()));
       const outputSuppressed = now <= inputEchoSuppressUntil
         || isOutputActivitySuppressed(thread.id);
 
@@ -1686,13 +1582,10 @@ function createTerminalInstance(
       }
       clearActivity(thread.id);
       touchTimestamps.delete(thread.id);
-      try {
-        terminal.write(
-          `\r\n\x1b[90m[Process exited with code ${code ?? "unknown"}]\x1b[0m\r\n`,
-        );
-      } catch (err) {
-        console.error(`[terminal] failed writing PTY exit line for ${thread.id}:`, err);
-      }
+      // Keep the exit notice after all preceding PTY output.
+      output.write(new TextEncoder().encode(
+        `\r\n\x1b[90m[Process exited with code ${code ?? "unknown"}]\x1b[0m\r\n`,
+      ));
       markThreadExited(thread.id, code ?? null);
     }
   };

@@ -21,6 +21,7 @@ scripts/*
 !scripts/fetch-heed.sh
 tests/*
 !tests/terminal-link-click.test.ts
+!tests/terminal-output.test.ts
 !tests/usage-activity.test.ts
 !tests/haven-binding.test.ts
 !tests/haven-graph.test.ts
