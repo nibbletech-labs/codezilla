@@ -201,6 +201,11 @@ function rootOf(projectPath: string): string {
   return projectPath.endsWith("/") ? projectPath : projectPath + "/";
 }
 
+/** Resolve indexed paths and disk candidates in one scan. */
+export function parsePathCandidates(lineText: string, projectPath: string, fileIndex: Set<string>) {
+  return scanLine(lineText, rootOf(projectPath), fileIndex);
+}
+
 /** Paths in the line that resolve against the file index. */
 export function parsePaths(
   lineText: string,

@@ -11,6 +11,7 @@ import {
   writePty,
   resizePty,
   killPty,
+  pathExists,
   type PtyEvent,
   type PtyActivityData,
   type PtyCommandEndData,
@@ -47,6 +48,7 @@ import {
 } from "../../lib/activityTracker";
 
 import { createFilePathLinkProviderForTerminal } from "../../lib/filePathLinkProvider";
+import { createTerminalLinkClickAddon } from "../../lib/terminalLinkClickAddon";
 import { createCommitHashLinkProviderForTerminal } from "../../lib/commitHashLinkProvider";
 import { copyText } from "../../lib/clipboard";
 import { collapseProseWraps } from "../../lib/proseCopy";
@@ -1369,7 +1371,7 @@ function createTerminalInstance(
     }
   }, { passive: true });
 
-  // Register file path link provider for Cmd+click navigation
+  // File links support a plain-click menu and Cmd+click navigation.
   const project = useAppStore
     .getState()
     .projects.find((p) => p.id === thread.projectId);
@@ -1394,8 +1396,9 @@ function createTerminalInstance(
           useAppStore.getState().showFileLinkMenu(path, position, line, col);
         },
       },
+      { getFileIndex: () => useAppStore.getState().fileIndex, pathExists },
     );
-    terminal.registerLinkProvider(linkProvider);
+    terminal.loadAddon(createTerminalLinkClickAddon(linkProvider));
   }
 
   // Register commit hash link provider (plain click opens commit preview)

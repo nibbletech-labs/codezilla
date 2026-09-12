@@ -1,7 +1,5 @@
 import type { Terminal, ILinkProvider, ILink, IBufferLine } from "@xterm/xterm";
-import { useAppStore } from "../store/appStore";
-import { parsePaths, parseUnresolvedCandidates, type ParsedPath } from "./parsePaths";
-import { pathExists } from "./tauri";
+import { parsePathCandidates, type ParsedPath } from "./parsePaths.ts";
 
 // Positive-result cache for disk-existence checks: once a path is confirmed to
 // exist we remember it so re-hovering the same line doesn't re-issue IPC. Only
@@ -18,11 +16,28 @@ export function createFilePathLinkProviderForTerminal(
     onMultipleMatches: (candidates: string[], position: { x: number; y: number }, line?: number, col?: number) => void;
     onShowMenu: (resolvedPath: string, position: { x: number; y: number }, line?: number, col?: number) => void;
   },
+  dependencies: {
+    getFileIndex: () => Set<string>;
+    pathExists: (path: string) => Promise<boolean>;
+  },
 ): ILinkProvider {
-  const toLink = (p: ParsedPath, bufferLineNumber: number, lineText: string): ILink => ({
+  const pendingChecks = new Map<string, Promise<boolean>>();
+  const exists = (path: string): Promise<boolean> => {
+    if (existsCache.has(path)) return Promise.resolve(true);
+    const pending = pendingChecks.get(path);
+    if (pending) return pending;
+    const check = dependencies.pathExists(path).then((found) => {
+      if (found) existsCache.add(path);
+      return found;
+    }).catch(() => false).finally(() => pendingChecks.delete(path));
+    pendingChecks.set(path, check);
+    return check;
+  };
+
+  const toLink = (p: ParsedPath, bufferLineNumber: number, lineText: string, line: IBufferLine): ILink => ({
     range: {
-      start: { x: p.startCol + 1, y: bufferLineNumber },
-      end: { x: p.endCol, y: bufferLineNumber },
+      start: { x: stringOffsetToCell(line, p.startCol) + 1, y: bufferLineNumber },
+      end: { x: stringOffsetToCell(line, p.endCol), y: bufferLineNumber },
     },
     text: lineText.slice(p.startCol, p.endCol),
     decorations: {
@@ -59,41 +74,47 @@ export function createFilePathLinkProviderForTerminal(
       }
 
       const lineText = line.translateToString(true);
-      const fileIndex = useAppStore.getState().fileIndex;
+      const fileIndex = dependencies.getFileIndex();
 
       const emit = (paths: ParsedPath[]) =>
-        callback(paths.length > 0 ? paths.map((p) => toLink(p, bufferLineNumber, lineText)) : undefined);
+        callback(paths.length > 0 ? paths.map((p) => toLink(p, bufferLineNumber, lineText, line)) : undefined);
 
       // Fast path: matches that resolve against the file index (sync, no IPC).
-      const resolved = parsePaths(lineText, projectPath, fileIndex);
+      const { resolved, unresolved: candidates } = parsePathCandidates(lineText, projectPath, fileIndex);
 
       // Fallback: syntactically-valid paths the index doesn't know about (just
       // created, or gitignored). Verify each on disk and link the ones that
       // exist, so a path is clickable whenever the file is really there.
-      const candidates = parseUnresolvedCandidates(lineText, projectPath, fileIndex);
-      if (candidates.length === 0) {
-        emit(resolved);
+      const cached = candidates.filter((c) => existsCache.has(c.resolved));
+      const unchecked = candidates.filter((c) => !existsCache.has(c.resolved));
+      if (unchecked.length === 0) {
+        emit([...resolved, ...cached]);
         return;
       }
 
       void (async () => {
-        const verified: ParsedPath[] = [];
-        for (const c of candidates) {
-          if (existsCache.has(c.resolved)) {
-            verified.push(c);
-            continue;
-          }
-          try {
-            if (await pathExists(c.resolved)) {
-              existsCache.add(c.resolved);
-              verified.push(c);
-            }
-          } catch {
-            // Treat a failed check as non-existent — no link.
-          }
+        const results = await Promise.all(unchecked.map((c) => exists(c.resolved)));
+        // Output can replace a row while IPC is in flight. Never publish links
+        // whose ranges now refer to different text.
+        if (terminal.buffer.active !== buffer || buffer.getLine(bufferLineNumber - 1)?.translateToString(true) !== lineText) {
+          callback(undefined);
+          return;
         }
-        emit([...resolved, ...verified]);
+        emit([...resolved, ...cached, ...unchecked.filter((_, i) => results[i])]);
       })();
     },
   };
+}
+
+// Regex offsets count UTF-16 characters; xterm ranges count screen cells.
+// Wide characters and combining marks before a path must not shift its hitbox.
+function stringOffsetToCell(line: IBufferLine, offset: number): number {
+  let stringIndex = 0;
+  for (let cellIndex = 0; cellIndex < line.length; cellIndex++) {
+    const cell = line.getCell(cellIndex);
+    if (!cell || cell.getWidth() === 0) continue;
+    if (stringIndex >= offset) return cellIndex;
+    stringIndex += cell.getChars().length || 1;
+  }
+  return line.length;
 }
